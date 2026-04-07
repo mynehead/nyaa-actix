@@ -1,0 +1,30 @@
+{% extends "layout.html" %}
+{% block title %}Groups :: {{ config.site_name }}{% endblock %}
+{% block body %}
+<h3>Groups
+    {% if current_user %}
+    <a href="/groups/create" class="btn btn-success btn-sm pull-right">Create Group</a>
+    {% endif %}
+</h3>
+<div class="table-responsive">
+    <table class="table table-bordered table-hover table-condensed">
+        <thead>
+            <tr>
+                <th>Tag</th><th>Name</th><th>Owner</th><th>Created</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for group in groups %}
+            <tr>
+                <td><a href="/group/{{ group.slug }}">[{{ group.tag }}]</a></td>
+                <td><a href="/group/{{ group.slug }}">{{ group.name }}</a></td>
+                <td>{{ group.owner_id }}</td>
+                <td>{{ group.created_time | date(format="%Y-%m-%d") }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="text-center">No groups yet.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

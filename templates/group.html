@@ -1,0 +1,20 @@
+{% extends "layout.html" %}
+{% block title %}[{{ group.tag }}] {{ group.name }} :: {{ config.site_name }}{% endblock %}
+{% block body %}
+<div class="row">
+    <div class="col-md-12">
+        <h3>
+            <span class="label label-default">[{{ group.tag }}]</span> {{ group.name }}
+            {% if can_edit %}
+            <a href="/group/{{ group.slug }}/edit" class="btn btn-default btn-xs">Edit</a>
+            <a href="/group/{{ group.slug }}/members" class="btn btn-default btn-xs">Manage Members</a>
+            {% endif %}
+        </h3>
+        {% if group.description %}<p class="text-muted">{{ group.description }}</p>{% endif %}
+    </div>
+</div>
+<div class="row">
+    <h3>Torrents uploaded under [{{ group.tag }}]</h3>
+    {% include "search_results.html" %}
+</div>
+{% endblock %}

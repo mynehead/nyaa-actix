@@ -1,0 +1,33 @@
+{% extends "layout.html" %}
+{% block title %}Members of [{{ group.tag }}] :: {{ config.site_name }}{% endblock %}
+{% block body %}
+<div class="row"><div class="col-md-8 col-md-offset-2">
+    <h3>Manage Members: {{ group.name }}</h3>
+    <p><a href="/group/{{ group.slug }}">&larr; Back to group</a></p>
+    <h4>Add / Update Member</h4>
+    <form method="post" action="/group/{{ group.slug }}/members">
+        <div class="form-group"><label>Username</label>
+            <input type="text" name="username" class="form-control" required></div>
+        <div class="checkbox"><label><input type="checkbox" name="can_upload" value="1"> Can upload under group</label></div>
+        <div class="checkbox"><label><input type="checkbox" name="can_edit" value="1"> Can edit group details</label></div>
+        <p class="help-block">Setting no permissions removes the user from the group.</p>
+        <button type="submit" class="btn btn-primary">Update Member</button>
+    </form>
+    <hr>
+    <h4>Current Members</h4>
+    <table class="table table-bordered table-condensed">
+        <thead><tr><th>User</th><th>Upload</th><th>Edit</th></tr></thead>
+        <tbody>
+            {% for m in members %}
+            <tr>
+                <td>{{ m.username }}</td>
+                <td>{% if m.can_upload %}&#10003;{% else %}&mdash;{% endif %}</td>
+                <td>{% if m.can_edit %}&#10003;{% else %}&mdash;{% endif %}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="3" class="text-center">No members yet.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div></div>
+{% endblock %}

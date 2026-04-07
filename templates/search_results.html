@@ -1,0 +1,66 @@
+{% if torrents | length > 0 %}
+<div class="table-responsive">
+    <table class="table table-bordered table-hover table-striped torrent-list">
+        <thead>
+            <tr>
+                <th style="width:80px;" class="text-center">Category</th>
+                <th style="width:auto;">Name</th>
+                <th style="width:70px;" class="text-center">Links</th>
+                <th style="width:100px;" class="text-center">Size</th>
+                <th style="width:140px;" class="text-center">Date</th>
+                <th style="width:50px;" class="text-center" title="Seeders"><i class="fa fa-arrow-up"></i></th>
+                <th style="width:50px;" class="text-center" title="Leechers"><i class="fa fa-arrow-down"></i></th>
+                <th style="width:50px;" class="text-center" title="Downloads"><i class="fa fa-check"></i></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for torrent in torrents %}
+            <tr class="{{ torrent.row_class() }}">
+                <td class="text-center">{{ torrent.main_category_id }}_{{ torrent.sub_category_id }}</td>
+                <td>
+                    <a href="/view/{{ torrent.id }}">{{ torrent.display_name }}</a>
+                    {% if torrent.is_trusted() %}<span class="label label-success">Trusted</span>{% endif %}
+                    {% if torrent.is_remake() %}<span class="label label-warning">Remake</span>{% endif %}
+                </td>
+                <td class="text-center">
+                    <a href="/download/{{ torrent.id }}" title="Download torrent"><i class="fa fa-download"></i></a>
+                    <a href="/magnet/{{ torrent.id }}" title="Magnet link"><i class="fa fa-magnet"></i></a>
+                </td>
+                <td class="text-center">{{ torrent.filesize_human() }}</td>
+                <td class="text-center" title="{{ torrent.created_time }}">
+                    {{ torrent.created_time | date(format="%Y-%m-%d") }}
+                </td>
+                <td class="text-center">—</td>
+                <td class="text-center">—</td>
+                <td class="text-center">—</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{% if pagination.total_pages > 1 %}
+<div class="text-center">
+    <ul class="pagination">
+        {% if pagination.has_prev %}
+        <li><a href="?p={{ pagination.current - 1 }}{% if search_term %}&q={{ search_term }}{% endif %}">&laquo;</a></li>
+        {% endif %}
+        {% for page in pagination.pages %}
+            {% if page.is_ellipsis %}
+            <li class="disabled"><span>&hellip;</span></li>
+            {% elif page.is_current %}
+            <li class="active"><span>{{ page.num }}</span></li>
+            {% else %}
+            <li><a href="?p={{ page.num }}{% if search_term %}&q={{ search_term }}{% endif %}">{{ page.num }}</a></li>
+            {% endif %}
+        {% endfor %}
+        {% if pagination.has_next %}
+        <li><a href="?p={{ pagination.current + 1 }}{% if search_term %}&q={{ search_term }}{% endif %}">&raquo;</a></li>
+        {% endif %}
+    </ul>
+</div>
+{% endif %}
+
+{% else %}
+<p class="text-center text-muted">No torrents found.</p>
+{% endif %}

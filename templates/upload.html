@@ -1,0 +1,78 @@
+{% extends "layout.html" %}
+{% block title %}Upload :: {{ config.site_name }}{% endblock %}
+{% block body %}
+<h3>Upload Torrent</h3>
+<form action="/upload" method="post" enctype="multipart/form-data">
+    <div class="row">
+        <div class="col-md-6">
+            <div class="form-group">
+                <label>Torrent file</label>
+                <input type="file" name="torrent_file" accept=".torrent" required class="form-control">
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="form-group">
+                <label>Category</label>
+                <select name="category" class="form-control" required>
+                    <option value="">[Select a category]</option>
+                    {% for main, subs in categories %}
+                    <optgroup label="{{ main.name }}">
+                        {% for sub in subs %}
+                        {% if sub.id != 0 %}
+                        <option value="{{ main.id }}_{{ sub.id }}">{{ main.name }} - {{ sub.name }}</option>
+                        {% endif %}
+                        {% endfor %}
+                    </optgroup>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col-md-6">
+            <div class="form-group">
+                <label>Display name <small>(optional)</small></label>
+                <input type="text" name="display_name" class="form-control" placeholder="Display name">
+            </div>
+        </div>
+        {% if current_user and groups | length > 0 %}
+        <div class="col-md-6">
+            <div class="form-group">
+                <label>Release under group</label>
+                <select name="group_id" class="form-control">
+                    <option value="0">None (personal upload)</option>
+                    {% for group in groups %}
+                    <option value="{{ group.id }}"> [{{ group.tag }}] {{ group.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    <div class="row">
+        <div class="col-md-6">
+            <div class="form-group">
+                <label>Information <small>(website or IRC)</small></label>
+                <input type="text" name="information" class="form-control" placeholder="https://...">
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="form-group">
+                <label>Flags</label><br>
+                <label><input type="checkbox" name="is_hidden"> Hidden</label>&nbsp;
+                <label><input type="checkbox" name="is_remake"> Remake</label>&nbsp;
+                <label><input type="checkbox" name="is_anonymous"> Anonymous</label>&nbsp;
+                <label><input type="checkbox" name="is_complete"> Complete</label>
+                {% if current_user and current_user.level >= 1 %}
+                &nbsp;<label><input type="checkbox" name="is_trusted"> Trusted</label>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    <div class="form-group">
+        <label>Description <small>(Markdown supported)</small></label>
+        <textarea name="description" class="form-control" rows="5" placeholder="Optional description..."></textarea>
+    </div>
+    <button type="submit" class="btn btn-primary">Upload</button>
+</form>
+{% endblock %}

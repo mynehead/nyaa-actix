@@ -1,0 +1,26 @@
+{% extends "layout.html" %}
+{% block title %}Login :: {{ config.site_name }}{% endblock %}
+{% block body %}
+<div class="row">
+    <div class="col-md-4 col-md-offset-4">
+        <h3>Login</h3>
+        {% if error %}
+        <div class="alert alert-danger">{{ error }}</div>
+        {% endif %}
+        <form method="post" action="/account/login">
+            <div class="form-group">
+                <label>Username or email</label>
+                <input type="text" name="username" class="form-control" required autofocus>
+            </div>
+            <div class="form-group">
+                <label>Password</label>
+                <input type="password" name="password" class="form-control" required>
+            </div>
+            <button type="submit" class="btn btn-primary btn-block">Login</button>
+        </form>
+        <p class="text-center" style="margin-top:1em">
+            Don't have an account? <a href="/account/register">Register</a>
+        </p>
+    </div>
+</div>
+{% endblock %}

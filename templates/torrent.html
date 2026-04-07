@@ -1,0 +1,74 @@
+{% extends "layout.html" %}
+{% block title %}{{ torrent.display_name }} :: {{ config.site_name }}{% endblock %}
+{% block body %}
+<div class="panel panel-default">
+    <div class="panel-heading">
+        <h3 class="panel-title">
+            {{ torrent.display_name }}
+            {% if torrent.is_trusted() %}<span class="label label-success">Trusted</span>{% endif %}
+            {% if torrent.is_remake() %}<span class="label label-warning">Remake</span>{% endif %}
+        </h3>
+    </div>
+    <div class="panel-body">
+        <dl class="dl-horizontal">
+            <dt>Category:</dt>
+            <dd>{{ torrent.main_category_id }}_{{ torrent.sub_category_id }}</dd>
+            <dt>Date:</dt>
+            <dd>{{ torrent.created_time }}</dd>
+            <dt>Submitter:</dt>
+            <dd>
+                {% if uploader %}
+                <a href="/user/{{ uploader.username }}">{{ uploader.username }}</a>
+                {% else %}
+                Anonymous
+                {% endif %}
+            </dd>
+            <dt>Seeders:</dt>
+            <dd>{{ stats.seed_count | default(value=0) }}</dd>
+            <dt>Leechers:</dt>
+            <dd>{{ stats.leech_count | default(value=0) }}</dd>
+            <dt>Downloads:</dt>
+            <dd>{{ stats.download_count | default(value=0) }}</dd>
+            <dt>File size:</dt>
+            <dd>{{ torrent.filesize_human() }}</dd>
+            {% if torrent.information %}
+            <dt>Information:</dt>
+            <dd>{{ torrent.information }}</dd>
+            {% endif %}
+        </dl>
+        <div class="row">
+            <div class="col-md-12">
+                <a class="btn btn-success" href="/download/{{ torrent.id }}">
+                    <i class="fa fa-download"></i> Download Torrent
+                </a>
+                <a class="btn btn-default" href="{{ magnet }}">
+                    <i class="fa fa-magnet"></i> Magnet Link
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if torrent.description %}
+<div class="panel panel-default">
+    <div class="panel-heading"><h3 class="panel-title">Description</h3></div>
+    <div class="panel-body">{{ torrent.description }}</div>
+</div>
+{% endif %}
+
+<div class="panel panel-default">
+    <div class="panel-heading"><h3 class="panel-title">Comments ({{ torrent.comment_count }})</h3></div>
+    <div class="panel-body">
+        {% if comments | length == 0 %}
+        <p class="text-muted">No comments yet.</p>
+        {% endif %}
+        {% for comment in comments %}
+        <div class="comment-panel" id="comment-{{ comment.id }}">
+            <strong>{{ comment.user_id | default(value="Anonymous") }}</strong>
+            <span class="text-muted">{{ comment.created_time }}</span>
+            <p>{{ comment.text }}</p>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}
