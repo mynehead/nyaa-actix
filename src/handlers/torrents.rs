@@ -417,6 +417,7 @@ pub async fn upload_post(
         log::error!("Failed to store upload: {:#}", e);
         actix_web::error::ErrorInternalServerError("Failed to store torrent")
     })?;
+    crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), inserted.id);
 
     Ok(HttpResponse::Found()
         .insert_header(("Location", format!("/view/{}", inserted.id)))
@@ -646,6 +647,7 @@ pub async fn edit_torrent_post(
             ))
             .execute(&mut conn)
             .map_err(actix_web::error::ErrorInternalServerError)?;
+        crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), torrent.id);
         return Ok(redirect(&view_url));
     }
 
@@ -667,6 +669,7 @@ pub async fn edit_torrent_post(
         }
         Ok(())
     }).map_err(actix_web::error::ErrorInternalServerError)?;
+    crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), torrent.id);
 
     // Moderators go back to the torrent; owners deleting their own go home
     Ok(redirect(if editor.is_moderator() { &view_url } else { "/" }))
@@ -736,7 +739,7 @@ mod tests {
                 database_url: String::new(), secret_key: String::new(), site_name: "Nyaa".into(),
                 site_flavor: "nyaa".into(), results_per_page: 75, max_pages: 0,
                 torrent_storage_path: storage.to_string_lossy().into_owned(), avatar_storage_path: String::new(), enable_gravatar: false, maintenance_mode: false,
-                site_url: String::new(), tracker_urls: vec![],
+                site_url: String::new(), tracker_urls: vec![], meili: None,
             }
         }
 

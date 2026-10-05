@@ -8,7 +8,8 @@ use crate::db::DbPool;
 use crate::utils::context::base_context;
 use crate::middleware::auth::get_current_user;
 use crate::models::User;
-use crate::search::db::{search, with_stats, SearchQuery};
+use crate::search::db::{with_stats, SearchQuery};
+use crate::search::search;
 use crate::utils::context::SearchState;
 use crate::utils::pagination::Pagination;
 
@@ -57,7 +58,7 @@ pub async fn view_user(
     q.include_hidden = is_admin || is_owner;
     q.hide_anonymous = !(is_admin || is_owner);
 
-    let result = search(&mut conn, &q)
+    let result = search(&mut conn, cfg.meili.as_ref(), &q)
         .map_err(actix_web::error::ErrorInternalServerError)?;
     let pagination = Pagination::new(q.page, result.total, q.per_page);
 

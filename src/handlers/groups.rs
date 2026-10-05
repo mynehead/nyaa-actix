@@ -11,7 +11,8 @@ use crate::utils::context::base_context;
 use crate::middleware::auth::get_current_user;
 use crate::models::{Group, NewGroup, User};
 use crate::db::schema::group_members;
-use crate::search::db::{search, with_stats, SearchQuery};
+use crate::search::db::{with_stats, SearchQuery};
+use crate::search::search;
 use crate::utils::context::SearchState;
 use crate::utils::pagination::Pagination;
 
@@ -151,7 +152,7 @@ pub async fn view_group(
         is_admin,
     );
 
-    let result = search(&mut conn, &q)
+    let result = search(&mut conn, cfg.meili.as_ref(), &q)
         .map_err(actix_web::error::ErrorInternalServerError)?;
     let pagination = Pagination::new(q.page, result.total, q.per_page);
 

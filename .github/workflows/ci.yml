@@ -9,6 +9,14 @@ jobs:
   test:
     runs-on: ubuntu-latest
     services:
+      # For the Meilisearch round-trip test (docs/meilisearch.md)
+      meilisearch:
+        image: getmeili/meilisearch:v1.54
+        env:
+          MEILI_MASTER_KEY: ci-master-key-1234567890
+          MEILI_NO_ANALYTICS: "true"
+        ports:
+          - 7700:7700
       # For the one test that runs the Postgres migrations and queries; the rest use SQLite
       postgres:
         image: postgres:17
@@ -19,8 +27,6 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
-    env:
-      TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/nyaa_test
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -29,6 +35,10 @@ jobs:
         run: cargo build --locked
       - name: Test
         run: cargo test --locked
+        env:
+          MEILI_TEST_URL: http://127.0.0.1:7700
+          MEILI_TEST_KEY: ci-master-key-1234567890
+          TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/nyaa_test
 
   # The owner builds on Windows (MSVC), where bundled SQLite and libpq are compiled from source
   build-windows:
