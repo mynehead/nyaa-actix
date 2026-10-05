@@ -3,6 +3,7 @@ pub mod schema;
 use diesel::pg::PgConnection;
 use diesel::r2d2::{self, ManageConnection, R2D2Connection};
 use diesel::sqlite::SqliteConnection;
+use diesel::connection::SimpleConnection;
 use diesel::{Connection, ConnectionError, ConnectionResult, RunQueryDsl};
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 
@@ -43,10 +44,45 @@ pub fn connect(url: &str) -> ConnectionResult<DbConnection> {
 /// Runs the pending migrations from the folder that matches the connection's backend.
 pub fn run_migrations(conn: &mut DbConnection) -> Result<(), String> {
     let result = match conn {
-        DbConnection::Sqlite(c) => c.run_pending_migrations(SQLITE_MIGRATIONS).map(|_| ()),
+        DbConnection::Sqlite(c) => repair_renumbered_avatar_migration(c)
+            .map_err(Into::into)
+            .and_then(|_| c.run_pending_migrations(SQLITE_MIGRATIONS).map(|_| ())),
         DbConnection::Pg(c) => c.run_pending_migrations(POSTGRES_MIGRATIONS).map(|_| ()),
     };
     result.map_err(|e| e.to_string())
+}
+
+#[derive(diesel::QueryableByName)]
+struct Count {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    n: i64,
+}
+
+fn count(conn: &mut SqliteConnection, query: &str) -> diesel::QueryResult<i64> {
+    diesel::sql_query(query).get_result::<Count>(conn).map(|c| c.n)
+}
+
+/// The avatar migration first shipped as version 20261005000000, the same version as the
+/// listing indexes, and was later renumbered to 20261005000001. A SQLite database that ran
+/// the first numbering already has `users.avatar_time` but recorded 20261005000000 for it,
+/// so the renumbered migration would fail ("duplicate column name") and the indexes were
+/// never created. Record the avatar migration as applied and create the missing indexes.
+fn repair_renumbered_avatar_migration(conn: &mut SqliteConnection) -> diesel::QueryResult<()> {
+    let has_column = count(conn,
+        "SELECT COUNT(*) AS n FROM pragma_table_info('users') WHERE name = 'avatar_time'")? > 0;
+    if !has_column {
+        return Ok(());
+    }
+    let recorded = count(conn,
+        "SELECT COUNT(*) AS n FROM __diesel_schema_migrations WHERE version = '20261005000001'")? > 0;
+    if recorded {
+        return Ok(());
+    }
+    log::warn!("Repairing migration history: avatar column was added under an earlier migration version");
+    conn.batch_execute(include_str!("../../migrations/sqlite/2026-10-05-000000_listing_indexes/up.sql"))?;
+    diesel::sql_query("INSERT INTO __diesel_schema_migrations (version) VALUES ('20261005000001')")
+        .execute(conn)?;
+    Ok(())
 }
 
 /// r2d2 manager that opens connections with [`connect`].
@@ -98,6 +134,28 @@ mod tests {
         assert!(!is_postgres_url("nyaa.db"));
         assert!(!is_postgres_url(":memory:"));
         assert!(matches!(connect(":memory:").unwrap(), DbConnection::Sqlite(_)));
+    }
+
+    /// A database migrated while the avatar migration was still numbered 20261005000000.
+    #[test]
+    fn repairs_database_from_old_avatar_migration_number() {
+        let mut conn = connect(":memory:").unwrap();
+        let DbConnection::Sqlite(c) = &mut conn else { unreachable!() };
+        c.run_pending_migrations(SQLITE_MIGRATIONS).unwrap();
+        c.batch_execute("DROP INDEX nyaa_torrents_category_idx; DROP INDEX nyaa_torrents_uploader_idx; \
+                         DROP INDEX nyaa_torrents_group_idx; \
+                         DELETE FROM __diesel_schema_migrations WHERE version = '20261005000001';").unwrap();
+        // The old numbering failed here with "duplicate column name: avatar_time"
+        run_migrations(&mut conn).unwrap();
+        let DbConnection::Sqlite(c) = &mut conn else { unreachable!() };
+        assert_eq!(count(c, "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'index' \
+                             AND name IN ('nyaa_torrents_category_idx', \
+                             'nyaa_torrents_uploader_idx', 'nyaa_torrents_group_idx')").unwrap(), 3);
+        assert_eq!(count(c, "SELECT COUNT(*) AS n FROM __diesel_schema_migrations \
+                             WHERE version = '20261005000001'").unwrap(), 1);
+        // A fresh database and a second run are left alone
+        run_migrations(&mut conn).unwrap();
+        run_migrations(&mut connect(":memory:").unwrap()).unwrap();
     }
 
     #[test]
