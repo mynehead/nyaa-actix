@@ -4,6 +4,9 @@
 //! adds an active account to the database named by DATABASE_URL (default nyaa.db), with the
 //! password hashed the same way registration does. Handy for a local admin, for example
 //! `nyaa-actix create-user admin admin --level admin`; use a real password anywhere but a dev box.
+//! It is safe to run while the server is up. Run the built exe directly then
+//! (`.\target\debug\nyaa-actix.exe create-user ...`): after a source change `cargo run` relinks
+//! the exe, which Windows refuses while the server has it open.
 
 use diesel::prelude::*;
 use diesel_migrations::MigrationHarness;
@@ -73,6 +76,10 @@ fn create_user(args: &[String]) -> Result<(), String> {
     let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "nyaa.db".into());
     let mut conn = SqliteConnection::establish(&database_url)
         .map_err(|e| format!("cannot open {database_url}: {e}"))?;
+    // The server may be writing at the same moment; wait for its lock instead of failing.
+    diesel::sql_query("PRAGMA busy_timeout = 5000")
+        .execute(&mut conn)
+        .map_err(|e| e.to_string())?;
     conn.run_pending_migrations(crate::MIGRATIONS)
         .map_err(|e| format!("migrations failed: {e}"))?;
 
