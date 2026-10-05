@@ -72,21 +72,32 @@ impl User {
         self.level == UserLevel::SuperAdmin as i32
     }
 
-    pub fn level_str(&self) -> &'static str {
-        match UserLevel::from_i32(self.level) {
+    pub fn level_str(&self) -> String {
+        let level = match UserLevel::from_i32(self.level) {
             UserLevel::Regular => "User",
             UserLevel::Trusted => "Trusted",
             UserLevel::Moderator => "Moderator",
             UserLevel::SuperAdmin => "Administrator",
+        };
+        if self.is_banned() { format!("BANNED {}", level) } else { level.to_string() }
+    }
+
+    pub fn status_str(&self) -> &'static str {
+        match self.status {
+            1 => "Active",
+            2 => "Banned",
+            _ => "Inactive",
         }
     }
 
-    pub fn level_color(&self) -> &'static str {
-        match UserLevel::from_i32(self.level) {
+    /// Bootstrap text color suffix; banned users are also struck through, as upstream.
+    pub fn level_color(&self) -> String {
+        let color = match UserLevel::from_i32(self.level) {
             UserLevel::Regular => "default",
             UserLevel::Trusted => "success",
             UserLevel::Moderator | UserLevel::SuperAdmin => "purple",
-        }
+        };
+        if self.is_banned() { format!("{} strike", color) } else { color.to_string() }
     }
 
     pub fn verify_password(&self, password: &str) -> bool {

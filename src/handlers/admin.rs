@@ -3,6 +3,7 @@ use actix_web::{web, HttpResponse, Result};
 use tera::Tera;
 use crate::config::Config;
 use crate::db::DbPool;
+use crate::utils::context::base_context;
 use crate::middleware::auth::get_current_user;
 
 pub async fn reports(
@@ -16,9 +17,7 @@ pub async fn reports(
     if !current_user.is_moderator() {
         return Err(actix_web::error::ErrorForbidden("Not allowed"));
     }
-    let mut ctx = tera::Context::new();
-    ctx.insert("current_user", &current_user);
-    ctx.insert("config", &serde_json::json!({ "site_name": cfg.site_name }));
+    let ctx = base_context(&cfg, Some(&current_user));
     let html = tmpl.render("admin/reports.html", &ctx)
         .unwrap_or_else(|_| "<h1>Admin Reports</h1><p>Not yet implemented.</p>".to_string());
     Ok(HttpResponse::Ok().content_type("text/html").body(html))

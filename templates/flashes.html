@@ -1,0 +1,6 @@
+{% for msg in flash_messages | default(value=[]) %}
+<div class="alert alert-dismissable alert-{{ msg.category }}" role="alert">
+	<button type="button" class="close" data-dismiss="alert">&times;</button>
+	{{ msg.text }}
+</div>
+{% endfor %}

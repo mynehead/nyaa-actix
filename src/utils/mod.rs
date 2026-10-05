@@ -1,4 +1,5 @@
 pub mod pagination;
+pub mod context;
 pub mod tera_filters;
 
 use std::net::IpAddr;
@@ -19,6 +20,15 @@ pub fn sanitize_string(s: &str) -> String {
     s.chars().filter(|c| !c.is_control()).collect()
 }
 
+/// Like `sanitize_string`, but keeps line breaks and tabs, for Markdown fields
+/// such as descriptions. Line endings are normalized to `\n`.
+pub fn sanitize_text(s: &str) -> String {
+    s.replace("\r\n", "\n")
+        .chars()
+        .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -35,6 +45,11 @@ mod tests {
     fn packs_ipv6_as_is() {
         let addr: std::net::Ipv6Addr = "2001:db8::1".parse().unwrap();
         assert_eq!(pack_ip(IpAddr::V6(addr)), addr.octets().to_vec());
+    }
+
+    #[test]
+    fn sanitize_text_keeps_line_breaks() {
+        assert_eq!(sanitize_text("**a**\r\n- b\n\tc\u{0}"), "**a**\n- b\n\tc");
     }
 
     #[test]

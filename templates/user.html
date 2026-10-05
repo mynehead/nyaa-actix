@@ -1,10 +1,51 @@
 {% extends "layout.html" %}
+{% import "macros.html" as macros %}
 {% block title %}{{ profile_user.username }} :: {{ config.site_name }}{% endblock %}
+{% block metatags %}
+{% if search.term %}
+<meta property="og:description" content="Search for '{{ search.term }}' in torrents uploaded by {{ profile_user.username }}">
+{% else %}
+<meta property="og:description" content="Torrents uploaded by {{ profile_user.username }}">
+{% endif %}
+{% endblock %}
+
 {% block body %}
+{% if current_user and current_user.level >= 2 %}
+	<h2>User Information</h2><br>
+	<div class="row" style="margin-bottom: 20px;">
+		<div class="col-md-2" style="max-width: 150px;">
+			<img class="avatar" src="/static/img/avatar/default.png">
+		</div>
+		<div class="col-md-4">
+			<div class="row">
+				<div class="col-md-12">
+					<dl class="dl-horizontal">
+						<dt>User ID:</dt>
+						<dd>{{ profile_user.id }}</dd>
+						<dt>Account created on:</dt>
+						<dd data-timestamp="{{ profile_user.created_time | date(format="%s") }}">{{ profile_user.created_time | date(format="%Y-%m-%d %H:%M UTC") }}</dd>
+						<dt>Email address:</dt>
+						<dd>{{ profile_user.email | default(value="") }}</dd>
+						<dt>User class:</dt>
+						<dd>{{ profile_user | level_str }}</dd>
+						<dt>User status:</dt>
+						<dd>{{ profile_user | status_str }}</dd>
+					</dl>
+				</div>
+			</div>
+		</div>
+	</div>
+{% endif %}
+
 <div class="row">
-    <h3>
-        Browsing <span class="text-{{ profile_user | level_color }}">{{ profile_user.username }}</span>'s torrents
-    </h3>
-    {% include "search_results.html" %}
+	<h3>
+		Browsing <span class="text-{{ profile_user | level_color }}" data-toggle="tooltip" title="{{ profile_user | level_str }}">{{ profile_user.username }}</span>'{% if profile_user.username is ending_with("s") %}{% else %}s{% endif %} torrents
+		{% if not search.term %}
+		 ({{ pagination.total_items }})
+		{% endif %}
+	</h3>
+
+{% include "search_results.html" %}
+
 </div>
 {% endblock %}

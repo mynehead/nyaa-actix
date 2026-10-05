@@ -1,0 +1,165 @@
+{% extends "layout.html" %}
+{% import "macros.html" as macros %}
+{% block title %}{{ torrent.display_name }} :: {{ config.site_name }}{% endblock %}
+{% block metatags %}
+{% if uploader and not torrent | is_anonymous %}{% set uploader_name = uploader.username %}{% else %}{% set uploader_name = "Anonymous" %}{% endif %}
+{% set cat_id = torrent.main_category_id ~ "_" ~ torrent.sub_category_id %}
+<meta property="og:description" content="{{ category_names[cat_id] | default(value=cat_id) }} | {{ torrent | filesize_human }} | Uploaded by {{ uploader_name }} on {{ torrent.created_time | date(format="%Y-%m-%d") }}">
+{% endblock %}
+{% block body %}
+{% if torrent | is_deleted %}{% set panel_class = "deleted" %}{% elif torrent | is_remake %}{% set panel_class = "danger" %}{% elif torrent | is_trusted %}{% set panel_class = "success" %}{% else %}{% set panel_class = "default" %}{% endif %}
+<div class="panel panel-{{ panel_class }}">
+	<div class="panel-heading"{% if torrent | is_hidden %} style="background-color: darkgray;"{% endif %}>
+		<h3 class="panel-title">
+			{{ torrent.display_name }}
+		</h3>
+	</div>
+	<div class="panel-body">
+		<div class="row">
+			<div class="col-md-1">Category:</div>
+			<div class="col-md-5">
+				{% if main_category %}<a href="/?c={{ torrent.main_category_id }}_0">{{ main_category.name }}</a>{% endif %}{% if sub_category %} - <a href="/?c={{ torrent.main_category_id }}_{{ torrent.sub_category_id }}">{{ sub_category.name }}</a>{% endif %}
+			</div>
+
+			<div class="col-md-1">Date:</div>
+			<div class="col-md-5" data-timestamp="{{ torrent.created_time | date(format="%s") }}">{{ torrent.created_time | date(format="%Y-%m-%d %H:%M UTC") }}</div>
+		</div>
+
+		<div class="row">
+			<div class="col-md-1">Submitter:</div>
+			<div class="col-md-5">
+				{%- if uploader and not torrent | is_anonymous -%}
+				{{ macros::user_link(user=uploader) }}
+				{%- else -%}
+				Anonymous {% if uploader %}({{ macros::user_link(user=uploader) }}){% endif %}
+				{%- endif -%}
+			</div>
+
+			<div class="col-md-1">Seeders:</div>
+			<div class="col-md-5"><span style="color: green;">{% if stats %}{{ stats.seed_count }}{% else %}0{% endif %}</span></div>
+		</div>
+
+		<div class="row">
+			<div class="col-md-1">Information:</div>
+			<div class="col-md-5">
+				{% if torrent.information %}
+				{{ torrent | information_as_link | safe }}
+				{% else %}
+				No information.
+				{% endif %}
+			</div>
+
+			<div class="col-md-1">Leechers:</div>
+			<div class="col-md-5"><span style="color: red;">{% if stats %}{{ stats.leech_count }}{% else %}0{% endif %}</span></div>
+		</div>
+
+		<div class="row">
+			<div class="col-md-1">File size:</div>
+			<div class="col-md-5">{{ torrent | filesize_human }}</div>
+
+			<div class="col-md-1">Completed:</div>
+			<div class="col-md-5">{% if stats %}{{ stats.download_count }}{% else %}0{% endif %}</div>
+		</div>
+		<div class="row">
+			<div class="col-md-offset-6 col-md-1">Info hash:</div>
+			<div class="col-md-5"><kbd>{{ info_hash }}</kbd></div>
+		</div>
+	</div><!--/.panel-body -->
+
+	<div class="panel-footer clearfix">
+		{% if torrent.has_torrent %}<a href="/download/{{ torrent.id }}"><i class="fa fa-download fa-fw"></i>Download Torrent</a> or {% endif %}<a href="{{ magnet }}" class="card-footer-item"><i class="fa fa-magnet fa-fw"></i>Magnet</a>
+	</div>
+</div><!--/.panel -->
+
+<div class="panel panel-default">
+	<div markdown-text class="panel-body" id="torrent-description">
+		{%- if torrent.description -%}
+		{{- torrent.description -}}
+		{%- else -%}
+		#### No description.
+		{%- endif -%}
+	</div>
+</div>
+
+{% if files and file_count <= max_files_view %}
+<div class="panel panel-default">
+	<div class="panel-heading">
+		<h3 class="panel-title">File list</h3>
+	</div>
+
+	<div class="torrent-file-list panel-body">
+		<ul>
+		{{ macros::file_list(nodes=files) }}
+		</ul>
+	</div>
+</div><!--/.panel -->
+{% elif files %}
+<div class="panel panel-default">
+	<div class="panel-heading panel-heading-collapse">
+		<h3 class="panel-title">
+			Too many files to display.
+		</h3>
+	</div>
+</div>
+{% else %}
+<div class="panel panel-default">
+	<div class="panel-heading panel-heading-collapse">
+		<h3 class="panel-title">
+			File list is not available for this torrent.
+		</h3>
+	</div>
+</div>
+{% endif %}
+
+<div id="comments" class="panel panel-default">
+	<div class="panel-heading">
+		<a data-toggle="collapse" href="#collapse-comments" role="button" aria-expanded="true" aria-controls="collapse-comments">
+		<h3 class="panel-title">
+			Comments - {{ torrent.comment_count }}
+		</h3>
+		</a>
+	</div>
+	<div class="collapse in" id="collapse-comments">
+	{% for item in comments %}
+	{% set comment = item.comment %}
+	<div class="panel panel-default comment-panel" id="com-{{ loop.index }}">
+		<div class="panel-body">
+			<div class="col-md-2">
+				<p>
+					{% if item.user %}
+					{{ macros::user_link(user=item.user) }}
+					{% if item.user.id == torrent.uploader_id and not torrent | is_anonymous %}
+					(uploader)
+					{% endif %}
+					{% else %}
+					Deleted user
+					{% endif %}
+				</p>
+				<img class="avatar" src="/static/img/avatar/default.png" alt="{% if item.user %}{{ item.user | level_str }}{% endif %}">
+			</div>
+			<div class="col-md-10 comment">
+				<div class="row comment-details">
+					<a href="#com-{{ loop.index }}"><small data-timestamp-swap data-timestamp="{{ comment.created_time | date(format="%s") }}">{{ comment.created_time | date(format="%Y-%m-%d %H:%M UTC") }}</small></a>
+					{% if comment.edited_time %}
+					<small data-timestamp-swap data-timestamp-title data-timestamp="{{ comment.edited_time | date(format="%s") }}" title="{{ comment.edited_time }}">(edited)</small>
+					{% endif %}
+				</div>
+				<div class="row comment-body">
+					<div markdown-text class="comment-content" id="torrent-comment{{ comment.id }}">{{- comment.text -}}</div>
+				</div>
+			</div>
+		</div>
+	</div>
+	{% endfor %}
+	{% if torrent | is_comment_locked %}
+	<div class="alert alert-warning">
+		<p>
+			<i class="fa fa-lock" aria-hidden="true"></i>
+			Comments have been locked.
+		</p>
+	</div>
+	{% endif %}
+	</div>
+</div>
+
+{% endblock %}

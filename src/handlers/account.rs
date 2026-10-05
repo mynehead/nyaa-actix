@@ -7,6 +7,7 @@ use tera::Tera;
 use crate::config::Config;
 use crate::db::DbPool;
 use crate::db::schema::users;
+use crate::utils::context::base_context;
 use crate::middleware::auth::{get_current_user, login_user, logout_user};
 use crate::models::{NewUser, User};
 
@@ -34,10 +35,8 @@ pub async fn login_get(
     if current_user.is_some() {
         return Ok(HttpResponse::Found().insert_header(("Location", "/")).finish());
     }
-    let mut ctx = tera::Context::new();
-    ctx.insert("current_user", &Option::<User>::None);
+    let mut ctx = base_context(&cfg, None);
     ctx.insert("error", &Option::<String>::None);
-    ctx.insert("config", &serde_json::json!({ "site_name": cfg.site_name }));
     let html = tmpl.render("login.html", &ctx)
         .map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
@@ -64,10 +63,9 @@ pub async fn login_post(
         None => Some("Invalid username or password."),
     };
 
-    let mut ctx = tera::Context::new();
-    ctx.insert("current_user", &Option::<User>::None);
+    let mut ctx = base_context(&cfg, None);
     ctx.insert("error", &error);
-    ctx.insert("config", &serde_json::json!({ "site_name": cfg.site_name }));
+    ctx.insert("username", &form.username);
     let html = tmpl.render("login.html", &ctx)
         .map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(HttpResponse::Ok().status(actix_web::http::StatusCode::UNAUTHORIZED)
@@ -84,10 +82,8 @@ pub async fn register_get(
     if current_user.is_some() {
         return Ok(HttpResponse::Found().insert_header(("Location", "/")).finish());
     }
-    let mut ctx = tera::Context::new();
-    ctx.insert("current_user", &Option::<User>::None);
+    let mut ctx = base_context(&cfg, None);
     ctx.insert("errors", &Vec::<String>::new());
-    ctx.insert("config", &serde_json::json!({ "site_name": cfg.site_name }));
     let html = tmpl.render("register.html", &ctx)
         .map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
@@ -125,10 +121,10 @@ pub async fn register_post(
     }
 
     if !errors.is_empty() {
-        let mut ctx = tera::Context::new();
-        ctx.insert("current_user", &Option::<User>::None);
+        let mut ctx = base_context(&cfg, None);
         ctx.insert("errors", &errors);
-        ctx.insert("config", &serde_json::json!({ "site_name": cfg.site_name }));
+        ctx.insert("username", &form.username);
+        ctx.insert("email", &form.email);
         let html = tmpl.render("register.html", &ctx)
             .map_err(actix_web::error::ErrorInternalServerError)?;
         return Ok(HttpResponse::Ok().status(actix_web::http::StatusCode::BAD_REQUEST)
@@ -160,11 +156,10 @@ pub async fn profile(
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
 ) -> Result<HttpResponse> {
-    let current_user = get_current_user(&session, &pool)
-        .ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
-    let mut ctx = tera::Context::new();
-    ctx.insert("current_user", &current_user);
-    ctx.insert("config", &serde_json::json!({ "site_name": cfg.site_name }));
+    let Some(current_user) = get_current_user(&session, &pool) else {
+        return Ok(HttpResponse::Found().insert_header(("Location", "/account/login")).finish());
+    };
+    let ctx = base_context(&cfg, Some(&current_user));
     let html = tmpl.render("profile.html", &ctx)
         .map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))

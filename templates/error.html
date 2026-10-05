@@ -1,9 +1,0 @@
-{% extends "layout.html" %}
-{% block title %}Error :: {{ config.site_name }}{% endblock %}
-{% block body %}
-<div class="text-center" style="margin-top:4em">
-    <h1>{{ code | default(value="Error") }}</h1>
-    <p class="text-muted">{{ message | default(value="An error occurred.") }}</p>
-    <a href="/" class="btn btn-default">Go Home</a>
-</div>
-{% endblock %}

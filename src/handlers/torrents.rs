@@ -10,10 +10,11 @@ use diesel::prelude::*;
 use crate::config::Config;
 use crate::db::DbPool;
 use crate::db::schema::{nyaa_torrents, nyaa_statistics, nyaa_comments};
+use crate::utils::context::base_context;
 use crate::middleware::auth::get_current_user;
 use crate::models::{NewTorrent, NewStatistic, Torrent, User};
 use crate::torrent::{parse_torrent, rebuild_torrent};
-use crate::utils::{pack_ip, sanitize_string};
+use crate::utils::{pack_ip, sanitize_string, sanitize_text};
 
 pub async fn view_torrent(
     session: Session,
@@ -54,24 +55,51 @@ pub async fn view_torrent(
         _ => None,
     };
 
+    // Comment authors, for names, level colors and the "(uploader)" tag
+    let comments: Vec<serde_json::Value> = comments.into_iter().map(|c| {
+        let user = c.user_id.and_then(|uid| User::by_id(&mut conn, uid).ok().flatten());
+        serde_json::json!({ "comment": c, "user": user })
+    }).collect();
+
+    let main_category = crate::db::schema::nyaa_main_categories::table
+        .find(torrent.main_category_id)
+        .first::<crate::models::MainCategory>(&mut conn)
+        .optional()
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let sub_category = crate::models::get_sub_category(&mut conn, torrent.main_category_id, torrent.sub_category_id)
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+
+    // File list from the stored info dict; missing or unreadable means "not available"
+    let info_path: PathBuf = [&cfg.torrent_storage_path,
+        &format!("{}", torrent_id / 1000),
+        &format!("{}.torrent.info", torrent_id)
+    ].iter().collect();
+    let (files, file_count) = std::fs::read(&info_path).ok()
+        .and_then(|info| crate::torrent::file_tree(&info))
+        .map_or((None, 0), |(tree, count)| (Some(tree), count));
+
     let magnet = torrent.magnet_uri(&torrent.display_name, &cfg.trackers());
 
-    let mut ctx = tera::Context::new();
-    ctx.insert("current_user", &current_user);
+    let mut ctx = base_context(&cfg, current_user.as_ref());
     ctx.insert("torrent", &torrent);
+    ctx.insert("info_hash", &torrent.info_hash_hex());
+    ctx.insert("main_category", &main_category);
+    ctx.insert("sub_category", &sub_category);
     ctx.insert("stats", &stats);
+    ctx.insert("files", &files);
+    ctx.insert("file_count", &file_count);
+    ctx.insert("max_files_view", &MAX_FILES_VIEW);
     ctx.insert("comments", &comments);
     ctx.insert("uploader", &uploader);
     ctx.insert("magnet", &magnet);
-    ctx.insert("config", &serde_json::json!({
-        "site_name": cfg.site_name,
-        "site_flavor": cfg.site_flavor,
-    }));
 
-    let html = tmpl.render("torrent.html", &ctx)
+    let html = tmpl.render("view.html", &ctx)
         .map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
+
+/// Upstream MAX_FILES_VIEW: longer file lists are not rendered.
+const MAX_FILES_VIEW: usize = 1000;
 
 /// Deleted and banned torrents are only visible to moderators.
 fn check_visible(torrent: &Torrent, current_user: &Option<User>) -> Result<()> {
@@ -189,14 +217,10 @@ pub async fn upload_get(
         vec![]
     };
 
-    let mut ctx = tera::Context::new();
-    ctx.insert("current_user", &current_user);
+    let mut ctx = base_context(&cfg, current_user.as_ref());
+    ctx.insert("active_page", "upload");
     ctx.insert("categories", &categories);
     ctx.insert("groups", &groups);
-    ctx.insert("config", &serde_json::json!({
-        "site_name": cfg.site_name,
-        "site_flavor": cfg.site_flavor,
-    }));
     let html = tmpl.render("upload.html", &ctx)
         .map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
@@ -319,7 +343,7 @@ pub async fn upload_post(
         display_name: final_name,
         torrent_name: torrent_filename(&meta.display_name),
         information: sanitize_string(information.trim()),
-        description: sanitize_string(description.trim()),
+        description: sanitize_text(description.trim()),
         filesize: meta.filesize,
         encoding: meta.encoding.clone(),
         flags,
