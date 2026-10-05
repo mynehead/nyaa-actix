@@ -87,7 +87,7 @@ pub async fn download_torrent(
         .map_err(actix_web::error::ErrorInternalServerError)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))?;
 
-    if !torrent.has_torrent != 0 {
+    if torrent.has_torrent == 0 {
         return Err(actix_web::error::ErrorNotFound("Torrent file not available"));
     }
 

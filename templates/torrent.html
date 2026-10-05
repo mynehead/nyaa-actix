@@ -5,8 +5,8 @@
     <div class="panel-heading">
         <h3 class="panel-title">
             {{ torrent.display_name }}
-            {% if torrent.is_trusted() %}<span class="label label-success">Trusted</span>{% endif %}
-            {% if torrent.is_remake() %}<span class="label label-warning">Remake</span>{% endif %}
+            {% if torrent | is_trusted %}<span class="label label-success">Trusted</span>{% endif %}
+            {% if torrent | is_remake %}<span class="label label-warning">Remake</span>{% endif %}
         </h3>
     </div>
     <div class="panel-body">
@@ -30,7 +30,7 @@
             <dt>Downloads:</dt>
             <dd>{{ stats.download_count | default(value=0) }}</dd>
             <dt>File size:</dt>
-            <dd>{{ torrent.filesize_human() }}</dd>
+            <dd>{{ torrent | filesize_human }}</dd>
             {% if torrent.information %}
             <dt>Information:</dt>
             <dd>{{ torrent.information }}</dd>

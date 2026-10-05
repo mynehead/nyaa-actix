@@ -6,7 +6,7 @@
     <dl class="dl-horizontal">
         <dt>Username:</dt><dd>{{ current_user.username }}</dd>
         <dt>Email:</dt><dd>{{ current_user.email | default(value="—") }}</dd>
-        <dt>Level:</dt><dd>{{ current_user.level_str() }}</dd>
+        <dt>Level:</dt><dd>{{ current_user | level_str }}</dd>
         <dt>Member since:</dt><dd>{{ current_user.created_time }}</dd>
     </dl>
 </div></div>

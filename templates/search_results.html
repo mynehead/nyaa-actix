@@ -15,18 +15,18 @@
         </thead>
         <tbody>
             {% for torrent in torrents %}
-            <tr class="{{ torrent.row_class() }}">
+            <tr class="{{ torrent | row_class }}">
                 <td class="text-center">{{ torrent.main_category_id }}_{{ torrent.sub_category_id }}</td>
                 <td>
                     <a href="/view/{{ torrent.id }}">{{ torrent.display_name }}</a>
-                    {% if torrent.is_trusted() %}<span class="label label-success">Trusted</span>{% endif %}
-                    {% if torrent.is_remake() %}<span class="label label-warning">Remake</span>{% endif %}
+                    {% if torrent | is_trusted %}<span class="label label-success">Trusted</span>{% endif %}
+                    {% if torrent | is_remake %}<span class="label label-warning">Remake</span>{% endif %}
                 </td>
                 <td class="text-center">
                     <a href="/download/{{ torrent.id }}" title="Download torrent"><i class="fa fa-download"></i></a>
                     <a href="/magnet/{{ torrent.id }}" title="Magnet link"><i class="fa fa-magnet"></i></a>
                 </td>
-                <td class="text-center">{{ torrent.filesize_human() }}</td>
+                <td class="text-center">{{ torrent | filesize_human }}</td>
                 <td class="text-center" title="{{ torrent.created_time }}">
                     {{ torrent.created_time | date(format="%Y-%m-%d") }}
                 </td>

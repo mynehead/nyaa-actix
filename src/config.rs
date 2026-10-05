@@ -16,9 +16,12 @@ pub struct Config {
 impl Config {
     pub fn from_env() -> Self {
         dotenvy::dotenv().ok();
+        let secret_key = env::var("SECRET_KEY").expect("SECRET_KEY must be set");
+        // actix's cookie Key::from panics on anything shorter than 64 bytes.
+        assert!(secret_key.len() >= 64, "SECRET_KEY must be at least 64 bytes long");
         Config {
             database_url: env::var("DATABASE_URL").unwrap_or_else(|_| "nyaa.db".into()),
-            secret_key: env::var("SECRET_KEY").expect("SECRET_KEY must be set"),
+            secret_key,
             site_name: env::var("SITE_NAME").unwrap_or_else(|_| "Nyaa".into()),
             site_flavor: env::var("SITE_FLAVOR").unwrap_or_else(|_| "nyaa".into()),
             results_per_page: env::var("RESULTS_PER_PAGE")

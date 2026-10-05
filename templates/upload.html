@@ -15,9 +15,10 @@
                 <label>Category</label>
                 <select name="category" class="form-control" required>
                     <option value="">[Select a category]</option>
-                    {% for main, subs in categories %}
+                    {% for entry in categories %}
+                    {% set main = entry.0 %}
                     <optgroup label="{{ main.name }}">
-                        {% for sub in subs %}
+                        {% for sub in entry.1 %}
                         {% if sub.id != 0 %}
                         <option value="{{ main.id }}_{{ sub.id }}">{{ main.name }} - {{ sub.name }}</option>
                         {% endif %}

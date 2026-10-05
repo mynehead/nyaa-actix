@@ -37,7 +37,8 @@ async fn main() -> std::io::Result<()> {
     log::info!("Starting {} on http://{}", cfg.site_name, bind_addr);
 
     HttpServer::new(move || {
-        let tera = Tera::new("templates/**/*").expect("Failed to load templates");
+        let mut tera = Tera::new("templates/**/*").expect("Failed to load templates");
+        utils::tera_filters::register(&mut tera);
         let tmpl_data = web::Data::new(tera);
 
         App::new()
