@@ -1,4 +1,5 @@
 pub mod pagination;
+pub mod tera_filters;
 
 use std::net::IpAddr;
 

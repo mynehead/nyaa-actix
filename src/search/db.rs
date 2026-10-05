@@ -2,6 +2,17 @@ use diesel::prelude::*;
 use crate::db::schema::nyaa_torrents;
 use crate::models::Torrent;
 
+// Diesel has no built-in bitwise AND; define the SQL `&` operator for integer columns.
+diesel::infix_operator!(BitAnd, " & ", diesel::sql_types::Integer);
+
+trait BitAndExt: Expression<SqlType = diesel::sql_types::Integer> + Sized {
+    fn bitand(self, other: i32) -> BitAnd<Self, diesel::dsl::AsExprOf<i32, diesel::sql_types::Integer>> {
+        BitAnd::new(self, other.into_sql::<diesel::sql_types::Integer>())
+    }
+}
+
+impl<T: Expression<SqlType = diesel::sql_types::Integer>> BitAndExt for T {}
+
 #[derive(Debug, Clone)]
 pub struct SearchQuery {
     pub term: Option<String>,

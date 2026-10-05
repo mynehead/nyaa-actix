@@ -3,7 +3,7 @@
 {% block body %}
 <div class="row">
     <h3>
-        Browsing <span class="text-{{ profile_user.level_color() }}">{{ profile_user.username }}</span>'s torrents
+        Browsing <span class="text-{{ profile_user | level_color }}">{{ profile_user.username }}</span>'s torrents
     </h3>
     {% include "search_results.html" %}
 </div>

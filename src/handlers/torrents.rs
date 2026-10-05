@@ -31,11 +31,7 @@ pub async fn view_torrent(
         .map_err(actix_web::error::ErrorInternalServerError)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))?;
 
-    // Hide deleted/banned from non-admins
-    let is_admin = current_user.as_ref().map(|u| u.is_moderator()).unwrap_or(false);
-    if (torrent.is_deleted() || torrent.is_banned()) && !is_admin {
-        return Err(actix_web::error::ErrorNotFound("Torrent not found"));
-    }
+    check_visible(&torrent, &current_user)?;
 
     let stats = nyaa_statistics::table
         .find(torrent_id)
@@ -75,19 +71,31 @@ pub async fn view_torrent(
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
+/// Deleted and banned torrents are only visible to moderators.
+fn check_visible(torrent: &Torrent, current_user: &Option<User>) -> Result<()> {
+    let is_admin = current_user.as_ref().map(|u| u.is_moderator()).unwrap_or(false);
+    if (torrent.is_deleted() || torrent.is_banned()) && !is_admin {
+        return Err(actix_web::error::ErrorNotFound("Torrent not found"));
+    }
+    Ok(())
+}
+
 pub async fn download_torrent(
+    session: Session,
     pool: web::Data<DbPool>,
     cfg: web::Data<Config>,
     path: web::Path<i32>,
 ) -> Result<HttpResponse> {
     let torrent_id = path.into_inner();
+    let current_user = get_current_user(&session, &pool);
     let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
 
     let torrent = Torrent::by_id(&mut conn, torrent_id)
         .map_err(actix_web::error::ErrorInternalServerError)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))?;
+    check_visible(&torrent, &current_user)?;
 
-    if !torrent.has_torrent != 0 {
+    if torrent.has_torrent == 0 {
         return Err(actix_web::error::ErrorNotFound("Torrent file not available"));
     }
 
@@ -109,14 +117,17 @@ pub async fn download_torrent(
 }
 
 pub async fn magnet_redirect(
+    session: Session,
     pool: web::Data<DbPool>,
     path: web::Path<i32>,
 ) -> Result<HttpResponse> {
     let torrent_id = path.into_inner();
+    let current_user = get_current_user(&session, &pool);
     let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
     let torrent = Torrent::by_id(&mut conn, torrent_id)
         .map_err(actix_web::error::ErrorInternalServerError)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))?;
+    check_visible(&torrent, &current_user)?;
     let magnet = torrent.magnet_uri(&torrent.display_name, &[]);
     Ok(HttpResponse::Found()
         .insert_header(("Location", magnet))
@@ -145,6 +156,11 @@ pub async fn upload_get(
     cfg: web::Data<Config>,
 ) -> Result<HttpResponse> {
     let current_user = get_current_user(&session, &pool);
+    if current_user.is_none() {
+        return Ok(HttpResponse::Found()
+            .insert_header(("Location", "/account/login"))
+            .finish());
+    }
     let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
     let categories = crate::models::get_all_categories(&mut conn)
         .map_err(actix_web::error::ErrorInternalServerError)?;
@@ -180,6 +196,9 @@ pub async fn upload_post(
     mut payload: Multipart,
 ) -> Result<HttpResponse> {
     let current_user = get_current_user(&session, &pool);
+    if current_user.is_none() {
+        return Err(actix_web::error::ErrorUnauthorized("Login required"));
+    }
     let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
 
     let mut torrent_bytes: Option<Vec<u8>> = None;
@@ -192,7 +211,7 @@ pub async fn upload_post(
 
     while let Some(item) = payload.next().await {
         let mut field = item.map_err(actix_web::error::ErrorBadRequest)?;
-        let name = field.name().to_string();
+        let name = field.name().unwrap_or_default().to_string();
         let mut data = Vec::new();
         while let Some(chunk) = field.next().await {
             let chunk = chunk.map_err(actix_web::error::ErrorBadRequest)?;
