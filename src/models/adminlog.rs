@@ -66,7 +66,6 @@ pub fn torrent_link(torrent_id: i32) -> String {
 }
 
 /// Upstream's log text for a user link: `[name](/user/name)`.
-#[allow(dead_code)] // for the ban, report and trusted logs
 pub fn user_link(username: &str) -> String {
     format!("[{0}](/user/{0})", username)
 }
