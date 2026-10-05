@@ -17,7 +17,7 @@
 //!
 //! `nyaa-actix reindex` rebuilds the Meilisearch index named by MEILI_URL / MEILI_KEY /
 //! MEILI_INDEX from the database. Searches keep using the old index until the new one is
-//! complete. Run it once after setting up Meilisearch, and again if the index is lost.
+//! complete. The server also does this by itself when the index is missing or incomplete.
 
 use diesel::prelude::*;
 

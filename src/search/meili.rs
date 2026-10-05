@@ -5,6 +5,8 @@
 //! changed torrent, a background task pushes changed tracker stats, and `nyaa-actix reindex`
 //! rebuilds the whole index. Talks to Meilisearch's HTTP API directly.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -25,6 +27,11 @@ pub struct Meili {
     /// Upper bound on how many hits a search counts and pages through.
     max_hits: i64,
     agent: ureq::Agent,
+    /// Whether the index is known to hold every torrent. Until it is (and whenever an
+    /// update fails to reach it), listings search SQLite instead; see `index::check`.
+    ready: Arc<AtomicBool>,
+    /// Set when an update failed to reach the index, so the next check rebuilds it.
+    stale: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for Meili {
@@ -117,21 +124,6 @@ impl TorrentDoc {
     }
 }
 
-/// Just the tracker stats of a torrent, merged into its document by the stats sync.
-#[derive(Debug, Serialize)]
-pub struct StatsDoc {
-    pub id: i32,
-    pub seed_count: i32,
-    pub leech_count: i32,
-    pub download_count: i32,
-}
-
-impl From<&Statistic> for StatsDoc {
-    fn from(s: &Statistic) -> Self {
-        StatsDoc { id: s.torrent_id, seed_count: s.seed_count, leech_count: s.leech_count, download_count: s.download_count }
-    }
-}
-
 /// The Meilisearch filter expression for a listing, mirroring `db::filtered`.
 pub fn filter(q: &SearchQuery) -> Vec<String> {
     let mut f = Vec::new();
@@ -211,6 +203,8 @@ impl Meili {
             index: index.to_string(),
             max_hits,
             agent,
+            ready: Arc::new(AtomicBool::new(false)),
+            stale: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -284,6 +278,40 @@ impl Meili {
         Ok((ids, total.min(self.max_hits)))
     }
 
+    pub fn is_ready(&self) -> bool {
+        self.ready.load(Ordering::Relaxed)
+    }
+
+    pub fn set_ready(&self, ready: bool) {
+        self.ready.store(ready, Ordering::Relaxed);
+    }
+
+    /// An update didn't reach the index: search SQLite until it has been rebuilt.
+    pub fn mark_stale(&self) {
+        self.stale.store(true, Ordering::Relaxed);
+        self.set_ready(false);
+    }
+
+    /// Whether an update failed since the last call.
+    pub fn take_stale(&self) -> bool {
+        self.stale.swap(false, Ordering::Relaxed)
+    }
+
+    /// How many documents the index holds, or None when it doesn't exist.
+    pub fn document_count(&self) -> MeiliResult<Option<i64>> {
+        match self.call("GET", &format!("/indexes/{}/stats", self.index), None) {
+            Ok(v) => v["numberOfDocuments"].as_i64().map(Some).ok_or_else(|| MeiliError::Response(v.to_string())),
+            Err(MeiliError::Status { status: 404, .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Whether any update to the index is still queued or running.
+    pub fn has_pending_tasks(&self) -> MeiliResult<bool> {
+        let v = self.call("GET", &format!("/tasks?indexUids={}&statuses=enqueued,processing&limit=1", self.index), None)?;
+        v["total"].as_u64().map(|t| t > 0).ok_or_else(|| MeiliError::Response(v.to_string()))
+    }
+
     /// Creates the index if needed and applies `index_settings`. Returns the settings task.
     pub fn configure(&self) -> MeiliResult<u64> {
         match self.call("POST", "/indexes", Some(&json!({ "uid": self.index, "primaryKey": "id" }))) {
@@ -298,12 +326,6 @@ impl Meili {
     pub fn put_documents<T: Serialize>(&self, docs: &[T]) -> MeiliResult<u64> {
         let body = serde_json::to_value(docs).map_err(|e| MeiliError::Response(e.to_string()))?;
         Self::task_uid(&self.call("POST", &format!("/indexes/{}/documents?primaryKey=id", self.index), Some(&body))?)
-    }
-
-    /// Merges fields into existing documents. Returns the task uid.
-    pub fn update_documents<T: Serialize>(&self, docs: &[T]) -> MeiliResult<u64> {
-        let body = serde_json::to_value(docs).map_err(|e| MeiliError::Response(e.to_string()))?;
-        Self::task_uid(&self.call("PUT", &format!("/indexes/{}/documents?primaryKey=id", self.index), Some(&body))?)
     }
 
     /// Swaps this index with `other`, so a freshly built index goes live in one step.

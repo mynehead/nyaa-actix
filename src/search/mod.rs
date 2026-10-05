@@ -21,7 +21,7 @@ fn wants_index(q: &SearchQuery) -> bool {
 /// One page of a listing. Uses Meilisearch where it helps and falls back to SQLite when it
 /// is not configured or fails, so search never breaks because the index is down.
 pub fn search(conn: &mut DbConnection, meili: Option<&Meili>, q: &SearchQuery) -> QueryResult<SearchResult> {
-    if let Some(meili) = meili.filter(|_| wants_index(q)) {
+    if let Some(meili) = meili.filter(|m| m.is_ready() && wants_index(q)) {
         match meili.search(q) {
             Ok((ids, total)) => return Ok(SearchResult { torrents: load_in_order(conn, &ids)?, total }),
             Err(e) => log::warn!("Meilisearch search failed, using SQLite: {e}"),
@@ -98,8 +98,26 @@ mod tests {
         let mut conn = db();
         // Nothing listens on port 1
         let meili = Meili::new("http://127.0.0.1:1", None, "torrents", 1000);
+        meili.set_ready(true);
         let q = query(Some("Dragon Show"), None, None, None, None);
         assert_eq!(ids(&mut conn, Some(&meili), &q), (vec![2, 1], 2));
+
+        // An update that can't reach the index keeps searches off it until a rebuild
+        index::torrent_changed(&mut conn, Some(&meili), 1);
+        assert!(!meili.is_ready());
+        assert!(meili.take_stale());
+    }
+
+    #[test]
+    fn index_is_not_used_until_checked() {
+        let mut conn = db();
+        let meili = Meili::new("http://127.0.0.1:1", None, "torrents", 1000);
+        assert!(!meili.is_ready());
+        // Not even tried: no warning, straight to SQLite
+        let q = query(Some("Dragon Show"), None, None, None, None);
+        assert_eq!(ids(&mut conn, Some(&meili), &q), (vec![2, 1], 2));
+        assert!(index::check(&mut conn, &meili).is_err());
+        assert!(!meili.is_ready());
     }
 
     /// Runs against a real Meilisearch when MEILI_TEST_URL is set (CI starts one; see
@@ -114,7 +132,11 @@ mod tests {
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
         let meili = Meili::new(&url, std::env::var("MEILI_TEST_KEY").ok(), &index, 1000);
         let mut conn = db();
-        assert_eq!(index::rebuild(&mut conn, &meili, |_| {}).unwrap(), 6);
+        // No index yet: the check builds one and only then lets searches use it
+        assert!(!meili.is_ready());
+        index::check(&mut conn, &meili).unwrap();
+        assert!(meili.is_ready());
+        assert_eq!(meili.document_count().unwrap(), Some(6));
 
         let cases = [
             query(Some("dragon"), None, None, None, None),
@@ -149,6 +171,7 @@ mod tests {
 
         // Counts stop at the hit cap, where Meilisearch stops paging
         let capped = Meili::new(&url, std::env::var("MEILI_TEST_KEY").ok(), &index, 2);
+        capped.set_ready(true);
         assert_eq!(ids(&mut conn, Some(&capped), &cases[0]), (vec![6, 2, 1], 2));
 
         // Paging
@@ -177,6 +200,25 @@ mod tests {
         let newest = index::sync_stats(&mut conn, &meili, since).unwrap();
         assert_eq!(newest.unwrap().to_string(), "2999-01-01 00:00:00");
         wait_for(&mut conn, &query(Some("tale"), None, None, Some("seeders"), None), vec![3, 1]);
+
+        // A torrent that never reached the index (uploaded while it was down, or before it
+        // was set up) gets the index rebuilt, instead of being missing from every search
+        diesel::sql_query("INSERT INTO nyaa_torrents (id, info_hash, display_name, torrent_name, flags, uploader_id, \
+                           main_category_id, sub_category_id) VALUES (7, X'07', 'Display Name2', 't', 0, 1, 1, 1)")
+            .execute(&mut conn).unwrap();
+        diesel::sql_query("INSERT INTO nyaa_statistics (torrent_id, seed_count, leech_count, download_count) VALUES (7, 1, 0, 0)")
+            .execute(&mut conn).unwrap();
+        // Stats sync sends whole documents, so it adds the torrent rather than a nameless stub
+        index::sync_stats(&mut conn, &meili, None).unwrap();
+        wait_for(&mut conn, &query(Some("Name2"), None, None, None, None), vec![7]);
+        // One with no stats change never reaches it that way; the count check catches it
+        diesel::sql_query("INSERT INTO nyaa_torrents (id, info_hash, display_name, torrent_name, flags, uploader_id, \
+                           main_category_id, sub_category_id) VALUES (8, X'08', 'Display Name3', 't', 0, 1, 1, 1)")
+            .execute(&mut conn).unwrap();
+        while meili.has_pending_tasks().unwrap() { std::thread::sleep(Duration::from_millis(20)); }
+        index::check(&mut conn, &meili).unwrap();
+        assert!(meili.is_ready());
+        assert_eq!(ids(&mut conn, Some(&meili), &query(Some("display"), None, None, None, None)), (vec![8, 7], 2));
 
         meili.delete_index().unwrap();
     }

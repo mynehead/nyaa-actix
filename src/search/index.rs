@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
 
-use super::meili::{Meili, StatsDoc, TorrentDoc};
+use super::meili::{Meili, TorrentDoc};
 use crate::db::schema::{nyaa_statistics, nyaa_torrents};
 use crate::db::{DbConnection, DbPool};
 use crate::models::{Statistic, Torrent};
@@ -38,7 +38,8 @@ pub fn torrent_changed(conn: &mut DbConnection, meili: Option<&Meili>, id: i32) 
         Ok(())
     })();
     if let Err(e) = result {
-        log::warn!("Could not index torrent #{id}: {e:#}");
+        log::warn!("Could not index torrent #{id}, searching SQLite until the index is rebuilt: {e:#}");
+        meili.mark_stale();
     }
 }
 
@@ -83,8 +84,48 @@ pub fn rebuild(conn: &mut DbConnection, meili: &Meili, progress: impl Fn(i64)) -
     Ok(count)
 }
 
-/// Pushes the tracker stats changed at or after `since` (all of them for None) and returns
-/// the newest `last_updated` seen, to pass as `since` next time.
+/// Makes sure the index can be trusted before searches use it: rebuilds it when it is
+/// missing, holds a different number of torrents than the database (say it was set up
+/// after torrents were uploaded, or an upload happened while it was down), or an update
+/// failed to reach it. Then marks it ready.
+pub fn check(conn: &mut DbConnection, meili: &Meili) -> anyhow::Result<()> {
+    // Counts lag behind queued updates; look again next time
+    if meili.has_pending_tasks()? {
+        return Ok(());
+    }
+    let stale = meili.take_stale();
+    let torrents: i64 = nyaa_torrents::table.count().get_result(conn)?;
+    let indexed = meili.document_count()?;
+    if !stale && indexed == Some(torrents) {
+        if !meili.is_ready() {
+            log::info!("Meilisearch index `{}` holds all {torrents} torrents; searching with it", meili.index());
+        }
+        meili.set_ready(true);
+        return Ok(());
+    }
+    meili.set_ready(false);
+    log::info!(
+        "Rebuilding Meilisearch index `{}` ({} of {torrents} torrents indexed{}); searching SQLite meanwhile",
+        meili.index(),
+        indexed.map_or("none".into(), |n| n.to_string()),
+        if stale { ", an update failed" } else { "" },
+    );
+    let start = Instant::now();
+    let count = rebuild(conn, meili, |_| {})?;
+    log::info!("Indexed {count} torrents in {:.1?}", start.elapsed());
+    // An update that failed while rebuilding means another round
+    if !meili.take_stale() {
+        meili.set_ready(true);
+    } else {
+        meili.mark_stale();
+    }
+    Ok(())
+}
+
+/// Pushes the torrents whose tracker stats changed at or after `since` (all of them for
+/// None) and returns the newest `last_updated` seen, to pass as `since` next time. Whole
+/// documents go out, so a torrent missing from the index is added rather than left as a
+/// nameless stats-only entry.
 pub fn sync_stats(
     conn: &mut DbConnection,
     meili: &Meili,
@@ -106,30 +147,36 @@ pub fn sync_stats(
         let Some(last) = rows.last() else { break };
         last_id = last.torrent_id;
         newest = rows.iter().map(|s| s.last_updated).chain(newest).max();
-        let docs: Vec<StatsDoc> = rows.iter().map(StatsDoc::from).collect();
-        meili.update_documents(&docs)?;
+        let ids: Vec<i32> = rows.iter().map(|s| s.torrent_id).collect();
+        let torrents: Vec<Torrent> = nyaa_torrents::table.filter(nyaa_torrents::id.eq_any(&ids)).load(conn)?;
+        let stats: std::collections::HashMap<i32, &Statistic> = rows.iter().map(|s| (s.torrent_id, s)).collect();
+        let docs: Vec<TorrentDoc> = torrents.iter().map(|t| TorrentDoc::new(t, stats.get(&t.id).copied())).collect();
+        if !docs.is_empty() {
+            meili.put_documents(&docs)?;
+        }
     }
     Ok(newest)
 }
 
-/// Runs on a background thread for the life of the server: makes sure the index has the
-/// settings searches need, then keeps seed/leech/download counts current for sorting.
+/// Runs on a background thread for the life of the server: checks the index (building it
+/// when needed) and keeps seed/leech/download counts current for sorting.
 pub fn spawn_stats_sync(pool: DbPool, meili: Meili, every: Duration) {
     std::thread::spawn(move || {
-        if let Err(e) = meili.configure() {
-            log::warn!("Meilisearch at {meili:?} is not reachable yet ({e}); searches use SQLite until it is");
-        }
         let mut since = None;
         loop {
             let started = Instant::now();
-            let result = pool.get().map_err(anyhow::Error::from)
-                .and_then(|mut conn| sync_stats(&mut conn, &meili, since));
-            match result {
-                Ok(newest) => since = newest,
-                Err(e) => log::warn!("Stats sync to Meilisearch failed: {e:#}"),
+            let result = pool.get().map_err(anyhow::Error::from).and_then(|mut conn| {
+                check(&mut conn, &meili)?;
+                if meili.is_ready() {
+                    since = sync_stats(&mut conn, &meili, since)?;
+                }
+                Ok(())
+            });
+            if let Err(e) = result {
+                log::warn!("Meilisearch at {meili:?} is not usable ({e:#}); searching SQLite until it is");
+                meili.set_ready(false);
             }
             std::thread::sleep(every.saturating_sub(started.elapsed()));
         }
     });
 }
-
