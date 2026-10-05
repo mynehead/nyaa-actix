@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use argon2::password_hash::{rand_core::OsRng, SaltString};
 
-use crate::db::schema::users;
+use crate::config::Config;
+use crate::db::schema::{user_preferences, users};
 
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,7 +48,20 @@ pub struct User {
     pub last_login_date: Option<NaiveDateTime>,
     pub last_login_ip: Option<Vec<u8>>,
     pub registration_ip: Option<Vec<u8>>,
+    /// When the current uploaded avatar was set; None when there is none.
+    pub avatar_time: Option<NaiveDateTime>,
 }
+
+/// Argon2 hash with a fresh salt, as stored in `password_hash`.
+pub fn hash_password(password: &str) -> String {
+    let salt = SaltString::generate(&mut OsRng);
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .expect("failed to hash password")
+        .to_string()
+}
+
+pub const DEFAULT_AVATAR: &str = "/static/img/avatar/default.png";
 
 impl User {
     pub fn is_active(&self) -> bool {
@@ -108,6 +122,53 @@ impl User {
         }
     }
 
+    /// The uploaded avatar, else Gravatar when enabled (upstream `gravatar_url`), else the default.
+    pub fn avatar_url(&self, cfg: &Config) -> String {
+        if let Some(t) = self.avatar_time {
+            return format!("/avatar/{}?v={}", self.id, t.and_utc().timestamp());
+        }
+        match &self.email {
+            Some(email) if cfg.enable_gravatar => {
+                use md5::{Digest, Md5};
+                let hash = hex::encode(Md5::digest(email.to_lowercase().as_bytes()));
+                let default_url = format!("{}{}", cfg.site_url, DEFAULT_AVATAR);
+                // Nyaa: PG-rated, Sukebei: X-rated
+                let rating = if cfg.site_flavor == "nyaa" { "pg" } else { "x" };
+                format!("https://www.gravatar.com/avatar/{}?s=120&d={}&r={}",
+                    hash, urlencoding::encode(&default_url), rating)
+            }
+            _ => DEFAULT_AVATAR.to_string(),
+        }
+    }
+
+    pub fn set_password(conn: &mut SqliteConnection, uid: i32, password: &str) -> QueryResult<usize> {
+        diesel::update(users::table.find(uid))
+            .set(users::password_hash.eq(hash_password(password)))
+            .execute(conn)
+    }
+
+    pub fn set_email(conn: &mut SqliteConnection, uid: i32, email: &str) -> QueryResult<usize> {
+        diesel::update(users::table.find(uid)).set(users::email.eq(email)).execute(conn)
+    }
+
+    pub fn set_avatar_time(conn: &mut SqliteConnection, uid: i32, time: NaiveDateTime) -> QueryResult<usize> {
+        diesel::update(users::table.find(uid)).set(users::avatar_time.eq(time)).execute(conn)
+    }
+
+    /// The "Hide comments by default" preference; off when the user never saved preferences.
+    pub fn hide_comments(conn: &mut SqliteConnection, uid: i32) -> QueryResult<bool> {
+        let hide: Option<i32> = user_preferences::table.find(uid)
+            .select(user_preferences::hide_comments)
+            .first(conn).optional()?;
+        Ok(hide.unwrap_or(0) != 0)
+    }
+
+    pub fn set_hide_comments(conn: &mut SqliteConnection, uid: i32, hide: bool) -> QueryResult<usize> {
+        diesel::replace_into(user_preferences::table)
+            .values((user_preferences::user_id.eq(uid), user_preferences::hide_comments.eq(hide as i32)))
+            .execute(conn)
+    }
+
     pub fn by_id(conn: &mut SqliteConnection, uid: i32) -> QueryResult<Option<User>> {
         users::table.find(uid).first(conn).optional()
     }
@@ -142,11 +203,7 @@ pub struct NewUser {
 
 impl NewUser {
     pub fn new(username: &str, email: Option<&str>, password: &str) -> Self {
-        let salt = SaltString::generate(&mut OsRng);
-        let hash = Argon2::default()
-            .hash_password(password.as_bytes(), &salt)
-            .expect("failed to hash password")
-            .to_string();
+        let hash = hash_password(password);
         NewUser {
             username: username.to_string(),
             email: email.map(|e| e.to_string()),

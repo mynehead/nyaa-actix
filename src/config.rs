@@ -11,8 +11,9 @@ pub struct Config {
     #[allow(dead_code)]
     pub max_pages: i64,
     pub torrent_storage_path: String,
-    /// Upstream ENABLE_GRAVATAR: avatars on profiles and comments. Waits on the comments feature.
-    #[allow(dead_code)]
+    /// Where uploaded avatars are kept, as `{user_id}.png`.
+    pub avatar_storage_path: String,
+    /// Upstream ENABLE_GRAVATAR: Gravatar for users without an uploaded avatar.
     pub enable_gravatar: bool,
     /// Upstream MAINTENANCE_MODE: turns off uploads, registration and login with a notice. Not enforced yet.
     #[allow(dead_code)]
@@ -44,6 +45,8 @@ impl Config {
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(0),
             torrent_storage_path: env::var("TORRENT_STORAGE_PATH")
                 .unwrap_or_else(|_| "./torrents".into()),
+            avatar_storage_path: env::var("AVATAR_STORAGE_PATH")
+                .unwrap_or_else(|_| "./avatars".into()),
             enable_gravatar: env::var("ENABLE_GRAVATAR")
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(false),
             maintenance_mode: env::var("MAINTENANCE_MODE")

@@ -1,6 +1,8 @@
 pub mod pagination;
 pub mod context;
 pub mod tera_filters;
+pub mod flash;
+pub mod avatar;
 
 use std::net::IpAddr;
 
