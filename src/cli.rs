@@ -14,16 +14,21 @@
 //! are skipped, so it can be run again after an interruption, or once more right before
 //! switching STORAGE_BACKEND to s3 to pick up uploads made in the meantime. Local files
 //! are left in place.
+//!
+//! `nyaa-actix reindex` rebuilds the Meilisearch index named by MEILI_URL / MEILI_KEY /
+//! MEILI_INDEX from the database. Searches keep using the old index until the new one is
+//! complete. Run it once after setting up Meilisearch, and again if the index is lost.
 
 use diesel::prelude::*;
-use diesel_migrations::MigrationHarness;
 
+use crate::db::DbConnection;
 use crate::db::schema::users;
 use crate::storage::{S3Settings, Storage};
 use crate::models::user::{NewUser, User, UserLevel};
 
 const USAGE: &str = "usage: nyaa-actix create-user <username> <password> [--level regular|trusted|moderator|admin] [--email <addr>]
-       nyaa-actix migrate-storage [--dry-run]";
+       nyaa-actix migrate-storage [--dry-run]
+       nyaa-actix reindex";
 
 /// Runs the subcommand named in `args` (program name already stripped).
 /// Returns None when there is no subcommand, so the caller starts the server.
@@ -31,6 +36,7 @@ pub async fn run(args: &[String]) -> Option<Result<(), String>> {
     match args.first().map(String::as_str) {
         Some("create-user") => Some(create_user(&args[1..])),
         Some("migrate-storage") => Some(migrate_storage(&args[1..]).await),
+        Some("reindex") => Some(reindex()),
         Some("help" | "--help" | "-h") => {
             println!("{USAGE}\nWith no subcommand, starts the web server.");
             Some(Ok(()))
@@ -80,18 +86,20 @@ fn parse_level(v: &str) -> Option<UserLevel> {
     }
 }
 
-fn create_user(args: &[String]) -> Result<(), String> {
-    let opts = parse_create_user(args)?;
+/// Opens DATABASE_URL (default nyaa.db) with migrations applied.
+fn open_db() -> Result<(DbConnection, String), String> {
     dotenvy::dotenv().ok();
     let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "nyaa.db".into());
-    let mut conn = SqliteConnection::establish(&database_url)
+    let mut conn = crate::db::connect(&database_url)
         .map_err(|e| format!("cannot open {database_url}: {e}"))?;
-    // The server may be writing at the same moment; wait for its lock instead of failing.
-    diesel::sql_query("PRAGMA busy_timeout = 5000")
-        .execute(&mut conn)
-        .map_err(|e| e.to_string())?;
-    conn.run_pending_migrations(crate::MIGRATIONS)
+    crate::db::run_migrations(&mut conn)
         .map_err(|e| format!("migrations failed: {e}"))?;
+    Ok((conn, database_url))
+}
+
+fn create_user(args: &[String]) -> Result<(), String> {
+    let opts = parse_create_user(args)?;
+    let (mut conn, database_url) = open_db()?;
 
     if User::by_username(&mut conn, &opts.username).map_err(|e| e.to_string())?.is_some() {
         return Err(format!("user `{}` already exists", opts.username));
@@ -126,6 +134,18 @@ async fn migrate_storage(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn reindex() -> Result<(), String> {
+    let (mut conn, database_url) = open_db()?;
+    let meili = crate::search::meili::Meili::from_env()
+        .ok_or("MEILI_URL is not set; point it at Meilisearch, e.g. MEILI_URL=http://127.0.0.1:7700")?;
+    let start = std::time::Instant::now();
+    let count = crate::search::index::rebuild(&mut conn, &meili, |n| eprint!("\rindexed {n} torrents"))
+        .map_err(|e| format!("\nreindex failed: {e:#}"))?;
+    eprintln!();
+    println!("indexed {count} torrents from {database_url} into `{}` in {:.1?}", meili.index(), start.elapsed());
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,8 +172,8 @@ mod tests {
 
     #[test]
     fn created_user_can_log_in() {
-        let mut conn = SqliteConnection::establish(":memory:").unwrap();
-        conn.run_pending_migrations(crate::MIGRATIONS).unwrap();
+        let mut conn = crate::db::connect(":memory:").unwrap();
+        crate::db::run_migrations(&mut conn).unwrap();
         let mut u = NewUser::new("admin", None, "admin");
         u.level = UserLevel::SuperAdmin as i32;
         diesel::insert_into(users::table).values(&u).execute(&mut conn).unwrap();

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::config::Config;
+use crate::db::DbConnection;
 use crate::db::DbPool;
 use crate::db::schema::{nyaa_torrents, nyaa_statistics, nyaa_comments};
 use crate::utils::context::base_context;
@@ -263,6 +264,7 @@ pub async fn upload_post(
     req: HttpRequest,
     session: Session,
     pool: web::Data<DbPool>,
+    cfg: web::Data<Config>,
     storage: web::Data<Storage>,
     mut payload: Multipart,
 ) -> Result<HttpResponse> {
@@ -412,15 +414,17 @@ pub async fn upload_post(
 
     // Don't hold a pooled connection while waiting on the store
     drop(conn);
-    if let Err(e) = storage.put(Kind::TorrentInfo, inserted.id, meta.bencoded_info).await {
+    let stored = storage.put(Kind::TorrentInfo, inserted.id, meta.bencoded_info).await;
+    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    if let Err(e) = stored {
         log::error!("Failed to store info dict of torrent {}: {}", inserted.id, e);
-        let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
         conn.transaction::<_, diesel::result::Error, _>(|conn| {
             diesel::delete(nyaa_statistics::table.find(inserted.id)).execute(conn)?;
             diesel::delete(nyaa_torrents::table.find(inserted.id)).execute(conn)
         }).map_err(|e| log::error!("Removing torrent {} after the failed write: {}", inserted.id, e)).ok();
         return Err(actix_web::error::ErrorInternalServerError("Failed to store torrent"));
     }
+    crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), inserted.id);
 
     Ok(HttpResponse::Found()
         .insert_header(("Location", format!("/view/{}", inserted.id)))
@@ -506,7 +510,7 @@ impl EditForm {
     }
 
     /// Upstream's `EditForm` validators. Returns the category ids, or errors by field.
-    fn validate(&self, conn: &mut SqliteConnection) -> std::result::Result<(i32, i32), HashMap<&'static str, String>> {
+    fn validate(&self, conn: &mut DbConnection) -> std::result::Result<(i32, i32), HashMap<&'static str, String>> {
         let mut errors = HashMap::new();
         let name_len = self.display_name.trim().chars().count();
         if !(3..=255).contains(&name_len) {
@@ -554,7 +558,7 @@ fn parse_category(value: &str) -> Option<(i32, i32)> {
 
 /// The torrent behind an edit request, or 404/403 as upstream: deleted torrents only
 /// exist for moderators, and only owners and moderators may edit.
-fn editable_torrent(conn: &mut SqliteConnection, torrent_id: i32, editor: Option<&User>) -> Result<Torrent> {
+fn editable_torrent(conn: &mut DbConnection, torrent_id: i32, editor: Option<&User>) -> Result<Torrent> {
     let torrent = Torrent::by_id(conn, torrent_id)
         .map_err(actix_web::error::ErrorInternalServerError)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))?;
@@ -569,7 +573,7 @@ fn editable_torrent(conn: &mut SqliteConnection, torrent_id: i32, editor: Option
 }
 
 fn render_edit(
-    conn: &mut SqliteConnection,
+    conn: &mut DbConnection,
     tmpl: &Tera,
     cfg: &Config,
     editor: &User,
@@ -650,6 +654,7 @@ pub async fn edit_torrent_post(
             ))
             .execute(&mut conn)
             .map_err(actix_web::error::ErrorInternalServerError)?;
+        crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), torrent.id);
         return Ok(redirect(&view_url));
     }
 
@@ -671,6 +676,7 @@ pub async fn edit_torrent_post(
         }
         Ok(())
     }).map_err(actix_web::error::ErrorInternalServerError)?;
+    crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), torrent.id);
 
     // Moderators go back to the torrent; owners deleting their own go home
     Ok(redirect(if editor.is_moderator() { &view_url } else { "/" }))
@@ -712,15 +718,14 @@ mod tests {
         use super::super::*;
         use actix_session::{storage::CookieSessionStore, SessionMiddleware};
         use actix_web::{cookie::{Cookie, Key}, http::StatusCode, test, App};
-        use diesel::r2d2::{ConnectionManager, Pool};
-        use diesel_migrations::MigrationHarness;
+        use diesel::r2d2::Pool;
 
         fn pool() -> DbPool {
             // One connection, so every request sees the same in-memory database
             let pool = Pool::builder().max_size(1)
-                .build(ConnectionManager::<SqliteConnection>::new(":memory:")).unwrap();
+                .build(crate::db::DbManager::new(":memory:")).unwrap();
             let mut conn = pool.get().unwrap();
-            conn.run_pending_migrations(crate::MIGRATIONS).unwrap();
+            crate::db::run_migrations(&mut conn).unwrap();
             diesel::sql_query("INSERT INTO users (id, username, password_hash, status, level) VALUES \
                                (1, 'owner', 'x', 1, 0), (2, 'other', 'x', 1, 1), (3, 'mod', 'x', 1, 2)")
                 .execute(&mut conn).unwrap();
@@ -741,7 +746,7 @@ mod tests {
                 database_url: String::new(), secret_key: String::new(), site_name: "Nyaa".into(),
                 site_flavor: "nyaa".into(), results_per_page: 75, max_pages: 0,
                 torrent_storage_path: storage.to_string_lossy().into_owned(), avatar_storage_path: String::new(), enable_gravatar: false, maintenance_mode: false,
-                site_url: String::new(), tracker_urls: vec![],
+                site_url: String::new(), tracker_urls: vec![], meili: None,
             }
         }
 

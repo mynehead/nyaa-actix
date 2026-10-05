@@ -1,6 +1,7 @@
 use diesel::prelude::*;
 use serde::Serialize;
 
+use crate::db::DbConnection;
 use crate::db::schema::{nyaa_statistics, nyaa_torrents};
 use crate::models::{Statistic, Torrent};
 
@@ -14,6 +15,9 @@ trait BitAndExt: Expression<SqlType = diesel::sql_types::Integer> + Sized {
 }
 
 impl<T: Expression<SqlType = diesel::sql_types::Integer>> BitAndExt for T {}
+
+// SQLite's LIKE ignores case but PostgreSQL's doesn't; lowering both sides works on either.
+diesel::define_sql_function!(fn lower(x: diesel::sql_types::Text) -> diesel::sql_types::Text);
 
 #[derive(Debug, Clone)]
 pub struct SearchQuery {
@@ -135,12 +139,12 @@ use crate::models::TorrentFlags;
 
 /// Builds the filtered (unsorted, unpaged) query. Used for both the count
 /// and the page so the two can't disagree on what is visible.
-fn filtered(q: &SearchQuery) -> nyaa_torrents::BoxedQuery<'static, diesel::sqlite::Sqlite> {
+fn filtered(q: &SearchQuery) -> nyaa_torrents::BoxedQuery<'static, crate::db::MultiBackend> {
     let mut query = nyaa_torrents::table.into_boxed();
 
-    // Term search (LIKE on display_name)
+    // Term search (case-insensitive LIKE on display_name)
     if let Some(ref term) = q.term {
-        query = query.filter(nyaa_torrents::display_name.like(format!("%{}%", term)));
+        query = query.filter(lower(nyaa_torrents::display_name).like(lower(format!("%{}%", term))));
     }
 
     // User filter
@@ -192,7 +196,7 @@ fn filtered(q: &SearchQuery) -> nyaa_torrents::BoxedQuery<'static, diesel::sqlit
     query
 }
 
-pub fn search(conn: &mut SqliteConnection, q: &SearchQuery) -> QueryResult<SearchResult> {
+pub fn search(conn: &mut DbConnection, q: &SearchQuery) -> QueryResult<SearchResult> {
     let total: i64 = filtered(q).count().get_result(conn)?;
     let query = filtered(q);
 
@@ -245,7 +249,7 @@ pub struct ListedTorrent {
 }
 
 /// Attaches stats to a page of torrents with one query.
-pub fn with_stats(conn: &mut SqliteConnection, torrents: Vec<Torrent>) -> QueryResult<Vec<ListedTorrent>> {
+pub fn with_stats(conn: &mut DbConnection, torrents: Vec<Torrent>) -> QueryResult<Vec<ListedTorrent>> {
     let ids: Vec<i32> = torrents.iter().map(|t| t.id).collect();
     let stats: std::collections::HashMap<i32, Statistic> = nyaa_statistics::table
         .filter(nyaa_statistics::torrent_id.eq_any(&ids))
@@ -268,11 +272,10 @@ pub fn with_stats(conn: &mut SqliteConnection, torrents: Vec<Torrent>) -> QueryR
 mod tests {
     use super::*;
     use crate::models::TorrentFlags;
-    use diesel_migrations::MigrationHarness;
 
-    fn db_with(torrents: &[(i32, TorrentFlags)]) -> SqliteConnection {
-        let mut conn = SqliteConnection::establish(":memory:").unwrap();
-        conn.run_pending_migrations(crate::MIGRATIONS).unwrap();
+    fn db_with(torrents: &[(i32, TorrentFlags)]) -> DbConnection {
+        let mut conn = crate::db::connect(":memory:").unwrap();
+        crate::db::run_migrations(&mut conn).unwrap();
         diesel::sql_query("INSERT INTO users (id, username, password_hash) VALUES (1, 'u', 'x')")
             .execute(&mut conn).unwrap();
         for (id, flags) in torrents {
@@ -285,7 +288,7 @@ mod tests {
         conn
     }
 
-    fn ids(conn: &mut SqliteConnection, q: &SearchQuery) -> (Vec<i32>, i64) {
+    fn ids(conn: &mut DbConnection, q: &SearchQuery) -> (Vec<i32>, i64) {
         let r = search(conn, q).unwrap();
         (r.torrents.iter().map(|t| t.id).collect(), r.total)
     }
