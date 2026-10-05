@@ -46,16 +46,7 @@ impl Torrent {
     }
 
     pub fn magnet_uri(&self, display_name: &str, trackers: &[&str]) -> String {
-        let hash = self.info_hash_hex().to_uppercase();
-        let mut uri = format!(
-            "magnet:?xt=urn:btih:{}&dn={}",
-            hash,
-            urlencoding::encode(display_name)
-        );
-        for tracker in trackers {
-            uri.push_str(&format!("&tr={}", urlencoding::encode(tracker)));
-        }
-        uri
+        crate::torrent::magnet::create_magnet(&self.info_hash_hex(), display_name, trackers)
     }
 
     pub fn is_hidden(&self) -> bool {

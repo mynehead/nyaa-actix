@@ -52,7 +52,7 @@ pub async fn view_torrent(
         None
     };
 
-    let magnet = torrent.magnet_uri(&torrent.display_name, &[]);
+    let magnet = torrent.magnet_uri(&torrent.display_name, &cfg.trackers());
 
     let mut ctx = tera::Context::new();
     ctx.insert("current_user", &current_user);
@@ -107,7 +107,7 @@ pub async fn download_torrent(
     let bencoded_info = std::fs::read(&path)
         .map_err(|_| actix_web::error::ErrorNotFound("Torrent file not found"))?;
 
-    let torrent_data = rebuild_torrent(&torrent, &bencoded_info, &[]);
+    let torrent_data = rebuild_torrent(&torrent, &bencoded_info, &cfg.trackers(), &cfg.site_url);
 
     Ok(HttpResponse::Ok()
         .content_type("application/x-bittorrent")
@@ -119,6 +119,7 @@ pub async fn download_torrent(
 pub async fn magnet_redirect(
     session: Session,
     pool: web::Data<DbPool>,
+    cfg: web::Data<Config>,
     path: web::Path<i32>,
 ) -> Result<HttpResponse> {
     let torrent_id = path.into_inner();
@@ -128,7 +129,7 @@ pub async fn magnet_redirect(
         .map_err(actix_web::error::ErrorInternalServerError)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))?;
     check_visible(&torrent, &current_user)?;
-    let magnet = torrent.magnet_uri(&torrent.display_name, &[]);
+    let magnet = torrent.magnet_uri(&torrent.display_name, &cfg.trackers());
     Ok(HttpResponse::Found()
         .insert_header(("Location", magnet))
         .finish())

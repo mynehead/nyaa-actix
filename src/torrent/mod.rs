@@ -55,7 +55,7 @@ pub fn parse_torrent(data: &[u8]) -> Result<TorrentMeta, bencode::BencodeError> 
     })
 }
 
-pub fn rebuild_torrent(torrent: &crate::models::Torrent, bencoded_info: &[u8], trackers: &[&str]) -> Vec<u8> {
+pub fn rebuild_torrent(torrent: &crate::models::Torrent, bencoded_info: &[u8], trackers: &[&str], site_url: &str) -> Vec<u8> {
     let mut dict = std::collections::BTreeMap::new();
 
     if let Ok(info_val) = bencode::decode(bencoded_info) {
@@ -74,7 +74,7 @@ pub fn rebuild_torrent(torrent: &crate::models::Torrent, bencoded_info: &[u8], t
 
     dict.insert(b"encoding".to_vec(), BencodeValue::Bytes(torrent.encoding.as_bytes().to_vec()));
     dict.insert(b"comment".to_vec(), BencodeValue::Bytes(
-        format!("https://nyaa.si/view/{}", torrent.id).into_bytes()
+        format!("{}/view/{}", site_url, torrent.id).into_bytes()
     ));
 
     bencode::encode(&BencodeValue::Dict(dict))
