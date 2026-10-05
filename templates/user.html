@@ -31,10 +31,91 @@
 						<dd>{{ profile_user | level_str }}</dd>
 						<dt>User status:</dt>
 						<dd>{{ profile_user | status_str }}</dd>
+						{%- if current_user.level >= 3 and ban_form -%}
+						<dt>Last login IP:</dt>
+						<dd>{{ last_login_ip | default(value="") }}</dd>
+						<dt>Registration IP:</dt>
+						<dd>{{ registration_ip | default(value="") }}</dd>
+						{%- endif -%}
 					</dl>
 				</div>
 			</div>
 		</div>
+		{% if ban_form %}
+		{% set is_banned = profile_user.status == 2 %}
+		<div class="col-md-5">
+			<div class="panel panel-danger">
+				<div class="panel-heading">
+					<h3 class="panel-title">Danger Zone</h3>
+				</div>
+				<div class="panel-body">
+					<form method="POST">
+						<div class="row">
+							<div class="col-md-12">
+								{% if is_banned %}
+								This user is <strong>banned</strong>.
+								{% endif %}
+								{% if ip_banned %}
+								This user is <strong>ip banned</strong>.
+								{% endif %}
+								{% if not is_banned and not bans %}
+								This user is <strong>not banned</strong>.
+								{% endif %}
+							</div>
+						</div>
+						{% if is_banned or bans %}
+						<div class="row">
+							<div class="col-md-12">
+								<ul>
+									{% for ban in bans %}
+									<li>#{{ ban.id }}
+									by <a href="/user/{{ ban.admin_name | urlencode }}">{{ ban.admin_name }}</a>
+									for <span markdown-text-inline>{{ ban.reason }}</span></li>
+									{% endfor %}
+								</ul>
+							</div>
+						</div>
+						<div class="row">
+							<div class="col-md-12">
+								<input class="btn btn-info" id="unban" name="unban" type="submit" value="Unban">
+							</div>
+						</div>
+						{% endif %}
+
+						{% if not is_banned or not ip_banned %}
+						{% if is_banned or bans %}
+						<hr>
+						{% endif %}
+						<div class="row" style="margin-top:1.5em">
+							<div class="col-md-12">
+								<div class="form-group">
+									<label class="control-label" for="reason">Ban Reason</label>
+									<textarea class="form-control" id="reason" name="reason" placeholder="Specify a ban reason." maxlength="1024"></textarea>
+								</div><br>
+							</div>
+						</div>
+						<div class="row">
+							<div class="col-md-6 text-left">
+								{% if not is_banned %}
+								<input class="btn btn-danger" id="ban_user" name="ban_user" type="submit" value="Ban User">
+								{% else %}
+								<button type="button" class="btn btn-danger disabled">Already banned</button>
+								{% endif %}
+							</div>
+							<div class="col-md-6 text-right">
+								{% if not ip_banned %}
+								<input class="btn btn-danger" id="ban_userip" name="ban_userip" type="submit" value="Ban User+IP">
+								{% else %}
+								<button type="button" class="btn btn-danger disabled">Already IP banned</button>
+								{% endif %}
+							</div>
+						</div>
+						{% endif %}
+					</form>
+				</div>
+			</div>
+		</div>
+		{% endif %}
 	</div>
 {% endif %}
 

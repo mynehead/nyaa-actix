@@ -135,6 +135,16 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    adminlog (id) {
+        id -> Integer,
+        created_time -> Timestamp,
+        log -> Text,
+        admin_id -> Integer,
+    }
+}
+
+diesel::joinable!(adminlog -> users (admin_id));
 diesel::joinable!(groups -> users (owner_id));
 diesel::joinable!(nyaa_torrents -> users (uploader_id));
 diesel::joinable!(nyaa_torrents -> groups (group_id));
@@ -150,6 +160,7 @@ diesel::joinable!(group_reports -> groups (group_id));
 diesel::joinable!(group_reports -> users (user_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
+    adminlog,
     users,
     groups,
     group_members,

@@ -18,13 +18,13 @@ pub fn pack_ip(addr: IpAddr) -> Vec<u8> {
     }
 }
 
-/// Text form of an address stored by `pack_ip` (IPv4 in the last four bytes of 16, or 4 bytes).
-pub fn ip_string(packed: &[u8]) -> Option<String> {
-    let v4 = |b: &[u8]| std::net::Ipv4Addr::new(b[0], b[1], b[2], b[3]).to_string();
-    match packed.len() {
-        4 => Some(v4(packed)),
-        16 if packed[..12].iter().all(|&b| b == 0) => Some(v4(&packed[12..])),
-        16 => <[u8; 16]>::try_from(packed).ok().map(|b| std::net::Ipv6Addr::from(b).to_string()),
+/// Reverses `pack_ip`; also reads 4-byte IPv4 values. `None` for any other length.
+pub fn unpack_ip(bytes: &[u8]) -> Option<IpAddr> {
+    match bytes.len() {
+        4 => Some(IpAddr::from(<[u8; 4]>::try_from(bytes).ok()?)),
+        16 if bytes[..12].iter().all(|&b| b == 0) && bytes[12..] != [0, 0, 0, 0] && bytes[12..] != [0, 0, 0, 1] =>
+            Some(IpAddr::from(<[u8; 4]>::try_from(&bytes[12..]).ok()?)),
+        16 => Some(IpAddr::from(<[u8; 16]>::try_from(bytes).ok()?)),
         _ => None,
     }
 }
@@ -58,15 +58,12 @@ mod tests {
     fn packs_ipv6_as_is() {
         let addr: std::net::Ipv6Addr = "2001:db8::1".parse().unwrap();
         assert_eq!(pack_ip(IpAddr::V6(addr)), addr.octets().to_vec());
-    }
-
-    #[test]
-    fn ip_string_reverses_pack_ip() {
-        for ip in ["192.168.1.2", "2001:db8::1"] {
-            assert_eq!(ip_string(&pack_ip(ip.parse().unwrap())).as_deref(), Some(ip));
+        for ip in ["192.168.1.2", "2001:db8::1", "::1", "::"] {
+            let ip: IpAddr = ip.parse().unwrap();
+            assert_eq!(unpack_ip(&pack_ip(ip)), Some(ip));
         }
-        assert_eq!(ip_string(&[127, 0, 0, 1]).as_deref(), Some("127.0.0.1"));
-        assert_eq!(ip_string(&[1, 2]), None);
+        assert_eq!(unpack_ip(&[10, 0, 0, 1]), Some("10.0.0.1".parse().unwrap()));
+        assert_eq!(unpack_ip(&[1, 2]), None);
     }
 
     #[test]

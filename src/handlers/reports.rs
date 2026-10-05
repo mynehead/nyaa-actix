@@ -12,7 +12,7 @@ use crate::db::schema::nyaa_torrents;
 use crate::db::DbPool;
 use crate::middleware::auth::get_current_user;
 use crate::models::{
-    validate_reason, Group, GroupReport, Report, Torrent, TorrentFlags, User,
+    torrent_link, user_link, validate_reason, AdminLog, Group, GroupReport, Report, Torrent, TorrentFlags, User,
     REPORTS_PER_PAGE, REPORT_INVALID, REPORT_VALID,
 };
 use crate::utils::context::base_context;
@@ -135,7 +135,8 @@ pub async fn admin_reports(
         // Upstream shows the uploader's IP to superadmins only
         let uploader_ip = torrent.uploader_ip.as_deref()
             .filter(|_| moderator.is_superadmin())
-            .and_then(crate::utils::ip_string);
+            .and_then(crate::utils::unpack_ip)
+            .map(|ip| ip.to_string());
         rows.push(serde_json::json!({
             "report": report, "torrent": torrent, "reporter": reporter,
             "uploader": uploader, "uploader_ip": uploader_ip,
@@ -193,9 +194,15 @@ pub async fn admin_reports_post(
         if form.action != "close" {
             return Err(actix_web::error::ErrorBadRequest("Unknown action"));
         }
-        GroupReport::review_all(&mut conn, group.id, REPORT_INVALID).map_err(err)?;
-        // TODO(admin log): write this to the admin log once its table and helper are on master
-        log::info!("Group report #{}: Closed [{}](/group/{}), by {}", report.id, group.name, group.slug, moderator.username);
+        let reporter = reporter_link(&mut conn, report.user_id).map_err(err)?;
+        // Brackets in the name would break the Markdown link
+        let name: String = group.name.chars().filter(|c| !"[]".contains(*c)).collect();
+        let entry = format!("Group report #{}: Closed [{}](/group/{}), reported by {}",
+            report.id, name, urlencoding::encode(&group.slug), reporter);
+        conn.transaction::<_, diesel::result::Error, _>(|conn| {
+            GroupReport::review_all(conn, group.id, REPORT_INVALID)?;
+            AdminLog::add(conn, moderator.id, &entry)
+        }).map_err(err)?;
         flash::push(&session, "success", "", &format!("Closed group report #{}", report.id));
         return Ok(redirect("/admin/reports"));
     }
@@ -210,6 +217,9 @@ pub async fn admin_reports_post(
         "close" => ("Closed", None, REPORT_INVALID),
         _ => return Err(actix_web::error::ErrorBadRequest("Unknown action")),
     };
+    // Upstream's admin log entry for the action
+    let reporter = reporter_link(&mut conn, report.user_id).map_err(err)?;
+    let entry = format!("Report #{}: {} {}, reported by {}", report.id, verb, torrent_link(torrent.id), reporter);
     conn.transaction::<_, diesel::result::Error, _>(|conn| {
         if let Some(flag) = flag {
             diesel::update(nyaa_torrents::table.find(torrent.id))
@@ -217,26 +227,23 @@ pub async fn admin_reports_post(
                 .execute(conn)?;
         }
         Report::review_all(conn, torrent.id, status)?;
-        Ok(())
+        AdminLog::add(conn, moderator.id, &entry)
     }).map_err(err)?;
     if flag.is_some() {
         crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), torrent.id);
     }
 
-    // Upstream's admin log entry for the action
-    let reporter = match report.user_id {
-        Some(uid) => User::by_id(&mut conn, uid).map_err(err)?,
-        None => None,
-    };
-    let reporter = reporter.map_or_else(|| "[deleted user]".to_string(),
-        |u| format!("[{}](/user/{})", u.username, urlencoding::encode(&u.username)));
-    let entry = format!("Report #{}: {} [#{}](/view/{}), reported by {}",
-        report.id, verb, torrent.id, torrent.id, reporter);
-    // TODO(admin log): write `entry` to the admin log once its table and helper are on master
-    log::info!("{entry} (by {})", moderator.username);
-
     flash::push(&session, "success", "", &format!("Closed report #{}", report.id));
     Ok(redirect("/admin/reports"))
+}
+
+/// The reporter as a log link, or a placeholder when the account is gone.
+fn reporter_link(conn: &mut crate::db::DbConnection, user_id: Option<i32>) -> QueryResult<String> {
+    let user = match user_id {
+        Some(uid) => User::by_id(conn, uid)?,
+        None => None,
+    };
+    Ok(user.map_or_else(|| "[deleted user]".to_string(), |u| user_link(&u.username)))
 }
 
 fn redirect(location: &str) -> HttpResponse {
@@ -355,6 +362,11 @@ mod tests {
             .order(crate::db::schema::nyaa_reports::id).load(&mut pool.get().unwrap()).unwrap()
     }
 
+    fn log_lines(pool: &DbPool) -> Vec<String> {
+        crate::db::schema::adminlog::table.select(crate::db::schema::adminlog::log)
+            .load(&mut pool.get().unwrap()).unwrap()
+    }
+
     fn flags(pool: &DbPool) -> i32 {
         Torrent::by_id(&mut pool.get().unwrap(), 5).unwrap().unwrap().flags
     }
@@ -449,6 +461,8 @@ mod tests {
             assert_eq!(res, StatusCode::FOUND, "{action}");
             assert_eq!(flags(&pool), flag, "{action}");
             assert_eq!(statuses(&pool), vec![status, status], "{action}");
+            let verb = match action { "close" => "Closed", "hide" => "Hid", _ => "Deleted" };
+            assert_eq!(log_lines(&pool), vec![format!("Report #1: {verb} [#5](/view/5), reported by [reporter](/user/reporter)")]);
             let html = page!(app, "/admin/reports", &mut cookie);
             assert!(html.contains("Closed report #1") && html.contains("No torrent reports."), "{action}: {html}");
 
@@ -472,5 +486,6 @@ mod tests {
         assert!(html.contains("Closed group report #1") && html.contains("No group reports."), "{html}");
         let report = GroupReport::by_id(&mut pool.get().unwrap(), 1).unwrap().unwrap();
         assert_eq!(report.status, REPORT_INVALID);
+        assert_eq!(log_lines(&pool), vec!["Group report #1: Closed [Some Group](/group/some-group), reported by [reporter](/user/reporter)"]);
     }
 }
