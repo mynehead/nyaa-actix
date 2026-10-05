@@ -66,6 +66,11 @@ async fn main() -> std::io::Result<()> {
             .route("/help", web::get().to(handlers::site::help))
             // Torrents
             .route("/view/{id}", web::get().to(handlers::torrents::view_torrent))
+            .service(web::resource("/view/{id}/edit")
+                // Room for a full 10 KiB description of percent-encoded non-ASCII text
+                .app_data(web::FormConfig::default().limit(256 * 1024))
+                .route(web::get().to(handlers::torrents::edit_torrent_get))
+                .route(web::post().to(handlers::torrents::edit_torrent_post)))
             .route("/download/{id}", web::get().to(handlers::torrents::download_torrent))
             .route("/magnet/{id}", web::get().to(handlers::torrents::magnet_redirect))
             .route("/upload", web::get().to(handlers::torrents::upload_get))
