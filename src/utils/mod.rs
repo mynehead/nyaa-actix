@@ -1,7 +1,24 @@
 pub mod pagination;
 pub mod tera_filters;
 
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
+
+use actix_web::HttpRequest;
+
+/// The visitor's IP, packed like upstream (16 bytes). Behind a reverse proxy the TCP peer is
+/// the proxy, so `behind_proxy` reads `Forwarded`/`X-Forwarded-For` instead; leave it off
+/// otherwise, since anyone can send those headers.
+pub fn client_ip(req: &HttpRequest, behind_proxy: bool) -> Option<Vec<u8>> {
+    let ip = if behind_proxy {
+        let info = req.connection_info();
+        let addr = info.realip_remote_addr()?.trim_matches(['[', ']']).to_string();
+        addr.parse::<IpAddr>().ok()
+            .or_else(|| addr.parse::<SocketAddr>().ok().map(|a| a.ip()))
+    } else {
+        req.peer_addr().map(|a| a.ip())
+    }?;
+    Some(pack_ip(ip))
+}
 
 pub fn pack_ip(addr: IpAddr) -> Vec<u8> {
     match addr {

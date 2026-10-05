@@ -7,10 +7,11 @@ use crate::db::schema::{nyaa_torrents, nyaa_statistics};
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     pub struct TorrentFlags: i32 {
-        const HIDDEN        = 0x01;
-        const ANONYMOUS     = 0x02;
-        const REMAKE        = 0x04;
-        const TRUSTED       = 0x08;
+        // Same values as upstream nyaa, so its data and tooling line up.
+        const ANONYMOUS     = 0x01;
+        const HIDDEN        = 0x02;
+        const TRUSTED       = 0x04;
+        const REMAKE        = 0x08;
         const COMPLETE      = 0x10;
         const DELETED       = 0x20;
         const BANNED        = 0x40;

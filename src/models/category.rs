@@ -43,8 +43,7 @@ pub fn get_all_categories(conn: &mut SqliteConnection) -> QueryResult<Vec<(MainC
     }).collect())
 }
 
-/// For checking an uploaded category exists; upload currently stores whatever it is sent.
-#[allow(dead_code)]
+/// For checking an uploaded category exists.
 pub fn get_sub_category(conn: &mut SqliteConnection, main_id: i32, sub_id: i32) -> QueryResult<Option<SubCategory>> {
     nyaa_sub_categories::table
         .filter(nyaa_sub_categories::main_category_id.eq(main_id))

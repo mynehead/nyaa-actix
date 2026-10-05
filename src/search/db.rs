@@ -1,5 +1,5 @@
 use diesel::prelude::*;
-use crate::db::schema::nyaa_torrents;
+use crate::db::schema::{nyaa_statistics, nyaa_torrents};
 use crate::models::Torrent;
 
 // Diesel has no built-in bitwise AND; define the SQL `&` operator for integer columns.
@@ -29,6 +29,8 @@ pub struct SearchQuery {
     pub include_hidden: bool,
     /// Leave out anonymous uploads (set on profile pages for other viewers).
     pub hide_anonymous: bool,
+    /// The logged-in visitor. In the general listing they also see their own hidden uploads.
+    pub viewer_id: Option<i32>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -36,6 +38,7 @@ pub enum SearchSort {
     Id,
     Name,
     Size,
+    Comments,
     Seeders,
     Leechers,
     Downloads,
@@ -65,6 +68,7 @@ impl SearchQuery {
             include_deleted: false,
             include_hidden: false,
             hide_anonymous: false,
+            viewer_id: None,
         }
     }
 
@@ -84,6 +88,7 @@ impl SearchQuery {
         let quality_filter = filter.and_then(|f| f.parse().ok()).unwrap_or(0);
         let sort = match sort {
             Some("name") | Some("2") => SearchSort::Name,
+            Some("comments") | Some("3") => SearchSort::Comments,
             Some("size") | Some("4") => SearchSort::Size,
             Some("seeders") | Some("5") => SearchSort::Seeders,
             Some("leechers") | Some("6") => SearchSort::Leechers,
@@ -108,6 +113,7 @@ impl SearchQuery {
             include_deleted: is_admin,
             include_hidden: is_admin,
             hide_anonymous: false,
+            viewer_id: None,
         }
     }
 }
@@ -129,10 +135,17 @@ pub struct SearchResult {
 
 use crate::models::TorrentFlags;
 
+type Listing = diesel::dsl::IntoBoxed<
+    'static,
+    diesel::dsl::LeftJoin<nyaa_torrents::table, nyaa_statistics::table>,
+    diesel::sqlite::Sqlite,
+>;
+
 /// Builds the filtered (unsorted, unpaged) query. Used for both the count
-/// and the page so the two can't disagree on what is visible.
-fn filtered(q: &SearchQuery) -> nyaa_torrents::BoxedQuery<'static, diesel::sqlite::Sqlite> {
-    let mut query = nyaa_torrents::table.into_boxed();
+/// and the page so the two can't disagree on what is visible. Statistics are
+/// joined so the listing can sort by them.
+fn filtered(q: &SearchQuery) -> Listing {
+    let mut query = nyaa_torrents::table.left_join(nyaa_statistics::table).into_boxed();
 
     // Term search (LIKE on display_name)
     if let Some(ref term) = q.term {
@@ -175,9 +188,14 @@ fn filtered(q: &SearchQuery) -> nyaa_torrents::BoxedQuery<'static, diesel::sqlit
         query = query.filter(nyaa_torrents::flags.bitand(deleted_banned).eq(0));
     }
 
-    // Hidden torrents are reachable by link only, including on the uploader's profile
+    // Hidden torrents are reachable by link only, including on the uploader's profile.
+    // In the general listing, logged-in visitors still see their own (upstream behavior).
     if !q.include_hidden {
-        query = query.filter(nyaa_torrents::flags.bitand(TorrentFlags::HIDDEN.bits()).eq(0));
+        let not_hidden = nyaa_torrents::flags.bitand(TorrentFlags::HIDDEN.bits()).eq(0);
+        query = match (q.viewer_id, q.user_id) {
+            (Some(viewer), None) => query.filter(not_hidden.or(nyaa_torrents::uploader_id.eq(viewer))),
+            _ => query.filter(not_hidden),
+        };
     }
 
     // Anonymous torrents must not be tied to their uploader in listings
@@ -192,21 +210,30 @@ pub fn search(conn: &mut SqliteConnection, q: &SearchQuery) -> QueryResult<Searc
     let total: i64 = filtered(q).count().get_result(conn)?;
     let query = filtered(q);
 
-    // Sort
+    // Sort, newest first among equal values
     let offset = (q.page - 1) * q.per_page;
-    let torrents = match (q.sort, q.order) {
+    let query = query.select(Torrent::as_select());
+    let query = match (q.sort, q.order) {
         (SearchSort::Id, SearchOrder::Desc) => query.order(nyaa_torrents::id.desc()),
         (SearchSort::Id, SearchOrder::Asc) => query.order(nyaa_torrents::id.asc()),
         (SearchSort::Name, SearchOrder::Desc) => query.order(nyaa_torrents::display_name.desc()),
         (SearchSort::Name, SearchOrder::Asc) => query.order(nyaa_torrents::display_name.asc()),
         (SearchSort::Size, SearchOrder::Desc) => query.order(nyaa_torrents::filesize.desc()),
         (SearchSort::Size, SearchOrder::Asc) => query.order(nyaa_torrents::filesize.asc()),
-        // Seeders/leechers/downloads would need a join — fall back to id
-        _ => query.order(nyaa_torrents::id.desc()),
-    }
-    .limit(q.per_page)
-    .offset(offset)
-    .load::<Torrent>(conn)?;
+        (SearchSort::Comments, SearchOrder::Desc) => query.order(nyaa_torrents::comment_count.desc()),
+        (SearchSort::Comments, SearchOrder::Asc) => query.order(nyaa_torrents::comment_count.asc()),
+        (SearchSort::Seeders, SearchOrder::Desc) => query.order(nyaa_statistics::seed_count.desc()),
+        (SearchSort::Seeders, SearchOrder::Asc) => query.order(nyaa_statistics::seed_count.asc()),
+        (SearchSort::Leechers, SearchOrder::Desc) => query.order(nyaa_statistics::leech_count.desc()),
+        (SearchSort::Leechers, SearchOrder::Asc) => query.order(nyaa_statistics::leech_count.asc()),
+        (SearchSort::Downloads, SearchOrder::Desc) => query.order(nyaa_statistics::download_count.desc()),
+        (SearchSort::Downloads, SearchOrder::Asc) => query.order(nyaa_statistics::download_count.asc()),
+    };
+    let torrents = query
+        .then_order_by(nyaa_torrents::id.desc())
+        .limit(q.per_page)
+        .offset(offset)
+        .load::<Torrent>(conn)?;
 
     Ok(SearchResult { torrents, total })
 }
@@ -225,7 +252,7 @@ mod tests {
         for (id, flags) in torrents {
             diesel::sql_query(format!(
                 "INSERT INTO nyaa_torrents (id, info_hash, display_name, torrent_name, flags, \
-                 uploader_id, main_category_id, sub_category_id) VALUES ({id}, X'{id:040x}', 't', 't', {}, 1, 1, 0)",
+                 uploader_id, main_category_id, sub_category_id) VALUES ({id}, X'{id:040x}', 't', 't', {}, 1, 1, 1)",
                 flags.bits()
             )).execute(&mut conn).unwrap();
         }
@@ -266,5 +293,35 @@ mod tests {
             (3, TorrentFlags::ANONYMOUS),
         ]);
         assert_eq!(ids(&mut conn, &SearchQuery::new()), (vec![3, 1], 2));
+    }
+
+    #[test]
+    fn logged_in_viewer_sees_own_hidden_in_general_listing() {
+        let mut conn = db_with(&[(1, TorrentFlags::empty()), (2, TorrentFlags::HIDDEN)]);
+        diesel::sql_query("INSERT INTO users (id, username, password_hash) VALUES (2, 'v', 'x')")
+            .execute(&mut conn).unwrap();
+        let mut q = SearchQuery::new();
+
+        q.viewer_id = Some(1); // the uploader
+        assert_eq!(ids(&mut conn, &q), (vec![2, 1], 2));
+        q.viewer_id = Some(2); // someone else
+        assert_eq!(ids(&mut conn, &q), (vec![1], 1));
+    }
+
+    #[test]
+    fn sorts_by_statistics() {
+        let mut conn = db_with(&[(1, TorrentFlags::empty()), (2, TorrentFlags::empty()), (3, TorrentFlags::empty())]);
+        diesel::sql_query("INSERT INTO nyaa_statistics (torrent_id, seed_count, leech_count, download_count) \
+                           VALUES (1, 5, 0, 9), (2, 50, 3, 1)")
+            .execute(&mut conn).unwrap();
+        let mut q = SearchQuery::new();
+
+        q.sort = SearchSort::Seeders;
+        assert_eq!(ids(&mut conn, &q).0, vec![2, 1, 3]); // no stats row sorts last
+        q.sort = SearchSort::Downloads;
+        assert_eq!(ids(&mut conn, &q).0, vec![1, 2, 3]);
+        q.order = SearchOrder::Asc;
+        q.sort = SearchSort::Leechers;
+        assert_eq!(ids(&mut conn, &q).0, vec![3, 1, 2]);
     }
 }

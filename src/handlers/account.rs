@@ -1,5 +1,5 @@
 use actix_session::Session;
-use actix_web::{web, HttpResponse, Result};
+use actix_web::{web, HttpRequest, HttpResponse, Result};
 use diesel::prelude::*;
 use serde::Deserialize;
 use tera::Tera;
@@ -9,6 +9,7 @@ use crate::db::DbPool;
 use crate::db::schema::users;
 use crate::middleware::auth::{get_current_user, login_user, logout_user};
 use crate::models::{NewUser, User};
+use crate::utils::client_ip;
 
 #[derive(Debug, Deserialize)]
 pub struct LoginForm {
@@ -44,6 +45,7 @@ pub async fn login_get(
 }
 
 pub async fn login_post(
+    req: HttpRequest,
     session: Session,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
@@ -56,7 +58,8 @@ pub async fn login_post(
 
     let error = match user {
         Some(ref u) if u.verify_password(&form.password) && u.is_active() => {
-            login_user(&session, u.id).ok();
+            login_user(&session, &mut conn, u.id, client_ip(&req, cfg.behind_reverse_proxy))
+                .map_err(actix_web::error::ErrorInternalServerError)?;
             return Ok(HttpResponse::Found().insert_header(("Location", "/")).finish());
         }
         Some(ref u) if u.is_banned() => Some("Your account has been banned."),
@@ -94,6 +97,7 @@ pub async fn register_get(
 }
 
 pub async fn register_post(
+    req: HttpRequest,
     session: Session,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
@@ -135,7 +139,8 @@ pub async fn register_post(
             .content_type("text/html").body(html));
     }
 
-    let new_user = NewUser::new(&form.username, Some(&form.email), &form.password);
+    let ip = client_ip(&req, cfg.behind_reverse_proxy);
+    let new_user = NewUser::new(&form.username, Some(&form.email), &form.password, ip.clone());
     diesel::insert_into(users::table)
         .values(&new_user)
         .execute(&mut conn)
@@ -145,12 +150,13 @@ pub async fn register_post(
         .map_err(actix_web::error::ErrorInternalServerError)?
         .ok_or_else(|| actix_web::error::ErrorInternalServerError("Failed to fetch user"))?;
 
-    login_user(&session, user.id).ok();
+    login_user(&session, &mut conn, user.id, ip)
+        .map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(HttpResponse::Found().insert_header(("Location", "/")).finish())
 }
 
-pub async fn logout(session: Session) -> HttpResponse {
-    logout_user(&session);
+pub async fn logout(session: Session, pool: web::Data<DbPool>) -> HttpResponse {
+    logout_user(&session, &pool);
     HttpResponse::Found().insert_header(("Location", "/")).finish()
 }
 
@@ -168,4 +174,18 @@ pub async fn profile(
     let html = tmpl.render("profile.html", &ctx)
         .map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
+}
+
+/// The account pages used to live under `/account/`; they now sit at the root like upstream.
+/// 308 keeps the method, so old login/register forms still post to the right place.
+pub async fn legacy_redirect(req: HttpRequest, path: web::Path<String>) -> HttpResponse {
+    let page = path.into_inner();
+    if !matches!(page.as_str(), "login" | "register" | "logout" | "profile") {
+        return HttpResponse::NotFound().finish();
+    }
+    let mut location = format!("/{}", page);
+    if !req.query_string().is_empty() {
+        location = format!("{}?{}", location, req.query_string());
+    }
+    HttpResponse::PermanentRedirect().insert_header(("Location", location)).finish()
 }

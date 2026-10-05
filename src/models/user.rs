@@ -127,10 +127,11 @@ pub struct NewUser {
     pub status: i32,
     pub level: i32,
     pub created_time: NaiveDateTime,
+    pub registration_ip: Option<Vec<u8>>,
 }
 
 impl NewUser {
-    pub fn new(username: &str, email: Option<&str>, password: &str) -> Self {
+    pub fn new(username: &str, email: Option<&str>, password: &str, registration_ip: Option<Vec<u8>>) -> Self {
         let salt = SaltString::generate(&mut OsRng);
         let hash = Argon2::default()
             .hash_password(password.as_bytes(), &salt)
@@ -143,6 +144,7 @@ impl NewUser {
             status: UserStatus::Active as i32,
             level: UserLevel::Regular as i32,
             created_time: chrono::Utc::now().naive_utc(),
+            registration_ip,
         }
     }
 }

@@ -45,8 +45,8 @@
                     </a>
                     <ul class="dropdown-menu">
                         <li><a href="/user/{{ current_user.username }}"><i class="fa fa-user fa-fw"></i> Torrents</a></li>
-                        <li><a href="/account/profile"><i class="fa fa-gear fa-fw"></i> Profile</a></li>
-                        <li><a href="/account/logout"><i class="fa fa-times fa-fw"></i> Logout</a></li>
+                        <li><a href="/profile"><i class="fa fa-gear fa-fw"></i> Profile</a></li>
+                        <li><a href="/logout"><i class="fa fa-times fa-fw"></i> Logout</a></li>
                         {% if current_user.level >= 2 %}
                         <li class="divider"></li>
                         <li><a href="/admin/reports">Admin</a></li>
@@ -54,8 +54,8 @@
                     </ul>
                 </li>
                 {% else %}
-                <li><a href="/account/login">Login</a></li>
-                <li><a href="/account/register">Register</a></li>
+                <li><a href="/login">Login</a></li>
+                <li><a href="/register">Register</a></li>
                 {% endif %}
             </ul>
         </div>

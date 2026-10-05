@@ -23,8 +23,8 @@
                     {% if torrent | is_remake %}<span class="label label-warning">Remake</span>{% endif %}
                 </td>
                 <td class="text-center">
-                    <a href="/download/{{ torrent.id }}" title="Download torrent"><i class="fa fa-download"></i></a>
-                    <a href="/magnet/{{ torrent.id }}" title="Magnet link"><i class="fa fa-magnet"></i></a>
+                    <a href="/download/{{ torrent.id }}.torrent" title="Download torrent"><i class="fa fa-download"></i></a>
+                    <a href="/view/{{ torrent.id }}/magnet" title="Magnet link"><i class="fa fa-magnet"></i></a>
                 </td>
                 <td class="text-center">{{ torrent | filesize_human }}</td>
                 <td class="text-center" title="{{ torrent.created_time }}">

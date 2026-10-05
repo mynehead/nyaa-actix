@@ -13,7 +13,7 @@ use crate::db::schema::{nyaa_torrents, nyaa_statistics, nyaa_comments};
 use crate::middleware::auth::get_current_user;
 use crate::models::{NewTorrent, NewStatistic, Torrent, User};
 use crate::torrent::{parse_torrent, rebuild_torrent};
-use crate::utils::{pack_ip, sanitize_string};
+use crate::utils::{client_ip, sanitize_string};
 
 pub async fn view_torrent(
     session: Session,
@@ -172,7 +172,7 @@ pub async fn upload_get(
     let current_user = get_current_user(&session, &pool);
     if current_user.is_none() {
         return Ok(HttpResponse::Found()
-            .insert_header(("Location", "/account/login"))
+            .insert_header(("Location", "/login"))
             .finish());
     }
     let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
@@ -289,12 +289,11 @@ pub async fn upload_post(
         return Err(actix_web::error::ErrorBadRequest("This torrent already exists"));
     }
 
-    // Parse category
-    let parts: Vec<&str> = category.splitn(2, '_').collect();
-    let (main_cat, sub_cat) = if parts.len() == 2 {
-        (parts[0].parse::<i32>().unwrap_or(1), parts[1].parse::<i32>().unwrap_or(0))
-    } else {
-        (1, 0)
+    // Like upstream, a torrent must be filed under a real sub category ("1_2", not "1_0")
+    let (main_cat, sub_cat) = match parse_upload_category(&category) {
+        Some((main, sub)) if crate::models::get_sub_category(&mut conn, main, sub)
+            .map_err(actix_web::error::ErrorInternalServerError)?.is_some() => (main, sub),
+        _ => return Err(actix_web::error::ErrorBadRequest("Please select a proper category")),
     };
 
     // Validate group permission
@@ -324,7 +323,7 @@ pub async fn upload_post(
         encoding: meta.encoding.clone(),
         flags,
         uploader_id: current_user.as_ref().map(|u| u.id),
-        uploader_ip: req.peer_addr().map(|a| pack_ip(a.ip())),
+        uploader_ip: client_ip(&req, cfg.behind_reverse_proxy),
         has_torrent: 1,
         comment_count: 0,
         created_time: now,
@@ -376,10 +375,42 @@ pub async fn upload_post(
         .finish())
 }
 
+/// Parses the upload form's "main_sub" category, rejecting the "main_0" search-only bucket.
+fn parse_upload_category(value: &str) -> Option<(i32, i32)> {
+    let (main, sub) = value.trim().split_once('_')?;
+    let (main, sub) = (main.parse().ok()?, sub.parse().ok()?);
+    (main > 0 && sub > 0).then_some((main, sub))
+}
+
+/// Old `/download/{id}` links; the canonical URL ends in `.torrent` (upstream, and torrent
+/// clients such as Deluge want it when adding a torrent by URL).
+pub async fn legacy_download_redirect(path: web::Path<i32>) -> HttpResponse {
+    HttpResponse::MovedPermanently()
+        .insert_header(("Location", format!("/download/{}.torrent", path.into_inner())))
+        .finish()
+}
+
+/// Old `/magnet/{id}` links, now `/view/{id}/magnet` like upstream.
+pub async fn legacy_magnet_redirect(path: web::Path<i32>) -> HttpResponse {
+    HttpResponse::MovedPermanently()
+        .insert_header(("Location", format!("/view/{}/magnet", path.into_inner())))
+        .finish()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use actix_web::http::header::TryIntoHeaderValue;
+
+    #[test]
+    fn upload_category_needs_a_real_sub_category() {
+        assert_eq!(parse_upload_category("1_2"), Some((1, 2)));
+        assert_eq!(parse_upload_category("1_0"), None);
+        assert_eq!(parse_upload_category("0_1"), None);
+        assert_eq!(parse_upload_category(""), None);
+        assert_eq!(parse_upload_category("1"), None);
+        assert_eq!(parse_upload_category("x_y"), None);
+    }
 
     #[test]
     fn torrent_filename_strips_quotes_separators_and_control_chars() {

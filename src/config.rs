@@ -21,6 +21,8 @@ pub struct Config {
     pub site_url: String,
     /// Announce URLs written into magnets and .torrent files, own tracker first.
     pub tracker_urls: Vec<String>,
+    /// Take the visitor's IP from `Forwarded`/`X-Forwarded-For` (only behind a reverse proxy).
+    pub behind_reverse_proxy: bool,
 }
 
 impl Config {
@@ -56,6 +58,8 @@ impl Config {
                 .iter()
                 .flat_map(|key| split_list(&env::var(key).unwrap_or_default()))
                 .collect(),
+            behind_reverse_proxy: env::var("BEHIND_REVERSE_PROXY")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(false),
         }
     }
 
