@@ -15,7 +15,7 @@ use crate::db::DbPool;
 use crate::db::schema::{nyaa_torrents, nyaa_statistics, nyaa_comments};
 use crate::utils::context::base_context;
 use crate::middleware::auth::get_current_user;
-use crate::models::{danger_action, edited_flags, DangerAction, EditFlags, NewTorrent, NewStatistic, Torrent, TorrentFlags, User};
+use crate::models::{danger_action, edited_flags, torrent_link, AdminLog, DangerAction, EditFlags, NewTorrent, NewStatistic, Torrent, TorrentFlags, User};
 use crate::torrent::{parse_torrent, rebuild_torrent};
 use crate::utils::{pack_ip, sanitize_string, sanitize_text};
 
@@ -642,18 +642,28 @@ pub async fn edit_torrent_post(
         // Only uploads with an uploader can be anonymous (upstream hides the box otherwise)
         let mut edit = form.flags();
         edit.anonymous &= torrent.uploader_id.is_some();
-        diesel::update(nyaa_torrents::table.find(torrent.id))
-            .set((
-                nyaa_torrents::display_name.eq(sanitize_string(form.display_name.trim())),
-                nyaa_torrents::information.eq(sanitize_string(form.information.trim())),
-                nyaa_torrents::description.eq(sanitize_text(form.description.trim())),
-                nyaa_torrents::main_category_id.eq(main_cat),
-                nyaa_torrents::sub_category_id.eq(sub_cat),
-                nyaa_torrents::flags.eq(edited_flags(torrent.flags, &edit, &editor)),
-                nyaa_torrents::updated_time.eq(chrono::Utc::now().naive_utc()),
-            ))
-            .execute(&mut conn)
-            .map_err(actix_web::error::ErrorInternalServerError)?;
+        let new_flags = edited_flags(torrent.flags, &edit, &editor);
+        let lock_changed = (new_flags ^ torrent.flags) & TorrentFlags::COMMENT_LOCKED.bits() != 0;
+        conn.transaction::<_, diesel::result::Error, _>(|conn| {
+            diesel::update(nyaa_torrents::table.find(torrent.id))
+                .set((
+                    nyaa_torrents::display_name.eq(sanitize_string(form.display_name.trim())),
+                    nyaa_torrents::information.eq(sanitize_string(form.information.trim())),
+                    nyaa_torrents::description.eq(sanitize_text(form.description.trim())),
+                    nyaa_torrents::main_category_id.eq(main_cat),
+                    nyaa_torrents::sub_category_id.eq(sub_cat),
+                    nyaa_torrents::flags.eq(new_flags),
+                    nyaa_torrents::updated_time.eq(chrono::Utc::now().naive_utc()),
+                ))
+                .execute(conn)?;
+            // Only moderators can change the lock (edited_flags), and upstream logs each change
+            if lock_changed {
+                let locked = new_flags & TorrentFlags::COMMENT_LOCKED.bits() != 0;
+                AdminLog::add(conn, editor.id, &format!("Torrent {} marked as {}", torrent_link(torrent.id),
+                    if locked { "comments locked" } else { "comments unlocked" }))?;
+            }
+            Ok(())
+        }).map_err(actix_web::error::ErrorInternalServerError)?;
         crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), torrent.id);
         return Ok(redirect(&view_url));
     }
@@ -673,6 +683,11 @@ pub async fn edit_torrent_post(
             diesel::update(nyaa_statistics::table.find(torrent.id))
                 .set((nyaa_statistics::seed_count.eq(0), nyaa_statistics::leech_count.eq(0)))
                 .execute(conn)?;
+        }
+        // Upstream logs moderator actions on other people's torrents
+        if editor.is_moderator() && torrent.uploader_id != Some(editor.id) {
+            AdminLog::add(conn, editor.id,
+                &format!("Torrent {} has been {}", torrent_link(torrent.id), action))?;
         }
         Ok(())
     }).map_err(actix_web::error::ErrorInternalServerError)?;
@@ -896,6 +911,39 @@ mod tests {
 
             test::call_service(&app, post("/view/5/edit", &cookie, &[("undelete", "Undelete & Unban")]).to_request()).await;
             assert_eq!(torrent(&pool).flags, TorrentFlags::TRUSTED.bits());
+            assert_eq!(admin_logs(&pool), [
+                (3, "Torrent [#5](/view/5) has been deleted and banned".to_string()),
+                (3, "Torrent [#5](/view/5) has been undeleted and unbanned".to_string()),
+            ]);
+        }
+
+        fn admin_logs(pool: &DbPool) -> Vec<(i32, String)> {
+            use crate::db::schema::adminlog;
+            adminlog::table.order(adminlog::id).select((adminlog::admin_id, adminlog::log))
+                .load(&mut pool.get().unwrap()).unwrap()
+        }
+
+        #[actix_web::test]
+        async fn comment_lock_changes_are_logged_and_owner_actions_are_not() {
+            let pool = pool();
+            let (app, cookie) = app!(pool, Some(3));
+            let form = |locked: bool| {
+                let mut f = vec![("display_name", "Old name"), ("category", "1_2"), ("submit", "Save")];
+                if locked { f.push(("is_comment_locked", "y")); }
+                f
+            };
+            test::call_service(&app, post("/view/5/edit", &cookie, &form(true)).to_request()).await;
+            test::call_service(&app, post("/view/5/edit", &cookie, &form(true)).to_request()).await;
+            test::call_service(&app, post("/view/5/edit", &cookie, &form(false)).to_request()).await;
+            assert_eq!(admin_logs(&pool), [
+                (3, "Torrent [#5](/view/5) marked as comments locked".to_string()),
+                (3, "Torrent [#5](/view/5) marked as comments unlocked".to_string()),
+            ]);
+
+            let (app, cookie) = app!(pool, Some(1));
+            test::call_service(&app, post("/view/5/edit", &cookie, &[("delete", "Delete")]).to_request()).await;
+            assert!(torrent(&pool).is_deleted());
+            assert_eq!(admin_logs(&pool).len(), 2, "owners deleting their own torrent leave no log");
         }
     
         /// The test row is given the hash of a real .torrent, so uploading that file collides with it.
