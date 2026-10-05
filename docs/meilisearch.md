@@ -22,16 +22,21 @@ or misconfigured, the site logs a warning and searches SQLite instead.
 
 ## How the index stays current
 
+- Searches only use the index once the server has checked it. At start and then every
+  `MEILI_STATS_SYNC_SECS`, the server compares the number of torrents in the index with
+  the database. When the index is missing, holds a different number of torrents, or an
+  update failed to reach it, the server rebuilds it in the background and searches
+  SQLite until that is done. So setting `MEILI_URL` on an existing database, or
+  Meilisearch being down during an upload, needs no manual step.
 - An upload, an edit, and a delete, ban or undelete on the edit page push that torrent
   to the index right away.
-- A background task pushes seeder, leecher and download counts whose
-  `nyaa_statistics.last_updated` changed since its last run. On server start it pushes
-  all of them once.
-- `nyaa-actix reindex` builds a complete new index from the database under a temporary
-  name and then swaps it in, so searches keep working while it runs. 100,000 torrents
-  take about 13 seconds. Run it once after setting Meilisearch up, after restoring a
-  database backup, or if the index is lost. Edits made while it runs can be missed, so
-  run it when the site is quiet.
+- A background task pushes the torrents whose seeder, leecher and download counts
+  changed (by `nyaa_statistics.last_updated`) since its last run. On server start it
+  pushes all of them once.
+- `nyaa-actix reindex` does the same rebuild by hand: it builds a complete new index from
+  the database under a temporary name and then swaps it in, so searches keep working
+  while it runs. 100,000 torrents take about 13 seconds. Edits made while it runs can be
+  missed, so run it when the site is quiet.
 
 ## Running it on Windows
 
@@ -57,16 +62,10 @@ or misconfigured, the site logs a warning and searches SQLite instead.
    MEILI_KEY=a-long-local-dev-key-123
    ```
 
-4. Fill the index, then start the site as usual:
-
-   ```powershell
-   cargo run -- reindex
-   cargo run
-   ```
-
-   While the server is running, run the built exe directly instead
-   (`.\target\debug\nyaa-actix.exe reindex`), because Windows won't let `cargo run`
-   replace an exe that is in use.
+4. Start the site as usual (`cargo run`). It builds the index on start; the log says
+   "Rebuilding Meilisearch index" and then "Indexed N torrents". To rebuild by hand, run
+   `cargo run -- reindex`, or `.\target\debug\nyaa-actix.exe reindex` while the server
+   is running, because Windows won't let `cargo run` replace an exe that is in use.
 
 Use `127.0.0.1` rather than `localhost` in `MEILI_URL`; Meilisearch listens on IPv4 by
 default, and Windows tries IPv6 first for `localhost`.
