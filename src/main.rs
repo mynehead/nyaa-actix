@@ -1,3 +1,4 @@
+mod cli;
 mod config;
 mod db;
 mod handlers;
@@ -18,6 +19,15 @@ pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
+
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(result) = cli::run(&args) {
+        if let Err(e) = result {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
 
     let cfg = config::Config::from_env();
     let pool = db::init_pool(&cfg.database_url);
