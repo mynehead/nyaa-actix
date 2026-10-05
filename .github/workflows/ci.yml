@@ -69,4 +69,4 @@ jobs:
           NYAA_TEST_S3_PATH_STYLE: "true"
           NYAA_TEST_S3_ACCESS_KEY: GK0123456789abcdef01234567
           NYAA_TEST_S3_SECRET_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-        run: cargo test --locked storage::
+        run: cargo test --locked "storage::"

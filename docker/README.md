@@ -95,7 +95,7 @@ to the internet as configured.
 The storage tests also run against a real server when `NYAA_TEST_S3_BUCKET` is set, with
 the other settings given the same way (`NYAA_TEST_S3_ENDPOINT`, ...). For the Garage server
 above, copy the variables from the `s3` job in `.github/workflows/ci.yml` and run
-`cargo test storage::`.
+`cargo test "storage::"`.
 
 ## Moving existing files to S3
 
