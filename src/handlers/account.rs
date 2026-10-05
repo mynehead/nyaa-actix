@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use actix_multipart::Multipart;
 use actix_session::Session;
-use actix_web::{web, HttpResponse, Result};
+use actix_web::{web, HttpRequest, HttpResponse, Result};
 use diesel::prelude::*;
 use futures_util::StreamExt;
 use serde::Deserialize;
@@ -13,9 +13,9 @@ use crate::db::{DbConnection, DbPool};
 use crate::db::schema::users;
 use crate::utils::context::base_context;
 use crate::middleware::auth::{get_current_user, login_user, logout_user};
-use crate::models::{NewUser, User};
+use crate::models::{Ban, NewUser, User};
 use crate::storage::{Kind, Storage};
-use crate::utils::{avatar, flash};
+use crate::utils::{avatar, flash, pack_ip};
 
 #[derive(Debug, Deserialize)]
 pub struct LoginForm {
@@ -49,6 +49,7 @@ pub async fn login_get(
 }
 
 pub async fn login_post(
+    req: HttpRequest,
     session: Session,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
@@ -61,12 +62,27 @@ pub async fn login_post(
 
     let error = match user {
         Some(ref u) if u.verify_password(&form.password) && u.is_active() => {
+            // Upstream records these on login; IP bans from the user page use last_login_ip
+            diesel::update(users::table.find(u.id))
+                .set((users::last_login_date.eq(chrono::Utc::now().naive_utc()),
+                      users::last_login_ip.eq(req.peer_addr().map(|a| pack_ip(a.ip())))))
+                .execute(&mut conn)
+                .map_err(actix_web::error::ErrorInternalServerError)?;
             login_user(&session, u.id).ok();
             return Ok(HttpResponse::Found().insert_header(("Location", "/")).finish());
         }
-        Some(ref u) if u.is_banned() => Some("Your account has been banned."),
-        Some(_) => Some("Invalid username or password."),
-        None => Some("Invalid username or password."),
+        Some(ref u) if u.is_banned() => {
+            let reason = Ban::banned(&mut conn, Some(u.id), None)
+                .map_err(actix_web::error::ErrorInternalServerError)?
+                .into_iter().next().map(|b| b.reason);
+            Some(match reason {
+                Some(reason) => format!("You are banned with the reason \"{}\" If you believe that this \
+                                         is a mistake, contact a moderator.", reason),
+                None => "Your account has been banned.".to_string(),
+            })
+        }
+        Some(_) => Some("Invalid username or password.".to_string()),
+        None => Some("Invalid username or password.".to_string()),
     };
 
     let mut ctx = base_context(&cfg, None);

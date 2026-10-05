@@ -191,9 +191,8 @@ pub async fn admin_trusted_application(
     let posted = form.map(|f| f.into_inner()).unwrap_or_default();
     if can_decide && (posted.accept.is_some() || posted.reject.is_some()) {
         let accept = posted.accept.is_some();
-        if app.decide(&mut conn, accept).map_err(actix_web::error::ErrorInternalServerError)? {
-            // TODO(admin log): record the decision with AdminLog::add (PR #25) once it is on master
-            // (upstream logs nothing here). Upstream also emails the submitter; there is no mail yet.
+        if app.decide(&mut conn, user.id, accept).map_err(actix_web::error::ErrorInternalServerError)? {
+            // Upstream also emails the submitter; there is no mail yet.
             let verdict = if accept { "accepted" } else { "rejected" };
             flash::push(&session, "success", "", &format!("Application has been {verdict}."));
         }
@@ -207,7 +206,6 @@ pub async fn admin_trusted_application(
         if let (Some(rec), true) = (recommendation, comment_errors.is_empty()) {
             app.add_review(&mut conn, user.id, comment, rec)
                 .map_err(actix_web::error::ErrorInternalServerError)?;
-            // TODO(admin log): record the review with AdminLog::add (PR #25) once it is on master.
             flash::push(&session, "success", "", "Review successfully posted.");
             return Ok(redirect(&here));
         }

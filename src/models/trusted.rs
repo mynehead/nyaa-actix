@@ -8,7 +8,7 @@ use serde::Serialize;
 use crate::config::TrustedConfig;
 use crate::db::DbConnection;
 use crate::db::schema::{nyaa_statistics, nyaa_torrents, trusted_applications, trusted_reviews, users};
-use crate::models::{TorrentFlags, User, UserLevel};
+use crate::models::{user_link, AdminLog, TorrentFlags, User, UserLevel};
 
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -207,6 +207,9 @@ impl TrustedApplication {
                     recommendation: recommendation as i32,
                 })
                 .execute(conn)?;
+            let log = format!("Trusted application #{} of {}: reviewed, recommends {}",
+                self.id, self.submitter_link(conn)?, TrustedRecommendation::name(recommendation as i32));
+            AdminLog::add(conn, reviewer_id, &log)?;
             diesel::update(trusted_applications::table.find(self.id))
                 .filter(trusted_applications::status.eq(TrustedApplicationStatus::New as i32))
                 .set(trusted_applications::status.eq(TrustedApplicationStatus::Reviewed as i32))
@@ -215,9 +218,14 @@ impl TrustedApplication {
         })
     }
 
+    fn submitter_link(&self, conn: &mut DbConnection) -> QueryResult<String> {
+        let name: String = users::table.find(self.submitter_id).select(users::username).first(conn)?;
+        Ok(user_link(&name))
+    }
+
     /// Closes the application; accepting makes the submitter trusted. Returns false when
     /// it was already closed.
-    pub fn decide(&self, conn: &mut DbConnection, accept: bool) -> QueryResult<bool> {
+    pub fn decide(&self, conn: &mut DbConnection, admin_id: i32, accept: bool) -> QueryResult<bool> {
         let status = if accept { TrustedApplicationStatus::Accepted } else { TrustedApplicationStatus::Rejected };
         conn.transaction(|conn| {
             let closed = diesel::update(trusted_applications::table.find(self.id))
@@ -230,6 +238,9 @@ impl TrustedApplication {
             if closed == 0 {
                 return Ok(false);
             }
+            let log = format!("Trusted application #{} of {}: {}",
+                self.id, self.submitter_link(conn)?, if accept { "accepted" } else { "rejected" });
+            AdminLog::add(conn, admin_id, &log)?;
             if accept {
                 // Upstream sets the level outright; never demote someone promoted since applying
                 diesel::update(users::table.find(self.submitter_id))
@@ -354,11 +365,15 @@ mod tests {
         assert_eq!(TrustedApplication::list(&mut conn, TrustedListFilter::Open, 1, 20).unwrap().1, 1);
         assert_eq!(app.reviews(&mut conn).unwrap()[0].1.username, "mod");
 
-        assert!(app.decide(&mut conn, true).unwrap());
-        assert!(!app.decide(&mut conn, false).unwrap(), "a closed application stays closed");
+        assert!(app.decide(&mut conn, 2, true).unwrap());
+        assert!(!app.decide(&mut conn, 2, false).unwrap(), "a closed application stays closed");
         assert_eq!(TrustedApplication::list(&mut conn, TrustedListFilter::Closed, 1, 20).unwrap().1, 1);
         let u = user(&mut conn, 1);
         assert!(u.is_trusted());
+        let (log, _) = AdminLog::page(&mut conn, 1, 10).unwrap();
+        let log: Vec<&str> = log.iter().map(|e| e.entry.log.as_str()).collect();
+        assert_eq!(log, vec!["Trusted application #1 of [uploader](/user/uploader): accepted",
+                             "Trusted application #1 of [uploader](/user/uploader): reviewed, recommends accept"]);
         assert_eq!(trusted_deny_reasons(&mut conn, &u, &cfg).unwrap(), vec!["You are already trusted."]);
     }
 
@@ -368,7 +383,7 @@ mod tests {
         let cfg = TrustedConfig { min_uploads: 0, min_downloads: 0, reapply_cooldown_days: 90 };
         TrustedApplication::submit(&mut conn, 1, "give", "want").unwrap();
         let app = TrustedApplication::by_id(&mut conn, 1).unwrap().unwrap();
-        assert!(app.decide(&mut conn, false).unwrap());
+        assert!(app.decide(&mut conn, 2, false).unwrap());
         let u = user(&mut conn, 1);
         assert!(!u.is_trusted());
         assert_eq!(trusted_deny_reasons(&mut conn, &u, &cfg).unwrap(),

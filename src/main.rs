@@ -69,6 +69,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(tmpl_data.clone())
             .wrap(ErrorHandlers::new().handler(StatusCode::NOT_FOUND, handlers::site::not_found))
             .wrap(Logger::default())
+            .wrap(actix_web::middleware::from_fn(middleware::ip_ban::reject_banned_ip))
             .wrap(SessionMiddleware::new(CookieSessionStore::default(), secret_key.clone()))
             // Static files
             .service(fs::Files::new("/static", "./static"))
@@ -93,6 +94,7 @@ async fn main() -> std::io::Result<()> {
             .route("/upload", web::post().to(handlers::torrents::upload_post))
             // Users
             .route("/user/{username}", web::get().to(handlers::users::view_user))
+            .route("/user/{username}", web::post().to(handlers::users::ban_user_post))
             // Account
             .route("/account/login", web::get().to(handlers::account::login_get))
             .route("/account/login", web::post().to(handlers::account::login_post))
@@ -116,6 +118,7 @@ async fn main() -> std::io::Result<()> {
             .route("/admin/reports", web::get().to(handlers::admin::reports))
             .route("/admin/log", web::get().to(handlers::admin::log))
             .route("/admin/bans", web::get().to(handlers::admin::bans))
+            .route("/admin/bans", web::post().to(handlers::admin::bans_post))
             .route("/admin/trusted", web::get().to(handlers::trusted::admin_trusted))
             .route("/admin/trusted/{list_filter}", web::get().to(handlers::trusted::admin_trusted))
             .route("/admin/trusted/application/{id}", web::get().to(handlers::trusted::admin_trusted_application))

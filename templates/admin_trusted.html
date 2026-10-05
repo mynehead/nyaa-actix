@@ -42,27 +42,5 @@
 		</tbody>
 	</table>
 </div>
-<div class="center">
-	<ul class="pagination">
-		{% if pagination.has_prev %}
-		<li><a rel="prev" href="{{ base }}?p={{ pagination.current - 1 }}">&laquo;</a></li>
-		{% else %}
-		<li class="disabled"><a href="#">&laquo;</a></li>
-		{% endif %}
-		{% for page in pagination.pages %}
-		{% if page.is_ellipsis %}
-		<li class="disabled"><a href="#">…</a></li>
-		{% elif page.is_current %}
-		<li class="active"><a href="#">{{ page.num }} <span class="sr-only">(current)</span></a></li>
-		{% else %}
-		<li><a href="{{ base }}?p={{ page.num }}">{{ page.num }}</a></li>
-		{% endif %}
-		{% endfor %}
-		{% if pagination.has_next %}
-		<li><a rel="next" href="{{ base }}?p={{ pagination.current + 1 }}">&raquo;</a></li>
-		{% else %}
-		<li class="disabled"><a href="#">&raquo;</a></li>
-		{% endif %}
-	</ul>
-</div>
+{% set page_url = base %}{% include "admin/pagination.html" %}
 {% endblock %}

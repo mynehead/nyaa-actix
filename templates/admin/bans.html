@@ -1,0 +1,51 @@
+{% extends "layout.html" %}
+{% block title %}Bans :: {{ config.site_name }}{% endblock %}
+{% block body %}
+	<div class="table-responsive">
+		<table class="table table-bordered table-hover table-striped">
+			<thead>
+			<tr>
+				<th style="width: 75px">#</th>
+				<th>Moderator/Admin</th>
+				<th>User</th>
+				<th>User IP</th>
+				<th style="width: 700px">Reason</th>
+				<th style="width: 175px">Date</th>
+				<th style="width: 75px">Action</th>
+			</tr>
+			</thead>
+			<tbody>
+			<form method="POST">
+				{% for ban in bans %}
+				<tr>
+					<td>{{ ban.id }}</td>
+					<td>
+						<a href="/user/{{ ban.admin_name | urlencode }}">{{ ban.admin_name }}</a>
+					</td>
+					{% if ban.user_name %}
+					<td>
+						<a href="/user/{{ ban.user_name | urlencode }}">{{ ban.user_name }}</a>
+					</td>
+					{% else %}
+					<td>-</td>
+					{% endif %}
+					{% if current_user.level >= 3 %}
+					<td>{{ ban.ip_string | default(value="") }}</td>
+					{% else %}
+					<td>hidden</td>
+					{% endif %}
+					<td><div markdown-text-inline>{{ ban.reason }}</div></td>
+					<td class="center">{{ ban.created_time | date(format="%Y-%m-%d %H:%M:%S") }}</td>
+					<td class="center">
+						<button class="btn btn-danger btn-xs" id="submit" name="submit" type="submit" value="{{ ban.id }}">Unban</button>
+					</td>
+				</tr>
+				{% endfor %}
+			</form>
+			</tbody>
+		</table>
+	</div>
+
+	{% set page_url = "/admin/bans" %}
+	{% include "admin/pagination.html" %}
+{% endblock %}
