@@ -17,8 +17,12 @@ impl Config {
     pub fn from_env() -> Self {
         dotenvy::dotenv().ok();
         let secret_key = env::var("SECRET_KEY").expect("SECRET_KEY must be set");
-        // actix's cookie Key::from panics on anything shorter than 64 bytes.
-        assert!(secret_key.len() >= 64, "SECRET_KEY must be at least 64 bytes long");
+        // actix_web::cookie::Key::from panics on anything shorter than 64 bytes
+        assert!(
+            secret_key.len() >= 64,
+            "SECRET_KEY must be at least 64 bytes (got {}); generate one with `openssl rand -hex 64`",
+            secret_key.len()
+        );
         Config {
             database_url: env::var("DATABASE_URL").unwrap_or_else(|_| "nyaa.db".into()),
             secret_key,
