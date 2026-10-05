@@ -35,3 +35,13 @@ pub fn register(tera: &mut Tera) {
     tera.register_filter("level_str", user_filter("level_str", |u| to_value(u.level_str()).unwrap()));
     tera.register_filter("level_color", user_filter("level_color", |u| to_value(u.level_color()).unwrap()));
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn all_templates_parse() {
+        let mut tera = tera::Tera::new("templates/**/*").expect("templates should parse");
+        super::register(&mut tera);
+        assert!(tera.get_template_names().count() > 10);
+    }
+}

@@ -68,3 +68,39 @@ fn build_pages(current: i64, total: i64) -> Vec<PageItem> {
     }
     pages
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn nums(p: &Pagination) -> Vec<i64> {
+        p.pages.iter().map(|i| i.num).collect()
+    }
+
+    #[test]
+    fn empty_result_is_one_page() {
+        let p = Pagination::new(1, 0, 75);
+        assert_eq!(p.total_pages, 1);
+        assert!(!p.has_prev && !p.has_next);
+    }
+
+    #[test]
+    fn clamps_current_page_and_computes_offset() {
+        let p = Pagination::new(99, 150, 75);
+        assert_eq!((p.current, p.total_pages, p.offset()), (2, 2, 75));
+        assert_eq!(Pagination::new(-3, 150, 75).current, 1);
+    }
+
+    #[test]
+    fn short_lists_show_every_page() {
+        assert_eq!(nums(&Pagination::new(3, 9 * 10, 10)), (1..=9).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn long_lists_use_ellipses_around_a_window() {
+        // 0 marks an ellipsis
+        assert_eq!(nums(&Pagination::new(10, 200, 10)), vec![1, 0, 8, 9, 10, 11, 12, 0, 20]);
+        assert_eq!(nums(&Pagination::new(1, 200, 10)), vec![1, 2, 3, 0, 20]);
+        assert_eq!(nums(&Pagination::new(20, 200, 10)), vec![1, 0, 18, 19, 20]);
+    }
+}

@@ -18,3 +18,27 @@ pub fn pack_ip(addr: IpAddr) -> Vec<u8> {
 pub fn sanitize_string(s: &str) -> String {
     s.chars().filter(|c| !c.is_control()).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packs_ipv4_into_last_four_bytes() {
+        let packed = pack_ip("192.168.1.2".parse().unwrap());
+        assert_eq!(packed.len(), 16);
+        assert_eq!(&packed[..12], &[0u8; 12]);
+        assert_eq!(&packed[12..], &[192, 168, 1, 2]);
+    }
+
+    #[test]
+    fn packs_ipv6_as_is() {
+        let addr: std::net::Ipv6Addr = "2001:db8::1".parse().unwrap();
+        assert_eq!(pack_ip(IpAddr::V6(addr)), addr.octets().to_vec());
+    }
+
+    #[test]
+    fn sanitize_removes_control_characters() {
+        assert_eq!(sanitize_string("a\u{0}b\nc\td é"), "abcd é");
+    }
+}
