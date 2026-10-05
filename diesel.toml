@@ -1,3 +1,7 @@
 [print_schema]
 file = "src/db/schema.rs"
 custom_type_derives = ["diesel::query_builder::QueryId"]
+
+[migrations_directory]
+# PostgreSQL has its own copies in migrations/postgres; keep the two in step
+dir = "migrations/sqlite"

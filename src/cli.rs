@@ -9,7 +9,6 @@
 //! the exe, which Windows refuses while the server has it open.
 
 use diesel::prelude::*;
-use diesel_migrations::MigrationHarness;
 
 use crate::db::schema::users;
 use crate::models::user::{NewUser, User, UserLevel};
@@ -74,13 +73,9 @@ fn create_user(args: &[String]) -> Result<(), String> {
     let opts = parse_create_user(args)?;
     dotenvy::dotenv().ok();
     let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "nyaa.db".into());
-    let mut conn = SqliteConnection::establish(&database_url)
+    let mut conn = crate::db::connect(&database_url)
         .map_err(|e| format!("cannot open {database_url}: {e}"))?;
-    // The server may be writing at the same moment; wait for its lock instead of failing.
-    diesel::sql_query("PRAGMA busy_timeout = 5000")
-        .execute(&mut conn)
-        .map_err(|e| e.to_string())?;
-    conn.run_pending_migrations(crate::MIGRATIONS)
+    crate::db::run_migrations(&mut conn)
         .map_err(|e| format!("migrations failed: {e}"))?;
 
     if User::by_username(&mut conn, &opts.username).map_err(|e| e.to_string())?.is_some() {
@@ -122,8 +117,8 @@ mod tests {
 
     #[test]
     fn created_user_can_log_in() {
-        let mut conn = SqliteConnection::establish(":memory:").unwrap();
-        conn.run_pending_migrations(crate::MIGRATIONS).unwrap();
+        let mut conn = crate::db::connect(":memory:").unwrap();
+        crate::db::run_migrations(&mut conn).unwrap();
         let mut u = NewUser::new("admin", None, "admin");
         u.level = UserLevel::SuperAdmin as i32;
         diesel::insert_into(users::table).values(&u).execute(&mut conn).unwrap();

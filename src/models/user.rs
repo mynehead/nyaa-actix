@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use argon2::password_hash::{rand_core::OsRng, SaltString};
 
+use crate::db::DbConnection;
 use crate::db::schema::users;
 
 #[repr(i32)]
@@ -108,19 +109,19 @@ impl User {
         }
     }
 
-    pub fn by_id(conn: &mut SqliteConnection, uid: i32) -> QueryResult<Option<User>> {
+    pub fn by_id(conn: &mut DbConnection, uid: i32) -> QueryResult<Option<User>> {
         users::table.find(uid).first(conn).optional()
     }
 
-    pub fn by_username(conn: &mut SqliteConnection, name: &str) -> QueryResult<Option<User>> {
+    pub fn by_username(conn: &mut DbConnection, name: &str) -> QueryResult<Option<User>> {
         users::table.filter(users::username.eq(name)).first(conn).optional()
     }
 
-    pub fn by_email(conn: &mut SqliteConnection, addr: &str) -> QueryResult<Option<User>> {
+    pub fn by_email(conn: &mut DbConnection, addr: &str) -> QueryResult<Option<User>> {
         users::table.filter(users::email.eq(addr)).first(conn).optional()
     }
 
-    pub fn by_username_or_email(conn: &mut SqliteConnection, val: &str) -> QueryResult<Option<User>> {
+    pub fn by_username_or_email(conn: &mut DbConnection, val: &str) -> QueryResult<Option<User>> {
         let by_name = users::table.filter(users::username.eq(val)).first(conn).optional()?;
         if by_name.is_some() {
             return Ok(by_name);

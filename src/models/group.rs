@@ -2,6 +2,7 @@ use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::db::DbConnection;
 use crate::db::schema::{groups, group_members};
 
 pub const PERM_UPLOAD: i32 = 1;
@@ -20,19 +21,19 @@ pub struct Group {
 }
 
 impl Group {
-    pub fn by_id(conn: &mut SqliteConnection, gid: i32) -> QueryResult<Option<Group>> {
+    pub fn by_id(conn: &mut DbConnection, gid: i32) -> QueryResult<Option<Group>> {
         groups::table.find(gid).first(conn).optional()
     }
 
-    pub fn by_slug(conn: &mut SqliteConnection, slug: &str) -> QueryResult<Option<Group>> {
+    pub fn by_slug(conn: &mut DbConnection, slug: &str) -> QueryResult<Option<Group>> {
         groups::table.filter(groups::slug.eq(slug)).first(conn).optional()
     }
 
-    pub fn all(conn: &mut SqliteConnection) -> QueryResult<Vec<Group>> {
+    pub fn all(conn: &mut DbConnection) -> QueryResult<Vec<Group>> {
         groups::table.order(groups::name.asc()).load(conn)
     }
 
-    pub fn member_permissions(&self, conn: &mut SqliteConnection, user_id: i32) -> QueryResult<i32> {
+    pub fn member_permissions(&self, conn: &mut DbConnection, user_id: i32) -> QueryResult<i32> {
         if user_id == self.owner_id {
             return Ok(PERM_UPLOAD | PERM_EDIT);
         }
@@ -45,19 +46,19 @@ impl Group {
         Ok(row.unwrap_or(0))
     }
 
-    pub fn can_upload(&self, conn: &mut SqliteConnection, user_id: i32) -> bool {
+    pub fn can_upload(&self, conn: &mut DbConnection, user_id: i32) -> bool {
         self.member_permissions(conn, user_id)
             .map(|p| p & PERM_UPLOAD != 0)
             .unwrap_or(false)
     }
 
-    pub fn can_edit(&self, conn: &mut SqliteConnection, user_id: i32) -> bool {
+    pub fn can_edit(&self, conn: &mut DbConnection, user_id: i32) -> bool {
         self.member_permissions(conn, user_id)
             .map(|p| p & PERM_EDIT != 0)
             .unwrap_or(false)
     }
 
-    pub fn members_with_perms(&self, conn: &mut SqliteConnection) -> QueryResult<Vec<(i32, i32)>> {
+    pub fn members_with_perms(&self, conn: &mut DbConnection) -> QueryResult<Vec<(i32, i32)>> {
         group_members::table
             .filter(group_members::group_id.eq(self.id))
             .select((group_members::user_id, group_members::permissions))
