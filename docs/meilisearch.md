@@ -35,7 +35,7 @@ or misconfigured, the site logs a warning and searches SQLite instead.
   pushes all of them once.
 - `nyaa-actix reindex` does the same rebuild by hand: it builds a complete new index from
   the database under a temporary name and then swaps it in, so searches keep working
-  while it runs. 100,000 torrents take about 13 seconds. Edits made while it runs can be
+  while it runs. 100,000 torrents take about 25 seconds. Edits made while it runs can be
   missed, so run it when the site is quiet.
 
 ## Running it on Windows
@@ -99,5 +99,10 @@ index. CI runs Meilisearch as a service container, so the test always runs there
 Every word must match (as upstream's Elasticsearch `AND`), and the last word also
 matches as a prefix. `"quoted phrases"` match exactly and `-word` excludes a word. Typo
 tolerance is off, since release names that differ by a letter are usually different
-releases. Unlike the SQLite search, a word inside another word does not match: `dragon`
-finds "Dragon Ball" but `ragon` does not.
+releases.
+
+As in upstream's Elasticsearch setup, words are also split where letters meet digits or
+lower case meets upper case, and numbers match without leading zeros: `2` finds
+"Name2", "S02E05" and "- 02", `264` finds "x264", `Name` finds "DisplayName". Other
+pieces of words don't match, unlike the SQLite search: `dragon` finds "Dragon Ball" but
+`ragon` does not.

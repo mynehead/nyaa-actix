@@ -58,10 +58,11 @@ pub type MeiliResult<T> = Result<T, MeiliError>;
 /// Settings the searches below rely on. Upstream's listing order (newest first, or the
 /// chosen sort column) beats relevance, so `sort` ranks first; every word must match, as
 /// with Elasticsearch's AND operator; and there is no typo tolerance, since release names
-/// that differ by a letter are usually different releases.
+/// that differ by a letter are usually different releases. A change here (or to what
+/// `TorrentDoc` holds, which should come with one) makes `index::check` rebuild the index.
 pub fn index_settings(max_hits: i64) -> Value {
     json!({
-        "searchableAttributes": ["display_name"],
+        "searchableAttributes": ["display_name", "word_parts"],
         "filterableAttributes": [
             "main_category_id", "sub_category_id", "uploader_id", "group_id",
             "hidden", "anonymous", "remake", "trusted", "complete", "deleted"
@@ -81,6 +82,8 @@ pub fn index_settings(max_hits: i64) -> Value {
 pub struct TorrentDoc {
     pub id: i32,
     pub display_name: String,
+    /// Extra words from the name that Meilisearch wouldn't find on its own; see `word_parts`.
+    pub word_parts: String,
     pub main_category_id: i32,
     pub sub_category_id: i32,
     pub uploader_id: Option<i32>,
@@ -105,6 +108,7 @@ impl TorrentDoc {
         TorrentDoc {
             id: t.id,
             display_name: t.display_name.clone(),
+            word_parts: word_parts(&t.display_name),
             main_category_id: t.main_category_id,
             sub_category_id: t.sub_category_id,
             uploader_id: t.uploader_id,
@@ -122,6 +126,42 @@ impl TorrentDoc {
             deleted: has(TorrentFlags::DELETED) || has(TorrentFlags::BANNED),
         }
     }
+}
+
+/// Words inside the words of a name, so searches find them as upstream's Elasticsearch
+/// analyzer does (`word_delimiter_graph` and `trim_zero`): the parts where letters meet
+/// digits or lower case meets upper case, and numbers without their leading zeros. So `2`
+/// finds "Name2" and "S02E05", `Name` finds "DisplayName" and `264` finds "x264".
+/// Meilisearch only matches whole words and word beginnings by itself.
+pub fn word_parts(name: &str) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let mut add = |w: &str| {
+        if !w.is_empty() && !parts.iter().any(|p| p == w) {
+            parts.push(w.to_string());
+        }
+    };
+    for word in name.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()) {
+        let chars: Vec<char> = word.chars().collect();
+        let mut pieces = Vec::new();
+        let mut start = 0;
+        for i in 1..chars.len() {
+            let (a, b) = (chars[i - 1], chars[i]);
+            if a.is_ascii_digit() != b.is_ascii_digit() || (a.is_lowercase() && b.is_uppercase()) {
+                pieces.push(chars[start..i].iter().collect::<String>());
+                start = i;
+            }
+        }
+        pieces.push(chars[start..].iter().collect::<String>());
+        for piece in &pieces {
+            if pieces.len() > 1 {
+                add(piece);
+            }
+            if piece.starts_with('0') && piece.chars().all(|c| c.is_ascii_digit()) {
+                add(piece.trim_start_matches('0'));
+            }
+        }
+    }
+    parts.join(" ")
 }
 
 /// The Meilisearch filter expression for a listing, mirroring `db::filtered`.
@@ -312,6 +352,28 @@ impl Meili {
         v["total"].as_u64().map(|t| t > 0).ok_or_else(|| MeiliError::Response(v.to_string()))
     }
 
+    /// Whether the index's settings are the ones `index_settings` asks for; false for a
+    /// missing index or one built by an older version.
+    pub fn settings_current(&self) -> MeiliResult<bool> {
+        let have = match self.call("GET", &format!("/indexes/{}/settings", self.index), None) {
+            Ok(v) => v,
+            Err(MeiliError::Status { status: 404, .. }) => return Ok(false),
+            Err(e) => return Err(e),
+        };
+        let want = index_settings(self.max_hits);
+        let sorted = |v: &Value| {
+            let mut a: Vec<String> = v.as_array().into_iter().flatten().filter_map(|x| x.as_str().map(String::from)).collect();
+            a.sort();
+            a
+        };
+        Ok(have["searchableAttributes"] == want["searchableAttributes"]
+            && have["rankingRules"] == want["rankingRules"]
+            && sorted(&have["filterableAttributes"]) == sorted(&want["filterableAttributes"])
+            && sorted(&have["sortableAttributes"]) == sorted(&want["sortableAttributes"])
+            && have["typoTolerance"]["enabled"] == want["typoTolerance"]["enabled"]
+            && have["pagination"]["maxTotalHits"] == want["pagination"]["maxTotalHits"])
+    }
+
     /// Creates the index if needed and applies `index_settings`. Returns the settings task.
     pub fn configure(&self) -> MeiliResult<u64> {
         match self.call("POST", "/indexes", Some(&json!({ "uid": self.index, "primaryKey": "id" }))) {
@@ -413,6 +475,16 @@ mod tests {
         q.sort = SearchSort::Downloads;
         q.order = SearchOrder::Desc;
         assert_eq!(sort(&q), ["download_count:desc", "id:desc"]);
+    }
+
+    #[test]
+    fn word_parts_split_where_letters_meet_digits() {
+        assert_eq!(word_parts("Display Name2"), "Name 2");
+        assert_eq!(word_parts("[Grp] Show S02E05 [1080p] x264"), "S 02 2 E 05 5 1080 p x 264");
+        assert_eq!(word_parts("Show - 01 [720p]"), "1 720 p");
+        assert_eq!(word_parts("DisplayName K-On"), "Display Name");
+        assert_eq!(word_parts("plain words 00"), "");
+        assert_eq!(word_parts(""), "");
     }
 
     #[test]
