@@ -151,3 +151,34 @@ pub struct NewStatistic {
     pub download_count: i32,
     pub last_updated: NaiveDateTime,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn torrent(flags: TorrentFlags, filesize: i64) -> Torrent {
+        Torrent { flags: flags.bits(), filesize, ..crate::torrent::tests::sample_torrent() }
+    }
+
+    #[test]
+    fn human_file_sizes() {
+        assert_eq!(torrent(TorrentFlags::empty(), 512).filesize_human(), "512 B");
+        assert_eq!(torrent(TorrentFlags::empty(), 1536).filesize_human(), "1.5 KiB");
+        assert_eq!(torrent(TorrentFlags::empty(), 5 * 1_048_576).filesize_human(), "5.0 MiB");
+        assert_eq!(torrent(TorrentFlags::empty(), 3 * 1_073_741_824).filesize_human(), "3.0 GiB");
+    }
+
+    #[test]
+    fn row_class_priority() {
+        assert_eq!(torrent(TorrentFlags::TRUSTED | TorrentFlags::REMAKE | TorrentFlags::DELETED, 0).row_class(), "danger");
+        assert_eq!(torrent(TorrentFlags::TRUSTED | TorrentFlags::REMAKE, 0).row_class(), "warning");
+        assert_eq!(torrent(TorrentFlags::TRUSTED, 0).row_class(), "success");
+        assert_eq!(torrent(TorrentFlags::empty(), 0).row_class(), "");
+    }
+
+    #[test]
+    fn magnet_uses_uppercase_hex_hash() {
+        let uri = torrent(TorrentFlags::empty(), 0).magnet_uri("x", &[]);
+        assert_eq!(uri, format!("magnet:?xt=urn:btih:{}&dn=x", "AB".repeat(20)));
+    }
+}

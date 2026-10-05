@@ -66,3 +66,14 @@ fn split_list(value: &str) -> Vec<String> {
         .map(String::from)
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_list_trims_and_drops_blanks() {
+        assert_eq!(split_list(" udp://a/announce , ,http://b/announce,"), vec!["udp://a/announce", "http://b/announce"]);
+        assert!(split_list("").is_empty());
+    }
+}
