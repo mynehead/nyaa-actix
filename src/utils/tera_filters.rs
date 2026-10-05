@@ -82,6 +82,7 @@ mod render_tests {
             maintenance_mode: false,
             site_url: String::new(),
             tracker_urls: vec![],
+            meili: None,
         }
     }
 

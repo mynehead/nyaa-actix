@@ -8,6 +8,15 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      # For the Meilisearch round-trip test (docs/meilisearch.md)
+      meilisearch:
+        image: getmeili/meilisearch:v1.54
+        env:
+          MEILI_MASTER_KEY: ci-master-key-1234567890
+          MEILI_NO_ANALYTICS: "true"
+        ports:
+          - 7700:7700
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -16,3 +25,6 @@ jobs:
         run: cargo build --locked
       - name: Test
         run: cargo test --locked
+        env:
+          MEILI_TEST_URL: http://127.0.0.1:7700
+          MEILI_TEST_KEY: ci-master-key-1234567890

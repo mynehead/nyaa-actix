@@ -21,6 +21,8 @@ pub struct Config {
     pub site_url: String,
     /// Announce URLs written into magnets and .torrent files, own tracker first.
     pub tracker_urls: Vec<String>,
+    /// Meilisearch for text search and stats sorts (MEILI_URL and friends); None keeps search on SQLite.
+    pub meili: Option<crate::search::meili::Meili>,
 }
 
 impl Config {
@@ -56,6 +58,7 @@ impl Config {
                 .iter()
                 .flat_map(|key| split_list(&env::var(key).unwrap_or_default()))
                 .collect(),
+            meili: crate::search::meili::Meili::from_env(),
         }
     }
 
