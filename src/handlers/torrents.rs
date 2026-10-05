@@ -192,7 +192,7 @@ pub async fn upload_post(
 
     while let Some(item) = payload.next().await {
         let mut field = item.map_err(actix_web::error::ErrorBadRequest)?;
-        let name = field.name().to_string();
+        let name = field.name().unwrap_or_default().to_string();
         let mut data = Vec::new();
         while let Some(chunk) = field.next().await {
             let chunk = chunk.map_err(actix_web::error::ErrorBadRequest)?;
