@@ -50,6 +50,8 @@ impl Torrent {
         crate::torrent::magnet::create_magnet(&self.info_hash_hex(), display_name, trackers)
     }
 
+    // is_hidden and is_complete complete the flag getters; torrent edit (roadmap step 4) needs them.
+    #[allow(dead_code)]
     pub fn is_hidden(&self) -> bool {
         self.flags & TorrentFlags::HIDDEN.bits() != 0
     }
@@ -66,6 +68,7 @@ impl Torrent {
         self.flags & TorrentFlags::TRUSTED.bits() != 0
     }
 
+    #[allow(dead_code)]
     pub fn is_complete(&self) -> bool {
         self.flags & TorrentFlags::COMPLETE.bits() != 0
     }

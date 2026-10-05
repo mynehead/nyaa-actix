@@ -35,7 +35,6 @@ pub struct SearchQuery {
 pub enum SearchSort {
     Id,
     Name,
-    Date,
     Size,
     Seeders,
     Leechers,
@@ -49,6 +48,8 @@ pub enum SearchOrder {
 }
 
 impl SearchQuery {
+    /// Defaults for the main listing; only the tests build queries by hand.
+    #[cfg(test)]
     pub fn new() -> Self {
         SearchQuery {
             term: None,
@@ -124,14 +125,6 @@ fn parse_category(cat: Option<&str>) -> (Option<i32>, Option<i32>) {
 pub struct SearchResult {
     pub torrents: Vec<Torrent>,
     pub total: i64,
-    pub page: i64,
-    pub per_page: i64,
-}
-
-impl SearchResult {
-    pub fn total_pages(&self) -> i64 {
-        ((self.total as f64) / (self.per_page as f64)).ceil() as i64
-    }
 }
 
 use crate::models::TorrentFlags;
@@ -208,8 +201,6 @@ pub fn search(conn: &mut SqliteConnection, q: &SearchQuery) -> QueryResult<Searc
         (SearchSort::Name, SearchOrder::Asc) => query.order(nyaa_torrents::display_name.asc()),
         (SearchSort::Size, SearchOrder::Desc) => query.order(nyaa_torrents::filesize.desc()),
         (SearchSort::Size, SearchOrder::Asc) => query.order(nyaa_torrents::filesize.asc()),
-        (SearchSort::Date, SearchOrder::Desc) => query.order(nyaa_torrents::created_time.desc()),
-        (SearchSort::Date, SearchOrder::Asc) => query.order(nyaa_torrents::created_time.asc()),
         // Seeders/leechers/downloads would need a join — fall back to id
         _ => query.order(nyaa_torrents::id.desc()),
     }
@@ -217,7 +208,7 @@ pub fn search(conn: &mut SqliteConnection, q: &SearchQuery) -> QueryResult<Searc
     .offset(offset)
     .load::<Torrent>(conn)?;
 
-    Ok(SearchResult { torrents, total, page: q.page, per_page: q.per_page })
+    Ok(SearchResult { torrents, total })
 }
 
 #[cfg(test)]

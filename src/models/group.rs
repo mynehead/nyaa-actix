@@ -57,14 +57,6 @@ impl Group {
             .unwrap_or(false)
     }
 
-    pub fn member_count(&self, conn: &mut SqliteConnection) -> i64 {
-        group_members::table
-            .filter(group_members::group_id.eq(self.id))
-            .count()
-            .get_result(conn)
-            .unwrap_or(0)
-    }
-
     pub fn members_with_perms(&self, conn: &mut SqliteConnection) -> QueryResult<Vec<(i32, i32)>> {
         group_members::table
             .filter(group_members::group_id.eq(self.id))

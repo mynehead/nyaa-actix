@@ -14,16 +14,6 @@ pub enum UserStatus {
     Banned = 2,
 }
 
-impl UserStatus {
-    pub fn from_i32(v: i32) -> Self {
-        match v {
-            1 => UserStatus::Active,
-            2 => UserStatus::Banned,
-            _ => UserStatus::Inactive,
-        }
-    }
-}
-
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum UserLevel {
@@ -76,6 +66,8 @@ impl User {
         self.level >= UserLevel::Moderator as i32
     }
 
+    /// Admin-only actions upstream, such as changing a user's level or nuking a user (roadmap step 4).
+    #[allow(dead_code)]
     pub fn is_superadmin(&self) -> bool {
         self.level == UserLevel::SuperAdmin as i32
     }

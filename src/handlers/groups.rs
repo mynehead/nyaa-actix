@@ -209,7 +209,6 @@ pub async fn edit_group_get(
 pub async fn edit_group_post(
     session: Session,
     pool: web::Data<DbPool>,
-    cfg: web::Data<Config>,
     path: web::Path<String>,
     form: web::Form<EditGroupForm>,
 ) -> Result<HttpResponse> {

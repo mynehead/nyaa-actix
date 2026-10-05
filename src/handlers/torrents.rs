@@ -3,7 +3,6 @@ use actix_session::Session;
 use actix_web::http::header::{Charset, ContentDisposition, DispositionParam, DispositionType, ExtendedValue};
 use actix_web::{web, HttpRequest, HttpResponse, Result};
 use futures_util::StreamExt;
-use serde::Deserialize;
 use tera::Tera;
 use std::path::PathBuf;
 use diesel::prelude::*;
@@ -17,7 +16,6 @@ use crate::torrent::{parse_torrent, rebuild_torrent};
 use crate::utils::{pack_ip, sanitize_string};
 
 pub async fn view_torrent(
-    req: HttpRequest,
     session: Session,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
@@ -163,21 +161,6 @@ pub async fn magnet_redirect(
     Ok(HttpResponse::Found()
         .insert_header(("Location", magnet))
         .finish())
-}
-
-#[derive(Debug, Deserialize, Default)]
-pub struct UploadForm {
-    pub display_name: Option<String>,
-    pub information: Option<String>,
-    pub description: Option<String>,
-    pub category: Option<String>,
-    pub group_id: Option<i32>,
-    pub is_hidden: Option<String>,
-    pub is_remake: Option<String>,
-    pub is_anonymous: Option<String>,
-    pub is_complete: Option<String>,
-    pub is_trusted: Option<String>,
-    pub is_comment_locked: Option<String>,
 }
 
 pub async fn upload_get(

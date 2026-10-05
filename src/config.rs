@@ -7,9 +7,15 @@ pub struct Config {
     pub site_name: String,
     pub site_flavor: String,
     pub results_per_page: i64,
+    /// Upstream MAX_PAGES: cap on how deep listings can be paged (0 = no cap). Not enforced yet.
+    #[allow(dead_code)]
     pub max_pages: i64,
     pub torrent_storage_path: String,
+    /// Upstream ENABLE_GRAVATAR: avatars on profiles and comments. Waits on the comments feature.
+    #[allow(dead_code)]
     pub enable_gravatar: bool,
+    /// Upstream MAINTENANCE_MODE: turns off uploads, registration and login with a notice. Not enforced yet.
+    #[allow(dead_code)]
     pub maintenance_mode: bool,
     /// Public base URL of the site, used in the .torrent comment field.
     pub site_url: String,
