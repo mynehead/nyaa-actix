@@ -7,8 +7,8 @@ use crate::config::Config;
 use crate::db::DbPool;
 use crate::utils::context::base_context;
 use crate::middleware::auth::get_current_user;
-use crate::db::schema::{bans, users};
-use crate::models::{user_link, AdminLog, Ban, NewBan, User, UserStatus, MAX_BAN_REASON_LEN};
+use crate::db::schema::{bans, nyaa_comments, nyaa_statistics, nyaa_torrents, users};
+use crate::models::{user_link, AdminLog, Ban, NewBan, TorrentFlags, User, UserStatus, MAX_BAN_REASON_LEN};
 use crate::utils::{flash, sanitize_text, unpack_ip};
 use diesel::prelude::*;
 use crate::search::db::{with_stats, SearchQuery};
@@ -221,4 +221,89 @@ pub async fn ban_user_post(
     }).map_err(actix_web::error::ErrorInternalServerError)?;
     flash::push(&session, "success", "", &format!("User has been successfully {}.", action));
     Ok(back())
+}
+
+/// The user behind a nuke request; superadmins only, and only on users below them.
+fn nuke_target(session: &Session, pool: &DbPool, username: &str) -> Result<(User, User, diesel::r2d2::PooledConnection<crate::db::DbManager>)> {
+    let admin = get_current_user(session, pool)
+        .ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
+    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let user = User::by_username(&mut conn, username)
+        .map_err(actix_web::error::ErrorInternalServerError)?
+        .ok_or_else(|| actix_web::error::ErrorNotFound("User not found"))?;
+    if !admin.is_superadmin() || !can_ban(&admin, &user) {
+        return Err(actix_web::error::ErrorForbidden("Not allowed"));
+    }
+    Ok((admin, user, conn))
+}
+
+/// "Nuke Torrents": deletes and bans every torrent of the user, as upstream's
+/// `nuke_user_torrents`.
+pub async fn nuke_torrents_post(
+    session: Session,
+    pool: web::Data<DbPool>,
+    cfg: web::Data<Config>,
+    path: web::Path<String>,
+) -> Result<HttpResponse> {
+    let (admin, user, mut conn) = nuke_target(&session, &pool, &path.into_inner())?;
+    let ids: Vec<i32> = conn.transaction::<_, diesel::result::Error, _>(|conn| {
+        let torrents: Vec<(i32, i32)> = nyaa_torrents::table
+            .filter(nyaa_torrents::uploader_id.eq(user.id))
+            .select((nyaa_torrents::id, nyaa_torrents::flags))
+            .load(conn)?;
+        let banned = (TorrentFlags::DELETED | TorrentFlags::BANNED).bits();
+        for &(id, flags) in &torrents {
+            diesel::update(nyaa_torrents::table.find(id))
+                .set(nyaa_torrents::flags.eq(flags | banned))
+                .execute(conn)?;
+        }
+        let ids: Vec<i32> = torrents.into_iter().map(|(id, _)| id).collect();
+        diesel::update(nyaa_statistics::table.filter(nyaa_statistics::torrent_id.eq_any(&ids)))
+            .set((nyaa_statistics::seed_count.eq(0), nyaa_statistics::leech_count.eq(0)))
+            .execute(conn)?;
+        if !ids.is_empty() {
+            AdminLog::add(conn, admin.id, &format!("Nuked {} torrents of {}", ids.len(), user_link(&user.username)))?;
+        }
+        Ok(ids)
+    }).map_err(actix_web::error::ErrorInternalServerError)?;
+    for id in ids {
+        crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), id);
+    }
+    flash::push(&session, "success", "", &format!("Torrents of {} have been nuked.", user.username));
+    Ok(HttpResponse::SeeOther().insert_header(("Location", format!("/user/{}", user.username))).finish())
+}
+
+/// "Nuke Comments": deletes every comment of the user, as upstream's `nuke_user_comments`.
+pub async fn nuke_comments_post(
+    session: Session,
+    pool: web::Data<DbPool>,
+    cfg: web::Data<Config>,
+    path: web::Path<String>,
+) -> Result<HttpResponse> {
+    let (admin, user, mut conn) = nuke_target(&session, &pool, &path.into_inner())?;
+    let torrent_ids: Vec<i32> = conn.transaction::<_, diesel::result::Error, _>(|conn| {
+        let mut torrent_ids: Vec<i32> = nyaa_comments::table
+            .filter(nyaa_comments::user_id.eq(user.id))
+            .select(nyaa_comments::torrent_id)
+            .load(conn)?;
+        let deleted = diesel::delete(nyaa_comments::table.filter(nyaa_comments::user_id.eq(user.id)))
+            .execute(conn)?;
+        torrent_ids.sort_unstable();
+        torrent_ids.dedup();
+        for &tid in &torrent_ids {
+            let count: i64 = nyaa_comments::table.filter(nyaa_comments::torrent_id.eq(tid)).count().get_result(conn)?;
+            diesel::update(nyaa_torrents::table.find(tid))
+                .set(nyaa_torrents::comment_count.eq(count as i32))
+                .execute(conn)?;
+        }
+        if deleted > 0 {
+            AdminLog::add(conn, admin.id, &format!("Nuked {} comments of {}", deleted, user_link(&user.username)))?;
+        }
+        Ok(torrent_ids)
+    }).map_err(actix_web::error::ErrorInternalServerError)?;
+    for id in torrent_ids {
+        crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), id);
+    }
+    flash::push(&session, "success", "", &format!("Comments of {} have been nuked.", user.username));
+    Ok(HttpResponse::SeeOther().insert_header(("Location", format!("/user/{}", user.username))).finish())
 }

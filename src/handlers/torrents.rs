@@ -12,12 +12,12 @@ use std::collections::HashMap;
 use crate::config::Config;
 use crate::db::DbConnection;
 use crate::db::DbPool;
-use crate::db::schema::{nyaa_torrents, nyaa_statistics, nyaa_comments};
+use crate::db::schema::{bans, nyaa_torrents, nyaa_statistics, nyaa_comments, users};
 use crate::utils::context::base_context;
 use crate::middleware::auth::get_current_user;
-use crate::models::{danger_action, edited_flags, torrent_link, AdminLog, DangerAction, EditFlags, NewTorrent, NewStatistic, Torrent, TorrentFlags, User};
+use crate::models::{danger_action, edited_flags, torrent_link, user_link, AdminLog, Ban, NewBan, UserStatus, MAX_BAN_REASON_LEN, DangerAction, EditFlags, NewTorrent, NewStatistic, Torrent, TorrentFlags, User};
 use crate::torrent::{parse_torrent, rebuild_torrent};
-use crate::utils::{pack_ip, sanitize_string, sanitize_text};
+use crate::utils::{flash, pack_ip, sanitize_string, sanitize_text, unpack_ip};
 
 pub async fn view_torrent(
     session: Session,
@@ -105,6 +105,7 @@ pub async fn view_torrent(
     ctx.insert("hide_comments", &hide_comments);
     ctx.insert("uploader", &uploader);
     ctx.insert("magnet", &magnet);
+    ctx.insert("flash_messages", &flash::take(&session));
 
     let html = tmpl.render("view.html", &ctx)
         .map_err(actix_web::error::ErrorInternalServerError)?;
@@ -465,6 +466,13 @@ pub struct EditForm {
     pub undelete: Option<String>,
     #[serde(default, skip_serializing)]
     pub unban: Option<String>,
+    /// The uploader ban buttons (upstream `BanForm` on the edit page), with their reason.
+    #[serde(default, skip_serializing)]
+    pub ban_user: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub ban_userip: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub reason: String,
 }
 
 /// A checked box sends its value; an unchecked one sends nothing.
@@ -506,7 +514,13 @@ impl EditForm {
         else if self.ban.is_some() { Some(DangerAction::Ban) }
         else if self.undelete.is_some() { Some(DangerAction::Undelete) }
         else if self.unban.is_some() { Some(DangerAction::Unban) }
+        // Banning the uploader also bans the torrent, as upstream
+        else if self.bans_uploader() { Some(DangerAction::Ban) }
         else { None }
+    }
+
+    fn bans_uploader(&self) -> bool {
+        self.ban_user.is_some() || self.ban_userip.is_some()
     }
 
     /// Upstream's `EditForm` validators. Returns the category ids, or errors by field.
@@ -580,6 +594,7 @@ fn render_edit(
     torrent: &Torrent,
     form: &EditForm,
     errors: &HashMap<&'static str, String>,
+    flashes: &[flash::Flash],
 ) -> Result<String> {
     let categories = crate::models::get_all_categories(conn)
         .map_err(actix_web::error::ErrorInternalServerError)?;
@@ -597,6 +612,13 @@ fn render_edit(
     ctx.insert("uploader", &uploader);
     ctx.insert("is_deleted", &torrent.is_deleted());
     ctx.insert("is_banned", &torrent.is_banned());
+    ctx.insert("flash_messages", flashes);
+    let target = UploaderBanTarget::load(conn, torrent).map_err(actix_web::error::ErrorInternalServerError)?;
+    if target.can_be_banned_by(editor) {
+        ctx.insert("ban_form", &true);
+        ctx.insert("ban_uploader", &target.uploader);
+        ctx.insert("ip_banned", &target.ip_banned());
+    }
     tmpl.render("edit.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)
 }
 
@@ -612,7 +634,7 @@ pub async fn edit_torrent_get(
     let torrent = editable_torrent(&mut conn, path.into_inner(), editor.as_ref())?;
     let editor = editor.expect("editable_torrent requires a user");
     let html = render_edit(&mut conn, &tmpl, &cfg, &editor, &torrent,
-        &EditForm::from_torrent(&torrent), &HashMap::new())?;
+        &EditForm::from_torrent(&torrent), &HashMap::new(), &flash::take(&session))?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
@@ -635,7 +657,7 @@ pub async fn edit_torrent_post(
         let (main_cat, sub_cat) = match form.validate(&mut conn) {
             Ok(ids) => ids,
             Err(errors) => {
-                let html = render_edit(&mut conn, &tmpl, &cfg, &editor, &torrent, &form, &errors)?;
+                let html = render_edit(&mut conn, &tmpl, &cfg, &editor, &torrent, &form, &errors, &[])?;
                 return Ok(HttpResponse::BadRequest().content_type("text/html").body(html));
             }
         };
@@ -668,33 +690,177 @@ pub async fn edit_torrent_post(
         return Ok(redirect(&view_url));
     }
 
-    let Some((flags, action)) = form.danger_action()
-        .and_then(|a| danger_action(torrent.flags, a, &editor)) else {
-        // A button that doesn't apply here (upstream flashes an error and goes back)
-        return Ok(redirect(&format!("{}/edit", view_url)));
-    };
-    log::info!("Torrent #{} {} by {}", torrent.id, action, editor.username);
-    conn.transaction::<_, diesel::result::Error, _>(|conn| {
-        diesel::update(nyaa_torrents::table.find(torrent.id))
-            .set(nyaa_torrents::flags.eq(flags))
-            .execute(conn)?;
-        // Upstream also drops banned torrents from the tracker, so their peers are gone
-        if flags & TorrentFlags::BANNED.bits() != 0 {
-            diesel::update(nyaa_statistics::table.find(torrent.id))
-                .set((nyaa_statistics::seed_count.eq(0), nyaa_statistics::leech_count.eq(0)))
-                .execute(conn)?;
+    let edit_url = format!("{}/edit", view_url);
+    let torrent_action = form.danger_action()
+        .and_then(|a| danger_action(torrent.flags, a, &editor));
+    let uploader_ban = if form.bans_uploader() {
+        let target = UploaderBanTarget::load(&mut conn, &torrent)
+            .map_err(actix_web::error::ErrorInternalServerError)?;
+        if !target.can_be_banned_by(&editor) {
+            return Err(actix_web::error::ErrorForbidden("You may not ban this uploader"));
         }
-        // Upstream logs moderator actions on other people's torrents
-        if editor.is_moderator() && torrent.uploader_id != Some(editor.id) {
-            AdminLog::add(conn, editor.id,
-                &format!("Torrent {} has been {}", torrent_link(torrent.id), action))?;
+        match target.plan(&form, &torrent, &cfg) {
+            Ok(plan) => Some(plan),
+            Err(message) => {
+                flash::push(&session, "danger", "", message);
+                return Ok(redirect(&edit_url));
+            }
+        }
+    } else {
+        None
+    };
+    if torrent_action.is_none() && uploader_ban.is_none() {
+        // A button that doesn't apply here (upstream flashes an error and goes back)
+        return Ok(redirect(&edit_url));
+    }
+    conn.transaction::<_, diesel::result::Error, _>(|conn| {
+        if let Some((flags, action)) = torrent_action {
+            log::info!("Torrent #{} {} by {}", torrent.id, action, editor.username);
+            diesel::update(nyaa_torrents::table.find(torrent.id))
+                .set(nyaa_torrents::flags.eq(flags))
+                .execute(conn)?;
+            // Upstream also drops banned torrents from the tracker, so their peers are gone
+            if flags & TorrentFlags::BANNED.bits() != 0 {
+                diesel::update(nyaa_statistics::table.find(torrent.id))
+                    .set((nyaa_statistics::seed_count.eq(0), nyaa_statistics::leech_count.eq(0)))
+                    .execute(conn)?;
+            }
+            // Upstream logs moderator actions on other people's torrents
+            if editor.is_moderator() && torrent.uploader_id != Some(editor.id) {
+                AdminLog::add(conn, editor.id,
+                    &format!("Torrent {} has been {}", torrent_link(torrent.id), action))?;
+            }
+        }
+        if let Some(plan) = &uploader_ban {
+            plan.apply(conn, &editor, torrent.id)?;
         }
         Ok(())
     }).map_err(actix_web::error::ErrorInternalServerError)?;
+    // Only the torrent page shows flashes; owners deleting their own torrent go home
+    if let Some((_, action)) = torrent_action.filter(|_| editor.is_moderator()) {
+        flash::push(&session, "success", "", &format!("Torrent has been successfully {}.", action));
+    }
+    if uploader_ban.is_some() {
+        flash::push(&session, "success", "", "Uploader has been successfully banned.");
+    }
     crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), torrent.id);
 
     // Moderators go back to the torrent; owners deleting their own go home
     Ok(redirect(if editor.is_moderator() { &view_url } else { "/" }))
+}
+
+/// A torrent's uploader as the edit page's ban buttons see them (upstream `_delete_torrent`).
+struct UploaderBanTarget {
+    uploader: Option<User>,
+    uploader_ip: Option<Vec<u8>>,
+    /// Whether the torrent's upload IP is already banned (or unknown, so there is nothing to ban).
+    torrent_ip_banned: bool,
+    /// Whether the uploader's last login IP is already banned (or there is no uploader or IP).
+    user_ip_banned: bool,
+}
+
+/// The bans one uploader-ban button press will add.
+struct UploaderBanPlan {
+    user_id: Option<i32>,
+    ips: Vec<Vec<u8>>,
+    reason: String,
+    /// Upstream's "[name](/user/name) IP(...)" or "Anonymous IP(...)".
+    uploader_str: String,
+}
+
+impl UploaderBanTarget {
+    fn load(conn: &mut DbConnection, torrent: &Torrent) -> QueryResult<Self> {
+        let uploader = match torrent.uploader_id {
+            Some(uid) => User::by_id(conn, uid)?,
+            None => None,
+        };
+        let ip_banned = |conn: &mut DbConnection, ip: Option<&[u8]>| match ip {
+            Some(ip) => Ban::ip_banned(conn, ip),
+            None => Ok(true),
+        };
+        let torrent_ip_banned = ip_banned(conn, torrent.uploader_ip.as_deref())?;
+        let user_ip_banned = ip_banned(conn, uploader.as_ref().and_then(|u| u.last_login_ip.as_deref()))?;
+        Ok(UploaderBanTarget { uploader, uploader_ip: torrent.uploader_ip.clone(), torrent_ip_banned, user_ip_banned })
+    }
+
+    /// Moderators may ban uploaders ranked below them, and anonymous (account-less) uploads.
+    fn can_be_banned_by(&self, editor: &User) -> bool {
+        editor.is_moderator() && self.uploader.as_ref().map(|u| u.level < editor.level).unwrap_or(true)
+    }
+
+    fn ip_banned(&self) -> bool {
+        self.torrent_ip_banned && self.user_ip_banned
+    }
+
+    /// Checks the button against the uploader's state and works out the bans, or the
+    /// message to flash when it doesn't apply.
+    fn plan(&self, form: &EditForm, torrent: &Torrent, cfg: &Config) -> std::result::Result<UploaderBanPlan, &'static str> {
+        let ban_ip = form.ban_userip.is_some();
+        let reason = form.reason.trim();
+        if reason.is_empty() {
+            return Err("Please specify a ban reason.");
+        }
+        if reason.chars().count() > MAX_BAN_REASON_LEN {
+            return Err("Reason must be at most 1024 characters long.");
+        }
+        let user_banned = self.uploader.as_ref().map(|u| u.is_banned()).unwrap_or(true);
+        if (!ban_ip && user_banned) || (ban_ip && self.ip_banned()) {
+            return Err("That action doesn't apply to this uploader.");
+        }
+        // Upstream bans the uploader's login IP and, when different, the upload IP
+        let mut ips = Vec::new();
+        if ban_ip {
+            if !self.user_ip_banned {
+                ips.extend(self.uploader.as_ref().and_then(|u| u.last_login_ip.clone()));
+            }
+            if !self.torrent_ip_banned {
+                ips.extend(self.uploader_ip.clone());
+            }
+            ips.dedup();
+            if ips.iter().filter_map(|ip| unpack_ip(ip)).any(|ip| ip.is_loopback()) {
+                return Err("The uploader's IP is a loopback address, which would ban everyone behind the proxy.");
+            }
+        }
+        let flavor = if cfg.site_flavor == "sukebei" { "Sukebei" } else { "Nyaa" };
+        let url = format!("{}/view/{}", cfg.site_url.trim_end_matches('/'), torrent.id);
+        let mut uploader_str = match &self.uploader {
+            Some(u) => user_link(&u.username),
+            None => "Anonymous".to_string(),
+        };
+        for ip in ips.iter().filter_map(|ip| unpack_ip(ip)) {
+            uploader_str.push_str(&format!(" IP({})", ip));
+        }
+        Ok(UploaderBanPlan {
+            user_id: self.uploader.as_ref().map(|u| u.id),
+            ips,
+            reason: format!("[{}#{}]({}) {}", flavor, torrent.id, url, sanitize_text(reason)),
+            uploader_str,
+        })
+    }
+}
+
+impl UploaderBanPlan {
+    /// Bans the uploader account and IPs and logs it; runs inside the edit transaction.
+    fn apply(&self, conn: &mut DbConnection, editor: &User, torrent_id: i32) -> QueryResult<()> {
+        if let Some(uid) = self.user_id {
+            diesel::update(users::table.find(uid))
+                .set(users::status.eq(UserStatus::Banned as i32))
+                .execute(conn)?;
+        }
+        // One ban per IP; a user-only ban when there are none
+        let ips: Vec<Option<Vec<u8>>> = if self.ips.is_empty() { vec![None] } else { self.ips.iter().cloned().map(Some).collect() };
+        for user_ip in ips {
+            diesel::insert_into(bans::table).values(NewBan {
+                created_time: chrono::Utc::now().naive_utc(),
+                admin_id: editor.id,
+                user_id: self.user_id,
+                user_ip,
+                reason: self.reason.clone(),
+            }).execute(conn)?;
+        }
+        AdminLog::add(conn, editor.id, &format!("Uploader {} of torrent {} has been banned.",
+            self.uploader_str, torrent_link(torrent_id)))
+    }
 }
 
 fn redirect(location: &str) -> HttpResponse {
@@ -915,6 +1081,57 @@ mod tests {
                 (3, "Torrent [#5](/view/5) has been deleted and banned".to_string()),
                 (3, "Torrent [#5](/view/5) has been undeleted and unbanned".to_string()),
             ]);
+        }
+
+        #[actix_web::test]
+        async fn moderator_bans_torrent_and_uploader_from_the_edit_page() {
+            let pool = pool();
+            diesel::sql_query("UPDATE users SET last_login_ip = X'0000000000000000000000000A000007' WHERE id = 1")
+                .execute(&mut pool.get().unwrap()).unwrap();
+            let (app, cookie) = app!(pool, Some(3));
+            let page = String::from_utf8(test::call_and_read_body(&app, get("/view/5/edit", &cookie).to_request()).await.to_vec()).unwrap();
+            assert!(page.contains("value=\"Delete &amp; Ban and Ban User\""), "{page}");
+            assert!(page.contains("value=\"Delete &amp; Ban and Ban User+IP\""), "{page}");
+
+            // A reason is required, and nothing changes without one
+            let res = test::call_service(&app, post("/view/5/edit", &cookie, &[("ban_userip", "x"), ("reason", "")]).to_request()).await;
+            assert_eq!(location(&res), "/view/5/edit");
+            assert!(!torrent(&pool).is_deleted());
+
+            let res = test::call_service(&app, post("/view/5/edit", &cookie,
+                &[("ban_userip", "Delete & Ban and Ban User+IP"), ("reason", "spam")]).to_request()).await;
+            assert_eq!(location(&res), "/view/5");
+            assert!(torrent(&pool).is_deleted() && torrent(&pool).is_banned());
+            let mut conn = pool.get().unwrap();
+            assert!(User::by_id(&mut conn, 1).unwrap().unwrap().is_banned());
+            let bans: Vec<Ban> = bans::table.select(Ban::as_select()).load(&mut conn).unwrap();
+            assert_eq!(bans.len(), 1);
+            assert_eq!((bans[0].admin_id, bans[0].user_id), (3, Some(1)));
+            assert_eq!(bans[0].ip_string().as_deref(), Some("10.0.0.7"));
+            assert_eq!(bans[0].reason, "[Nyaa#5](/view/5) spam");
+            drop(conn);
+            assert_eq!(admin_logs(&pool), [
+                (3, "Torrent [#5](/view/5) has been deleted and banned".to_string()),
+                (3, "Uploader [owner](/user/owner) IP(10.0.0.7) of torrent [#5](/view/5) has been banned.".to_string()),
+            ]);
+
+            // Everything is banned now, so the buttons are gone and a repeat does nothing
+            let page = String::from_utf8(test::call_and_read_body(&app, get("/view/5/edit", &cookie).to_request()).await.to_vec()).unwrap();
+            assert!(page.contains("The uploader is <strong>IP banned</strong>") && !page.contains("name=\"ban_userip\""), "{page}");
+            test::call_service(&app, post("/view/5/edit", &cookie, &[("ban_user", "x"), ("reason", "again")]).to_request()).await;
+            assert_eq!(bans::table.count().get_result::<i64>(&mut pool.get().unwrap()).unwrap(), 1);
+        }
+
+        #[actix_web::test]
+        async fn uploader_ban_needs_a_higher_rank() {
+            let pool = pool();
+            diesel::sql_query("UPDATE users SET level = 2 WHERE id = 1").execute(&mut pool.get().unwrap()).unwrap();
+            let (app, cookie) = app!(pool, Some(3));
+            let page = String::from_utf8(test::call_and_read_body(&app, get("/view/5/edit", &cookie).to_request()).await.to_vec()).unwrap();
+            assert!(!page.contains("name=\"ban_user\""), "{page}");
+            let res = test::call_service(&app, post("/view/5/edit", &cookie, &[("ban_user", "x"), ("reason", "r")]).to_request()).await;
+            assert_eq!(res.status(), StatusCode::FORBIDDEN);
+            assert!(!torrent(&pool).is_deleted());
         }
 
         fn admin_logs(pool: &DbPool) -> Vec<(i32, String)> {

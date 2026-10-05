@@ -112,6 +112,19 @@
 						</div>
 						{% endif %}
 					</form>
+					{% if current_user.level >= 3 %}
+					<hr>
+					<form method="POST" onsubmit="return prompt('Please type {{ profile_user.username }} to confirm') == '{{ profile_user.username }}'">
+						<div class="row">
+							<div class="col-md-6 text-left">
+								<input class="btn btn-danger" id="nuke_torrents" name="nuke_torrents" type="submit" value="&#x1F4A3; Nuke Torrents" formaction="/user/{{ profile_user.username | urlencode }}/nuke/torrents">
+							</div>
+							<div class="col-md-6 text-right">
+								<input class="btn btn-danger" id="nuke_comments" name="nuke_comments" type="submit" value="&#x1F4A3; Nuke Comments" formaction="/user/{{ profile_user.username | urlencode }}/nuke/comments">
+							</div>
+						</div>
+					</form>
+					{% endif %}
 				</div>
 			</div>
 		</div>

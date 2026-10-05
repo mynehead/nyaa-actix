@@ -92,6 +92,8 @@ async fn main() -> std::io::Result<()> {
             // Users
             .route("/user/{username}", web::get().to(handlers::users::view_user))
             .route("/user/{username}", web::post().to(handlers::users::ban_user_post))
+            .route("/user/{username}/nuke/torrents", web::post().to(handlers::users::nuke_torrents_post))
+            .route("/user/{username}/nuke/comments", web::post().to(handlers::users::nuke_comments_post))
             // Account
             .route("/account/login", web::get().to(handlers::account::login_get))
             .route("/account/login", web::post().to(handlers::account::login_post))
