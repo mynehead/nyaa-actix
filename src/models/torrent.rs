@@ -8,6 +8,7 @@ bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     pub struct TorrentFlags: i32 {
         const HIDDEN        = 0x01;
+        const ANONYMOUS     = 0x02;
         const REMAKE        = 0x04;
         const TRUSTED       = 0x08;
         const COMPLETE      = 0x10;
@@ -51,6 +52,10 @@ impl Torrent {
 
     pub fn is_hidden(&self) -> bool {
         self.flags & TorrentFlags::HIDDEN.bits() != 0
+    }
+
+    pub fn is_anonymous(&self) -> bool {
+        self.flags & TorrentFlags::ANONYMOUS.bits() != 0
     }
 
     pub fn is_remake(&self) -> bool {

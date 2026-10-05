@@ -29,6 +29,7 @@ fn user_filter(
 
 pub fn register(tera: &mut Tera) {
     tera.register_filter("is_trusted", torrent_filter("is_trusted", |t| Value::Bool(t.is_trusted())));
+    tera.register_filter("is_anonymous", torrent_filter("is_anonymous", |t| Value::Bool(t.is_anonymous())));
     tera.register_filter("is_remake", torrent_filter("is_remake", |t| Value::Bool(t.is_remake())));
     tera.register_filter("row_class", torrent_filter("row_class", |t| to_value(t.row_class()).unwrap()));
     tera.register_filter("filesize_human", torrent_filter("filesize_human", |t| to_value(t.filesize_human()).unwrap()));

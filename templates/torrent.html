@@ -19,6 +19,7 @@
             <dd>
                 {% if uploader %}
                 <a href="/user/{{ uploader.username }}">{{ uploader.username }}</a>
+                {% if torrent | is_anonymous %}<span class="text-muted">(anonymous to others)</span>{% endif %}
                 {% else %}
                 Anonymous
                 {% endif %}
