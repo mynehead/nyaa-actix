@@ -1,5 +1,6 @@
 use actix_multipart::Multipart;
 use actix_session::Session;
+use actix_web::http::header::{Charset, ContentDisposition, DispositionParam, DispositionType, ExtendedValue};
 use actix_web::{web, HttpRequest, HttpResponse, Result};
 use futures_util::StreamExt;
 use serde::Deserialize;
@@ -45,11 +46,14 @@ pub async fn view_torrent(
         .load(&mut conn)
         .map_err(actix_web::error::ErrorInternalServerError)?;
 
-    let uploader: Option<User> = if let Some(uid) = torrent.uploader_id {
-        User::by_id(&mut conn, uid)
-            .map_err(actix_web::error::ErrorInternalServerError)?
-    } else {
-        None
+    // Anonymous uploads only name their uploader to that uploader and moderators
+    let can_see_uploader = !torrent.is_anonymous() || current_user.as_ref()
+        .map(|u| u.is_moderator() || Some(u.id) == torrent.uploader_id)
+        .unwrap_or(false);
+    let uploader: Option<User> = match torrent.uploader_id {
+        Some(uid) if can_see_uploader => User::by_id(&mut conn, uid)
+            .map_err(actix_web::error::ErrorInternalServerError)?,
+        _ => None,
     };
 
     let magnet = torrent.magnet_uri(&torrent.display_name, &cfg.trackers());
@@ -111,9 +115,35 @@ pub async fn download_torrent(
 
     Ok(HttpResponse::Ok()
         .content_type("application/x-bittorrent")
-        .insert_header(("Content-Disposition",
-            format!("attachment; filename=\"{}.torrent\"", torrent.torrent_name)))
+        .insert_header(attachment_header(&torrent.torrent_name))
         .body(torrent_data))
+}
+
+/// `attachment` with an ASCII `filename` fallback plus the UTF-8 `filename*`,
+/// so the uploader-controlled name can't break out of the header.
+fn attachment_header(name: &str) -> ContentDisposition {
+    let ascii: String = name.chars()
+        .map(|c| if c.is_ascii_graphic() || c == ' ' { c } else { '_' })
+        .collect();
+    ContentDisposition {
+        disposition: DispositionType::Attachment,
+        parameters: vec![
+            DispositionParam::Filename(ascii),
+            DispositionParam::FilenameExt(ExtendedValue {
+                charset: Charset::Ext("UTF-8".into()),
+                language_tag: None,
+                value: name.as_bytes().to_vec(),
+            }),
+        ],
+    }
+}
+
+/// Makes a .torrent `name` safe to offer as a download filename.
+fn torrent_filename(name: &str) -> String {
+    let cleaned: String = sanitize_string(name).chars()
+        .map(|c| if matches!(c, '"' | '/' | '\\') { '_' } else { c })
+        .collect();
+    format!("{}.torrent", cleaned.trim())
 }
 
 pub async fn magnet_redirect(
@@ -189,6 +219,27 @@ pub async fn upload_get(
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
+/// nyaa's limit for .torrent files.
+const MAX_TORRENT_SIZE: usize = 10 * 1024 * 1024;
+/// Per text field (name, information, description, ...).
+const MAX_TEXT_FIELD_SIZE: usize = 64 * 1024;
+/// Well above what the upload form sends.
+const MAX_FIELDS: usize = 32;
+
+/// Reads one multipart field, failing with 413 as soon as it passes `limit`
+/// so a huge field is never buffered in memory.
+async fn read_field(field: &mut actix_multipart::Field, limit: usize) -> Result<Vec<u8>> {
+    let mut data = Vec::new();
+    while let Some(chunk) = field.next().await {
+        let chunk = chunk.map_err(actix_web::error::ErrorBadRequest)?;
+        if data.len() + chunk.len() > limit {
+            return Err(actix_web::error::ErrorPayloadTooLarge("Upload field too large"));
+        }
+        data.extend_from_slice(&chunk);
+    }
+    Ok(data)
+}
+
 pub async fn upload_post(
     req: HttpRequest,
     session: Session,
@@ -210,14 +261,16 @@ pub async fn upload_post(
     let mut group_id: Option<i32> = None;
     let mut flags: i32 = 0;
 
+    let mut field_count = 0;
     while let Some(item) = payload.next().await {
         let mut field = item.map_err(actix_web::error::ErrorBadRequest)?;
-        let name = field.name().unwrap_or_default().to_string();
-        let mut data = Vec::new();
-        while let Some(chunk) = field.next().await {
-            let chunk = chunk.map_err(actix_web::error::ErrorBadRequest)?;
-            data.extend_from_slice(&chunk);
+        field_count += 1;
+        if field_count > MAX_FIELDS {
+            return Err(actix_web::error::ErrorPayloadTooLarge("Too many form fields"));
         }
+        let name = field.name().unwrap_or_default().to_string();
+        let limit = if name == "torrent_file" { MAX_TORRENT_SIZE } else { MAX_TEXT_FIELD_SIZE };
+        let data = read_field(&mut field, limit).await?;
         match name.as_str() {
             "torrent_file" => torrent_bytes = Some(data),
             "display_name" => display_name = String::from_utf8_lossy(&data).into_owned(),
@@ -227,7 +280,7 @@ pub async fn upload_post(
             "group_id" => group_id = String::from_utf8_lossy(&data).parse().ok(),
             "is_hidden" => { if !data.is_empty() { flags |= crate::models::TorrentFlags::HIDDEN.bits(); } }
             "is_remake" => { if !data.is_empty() { flags |= crate::models::TorrentFlags::REMAKE.bits(); } }
-            "is_anonymous" => { if !data.is_empty() { flags |= 0; } } // handled separately
+            "is_anonymous" => { if !data.is_empty() { flags |= crate::models::TorrentFlags::ANONYMOUS.bits(); } }
             "is_complete" => { if !data.is_empty() { flags |= crate::models::TorrentFlags::COMPLETE.bits(); } }
             "is_trusted" => {
                 if !data.is_empty() {
@@ -276,14 +329,12 @@ pub async fn upload_post(
         sanitize_string(display_name.trim())
     };
 
-    // Store info dict
-    let torrent_id_placeholder = 0i32; // will get real id after insert
     let now = chrono::Utc::now().naive_utc();
 
     let new_torrent = NewTorrent {
         info_hash: meta.info_hash.clone(),
         display_name: final_name,
-        torrent_name: format!("{}.torrent", meta.display_name),
+        torrent_name: torrent_filename(&meta.display_name),
         information: sanitize_string(information.trim()),
         description: sanitize_string(description.trim()),
         filesize: meta.filesize,
@@ -300,37 +351,64 @@ pub async fn upload_post(
         group_id: resolved_group,
     };
 
-    diesel::insert_into(nyaa_torrents::table)
-        .values(&new_torrent)
-        .execute(&mut conn)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    // One transaction for the row, its statistics and the stored info dict,
+    // so a failed file write leaves no half-created torrent behind.
+    let inserted = conn.transaction::<Torrent, anyhow::Error, _>(|conn| {
+        diesel::insert_into(nyaa_torrents::table)
+            .values(&new_torrent)
+            .execute(conn)?;
 
-    let inserted: Torrent = nyaa_torrents::table
-        .order(nyaa_torrents::id.desc())
-        .first(&mut conn)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+        // info_hash is UNIQUE, so this finds our row even with concurrent uploads
+        let inserted: Torrent = nyaa_torrents::table
+            .filter(nyaa_torrents::info_hash.eq(&new_torrent.info_hash))
+            .first(conn)?;
 
-    // Save torrent info dict to disk
-    let dir: PathBuf = [&cfg.torrent_storage_path, &format!("{}", inserted.id / 1000)]
-        .iter().collect();
-    std::fs::create_dir_all(&dir).ok();
-    let file_path = dir.join(format!("{}.torrent.info", inserted.id));
-    std::fs::write(&file_path, &meta.bencoded_info).ok();
+        diesel::insert_into(nyaa_statistics::table)
+            .values(&NewStatistic {
+                torrent_id: inserted.id,
+                seed_count: 0,
+                leech_count: 0,
+                download_count: 0,
+                last_updated: now,
+            })
+            .execute(conn)?;
 
-    // Insert statistics row
-    let new_stat = NewStatistic {
-        torrent_id: inserted.id,
-        seed_count: 0,
-        leech_count: 0,
-        download_count: 0,
-        last_updated: now,
-    };
-    diesel::insert_into(nyaa_statistics::table)
-        .values(&new_stat)
-        .execute(&mut conn)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+        // Write to a temp file and rename, so readers never see a partial file
+        let dir: PathBuf = [&cfg.torrent_storage_path, &format!("{}", inserted.id / 1000)]
+            .iter().collect();
+        std::fs::create_dir_all(&dir)?;
+        let file_path = dir.join(format!("{}.torrent.info", inserted.id));
+        let tmp_path = dir.join(format!("{}.torrent.info.tmp", inserted.id));
+        std::fs::write(&tmp_path, &meta.bencoded_info)?;
+        std::fs::rename(&tmp_path, &file_path)?;
+
+        Ok(inserted)
+    }).map_err(|e| {
+        log::error!("Failed to store upload: {:#}", e);
+        actix_web::error::ErrorInternalServerError("Failed to store torrent")
+    })?;
 
     Ok(HttpResponse::Found()
         .insert_header(("Location", format!("/view/{}", inserted.id)))
         .finish())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::http::header::TryIntoHeaderValue;
+
+    #[test]
+    fn torrent_filename_strips_quotes_separators_and_control_chars() {
+        assert_eq!(torrent_filename("My Show [01]"), "My Show [01].torrent");
+        assert_eq!(torrent_filename("a\"b/c\\d\r\ne"), "a_b_c_de.torrent");
+    }
+
+    #[test]
+    fn attachment_header_escapes_and_encodes_name() {
+        let value = attachment_header("évil\".torrent").try_into_value().unwrap();
+        let value = value.to_str().unwrap();
+        assert!(value.starts_with("attachment; filename=\"_vil\\\".torrent\""), "{}", value);
+        assert!(value.contains("filename*=UTF-8''%C3%A9vil%22.torrent"), "{}", value);
+    }
 }

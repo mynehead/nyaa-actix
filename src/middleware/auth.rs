@@ -9,7 +9,8 @@ pub const SESSION_USER_KEY: &str = "user_id";
 pub fn get_current_user(session: &Session, pool: &Pool<ConnectionManager<SqliteConnection>>) -> Option<User> {
     let user_id: i32 = session.get(SESSION_USER_KEY).ok()??;
     let mut conn = pool.get().ok()?;
-    User::by_id(&mut conn, user_id).ok()?
+    // Banned or deactivated users lose access immediately, not at next login
+    User::by_id(&mut conn, user_id).ok()?.filter(|u| u.is_active())
 }
 
 pub fn login_user(session: &Session, user_id: i32) -> Result<(), actix_session::SessionInsertError> {

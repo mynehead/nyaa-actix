@@ -37,7 +37,7 @@ pub async fn view_user(
         .map_err(actix_web::error::ErrorInternalServerError)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("User not found"))?;
 
-    let q = SearchQuery::from_params(
+    let mut q = SearchQuery::from_params(
         params.q.clone(),
         Some(profile_user.id),
         None,
@@ -49,6 +49,11 @@ pub async fn view_user(
         cfg.results_per_page,
         is_admin,
     );
+    // Owners and moderators see everything on the profile; everyone else
+    // sees neither hidden nor anonymous uploads.
+    let is_owner = current_user.as_ref().map(|u| u.id == profile_user.id).unwrap_or(false);
+    q.include_hidden = is_admin || is_owner;
+    q.hide_anonymous = !(is_admin || is_owner);
 
     let result = search(&mut conn, &q)
         .map_err(actix_web::error::ErrorInternalServerError)?;

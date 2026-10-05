@@ -27,6 +27,8 @@ pub struct SearchQuery {
     pub per_page: i64,
     pub include_deleted: bool,
     pub include_hidden: bool,
+    /// Leave out anonymous uploads (set on profile pages for other viewers).
+    pub hide_anonymous: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -61,6 +63,7 @@ impl SearchQuery {
             per_page: 75,
             include_deleted: false,
             include_hidden: false,
+            hide_anonymous: false,
         }
     }
 
@@ -103,6 +106,7 @@ impl SearchQuery {
             per_page,
             include_deleted: is_admin,
             include_hidden: is_admin,
+            hide_anonymous: false,
         }
     }
 }
@@ -132,13 +136,14 @@ impl SearchResult {
 
 use crate::models::TorrentFlags;
 
-pub fn search(conn: &mut SqliteConnection, q: &SearchQuery) -> QueryResult<SearchResult> {
+/// Builds the filtered (unsorted, unpaged) query. Used for both the count
+/// and the page so the two can't disagree on what is visible.
+fn filtered(q: &SearchQuery) -> nyaa_torrents::BoxedQuery<'static, diesel::sqlite::Sqlite> {
     let mut query = nyaa_torrents::table.into_boxed();
 
     // Term search (LIKE on display_name)
     if let Some(ref term) = q.term {
-        let pattern = format!("%{}%", term);
-        query = query.filter(nyaa_torrents::display_name.like(pattern));
+        query = query.filter(nyaa_torrents::display_name.like(format!("%{}%", term)));
     }
 
     // User filter
@@ -177,42 +182,22 @@ pub fn search(conn: &mut SqliteConnection, q: &SearchQuery) -> QueryResult<Searc
         query = query.filter(nyaa_torrents::flags.bitand(deleted_banned).eq(0));
     }
 
-    // Hide hidden unless admin
+    // Hidden torrents are reachable by link only, including on the uploader's profile
     if !q.include_hidden {
-        let hidden_bit = TorrentFlags::HIDDEN.bits();
-        if q.user_id.is_none() {
-            query = query.filter(nyaa_torrents::flags.bitand(hidden_bit).eq(0));
-        }
+        query = query.filter(nyaa_torrents::flags.bitand(TorrentFlags::HIDDEN.bits()).eq(0));
     }
 
-    // Count total (clone the base filter state by re-building — diesel boxed queries aren't Clone)
-    // We use a separate count query
-    let mut count_q = nyaa_torrents::table.into_boxed();
-    if let Some(ref term) = q.term {
-        count_q = count_q.filter(nyaa_torrents::display_name.like(format!("%{}%", term)));
-    }
-    if let Some(uid) = q.user_id { count_q = count_q.filter(nyaa_torrents::uploader_id.eq(uid)); }
-    if let Some(gid) = q.group_id { count_q = count_q.filter(nyaa_torrents::group_id.eq(gid)); }
-    if let Some(main) = q.main_category {
-        count_q = count_q.filter(nyaa_torrents::main_category_id.eq(main));
-        if let Some(sub) = q.sub_category { count_q = count_q.filter(nyaa_torrents::sub_category_id.eq(sub)); }
-    }
-    match q.quality_filter {
-        1 => { count_q = count_q.filter(diesel::dsl::not(nyaa_torrents::flags.bitand(remake_bit).ne(0))); }
-        2 => { count_q = count_q.filter(nyaa_torrents::flags.bitand(trusted_bit).ne(0)); }
-        3 => { count_q = count_q.filter(nyaa_torrents::flags.bitand(trusted_bit).ne(0))
-                                .filter(nyaa_torrents::flags.bitand(complete_bit).ne(0)); }
-        _ => {}
-    }
-    if !q.include_deleted {
-        let deleted_banned = TorrentFlags::DELETED.bits() | TorrentFlags::BANNED.bits();
-        count_q = count_q.filter(nyaa_torrents::flags.bitand(deleted_banned).eq(0));
-    }
-    if !q.include_hidden && q.user_id.is_none() {
-        count_q = count_q.filter(nyaa_torrents::flags.bitand(TorrentFlags::HIDDEN.bits()).eq(0));
+    // Anonymous torrents must not be tied to their uploader in listings
+    if q.hide_anonymous {
+        query = query.filter(nyaa_torrents::flags.bitand(TorrentFlags::ANONYMOUS.bits()).eq(0));
     }
 
-    let total: i64 = count_q.count().get_result(conn)?;
+    query
+}
+
+pub fn search(conn: &mut SqliteConnection, q: &SearchQuery) -> QueryResult<SearchResult> {
+    let total: i64 = filtered(q).count().get_result(conn)?;
+    let query = filtered(q);
 
     // Sort
     let offset = (q.page - 1) * q.per_page;
@@ -233,4 +218,62 @@ pub fn search(conn: &mut SqliteConnection, q: &SearchQuery) -> QueryResult<Searc
     .load::<Torrent>(conn)?;
 
     Ok(SearchResult { torrents, total, page: q.page, per_page: q.per_page })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::TorrentFlags;
+    use diesel_migrations::MigrationHarness;
+
+    fn db_with(torrents: &[(i32, TorrentFlags)]) -> SqliteConnection {
+        let mut conn = SqliteConnection::establish(":memory:").unwrap();
+        conn.run_pending_migrations(crate::MIGRATIONS).unwrap();
+        diesel::sql_query("INSERT INTO users (id, username, password_hash) VALUES (1, 'u', 'x')")
+            .execute(&mut conn).unwrap();
+        for (id, flags) in torrents {
+            diesel::sql_query(format!(
+                "INSERT INTO nyaa_torrents (id, info_hash, display_name, torrent_name, flags, \
+                 uploader_id, main_category_id, sub_category_id) VALUES ({id}, X'{id:040x}', 't', 't', {}, 1, 1, 0)",
+                flags.bits()
+            )).execute(&mut conn).unwrap();
+        }
+        conn
+    }
+
+    fn ids(conn: &mut SqliteConnection, q: &SearchQuery) -> (Vec<i32>, i64) {
+        let r = search(conn, q).unwrap();
+        (r.torrents.iter().map(|t| t.id).collect(), r.total)
+    }
+
+    #[test]
+    fn profile_hides_hidden_and_anonymous_from_other_viewers() {
+        let mut conn = db_with(&[
+            (1, TorrentFlags::empty()),
+            (2, TorrentFlags::HIDDEN),
+            (3, TorrentFlags::ANONYMOUS),
+            (4, TorrentFlags::DELETED),
+        ]);
+        let mut q = SearchQuery::new();
+        q.user_id = Some(1);
+
+        // Another viewer on the profile
+        q.hide_anonymous = true;
+        assert_eq!(ids(&mut conn, &q), (vec![1], 1));
+
+        // The owner (or a moderator) on the profile
+        q.hide_anonymous = false;
+        q.include_hidden = true;
+        assert_eq!(ids(&mut conn, &q), (vec![3, 2, 1], 3));
+    }
+
+    #[test]
+    fn main_listing_shows_anonymous_but_not_hidden() {
+        let mut conn = db_with(&[
+            (1, TorrentFlags::empty()),
+            (2, TorrentFlags::HIDDEN),
+            (3, TorrentFlags::ANONYMOUS),
+        ]);
+        assert_eq!(ids(&mut conn, &SearchQuery::new()), (vec![3, 1], 2));
+    }
 }
