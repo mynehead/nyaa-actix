@@ -8,6 +8,13 @@
 //! (`.\target\debug\nyaa-actix.exe create-user ...`): after a source change `cargo run` relinks
 //! the exe, which Windows refuses while the server has it open.
 //!
+//! `nyaa-actix migrate-storage [--dry-run]` copies the torrent info dicts and avatars from
+//! TORRENT_STORAGE_PATH and AVATAR_STORAGE_PATH into the S3 bucket the S3_* settings name
+//! (see `storage`), keeping the same keys. Files already in the bucket with the same size
+//! are skipped, so it can be run again after an interruption, or once more right before
+//! switching STORAGE_BACKEND to s3 to pick up uploads made in the meantime. Local files
+//! are left in place.
+//!
 //! `nyaa-actix reindex` rebuilds the Meilisearch index named by MEILI_URL / MEILI_KEY /
 //! MEILI_INDEX from the database. Searches keep using the old index until the new one is
 //! complete. Run it once after setting up Meilisearch, and again if the index is lost.
@@ -16,16 +23,19 @@ use diesel::prelude::*;
 
 use crate::db::DbConnection;
 use crate::db::schema::users;
+use crate::storage::{S3Settings, Storage};
 use crate::models::user::{NewUser, User, UserLevel};
 
 const USAGE: &str = "usage: nyaa-actix create-user <username> <password> [--level regular|trusted|moderator|admin] [--email <addr>]
+       nyaa-actix migrate-storage [--dry-run]
        nyaa-actix reindex";
 
 /// Runs the subcommand named in `args` (program name already stripped).
 /// Returns None when there is no subcommand, so the caller starts the server.
-pub fn run(args: &[String]) -> Option<Result<(), String>> {
+pub async fn run(args: &[String]) -> Option<Result<(), String>> {
     match args.first().map(String::as_str) {
         Some("create-user") => Some(create_user(&args[1..])),
+        Some("migrate-storage") => Some(migrate_storage(&args[1..]).await),
         Some("reindex") => Some(reindex()),
         Some("help" | "--help" | "-h") => {
             println!("{USAGE}\nWith no subcommand, starts the web server.");
@@ -101,6 +111,26 @@ fn create_user(args: &[String]) -> Result<(), String> {
         .execute(&mut conn)
         .map_err(|e| e.to_string())?;
     println!("created {:?} user `{}` in {database_url}", opts.level, opts.username);
+    Ok(())
+}
+
+async fn migrate_storage(args: &[String]) -> Result<(), String> {
+    let dry_run = match args {
+        [] => false,
+        [flag] if flag == "--dry-run" => true,
+        _ => return Err(USAGE.to_string()),
+    };
+    dotenvy::dotenv().ok();
+    let path = |key: &str, default: &str| std::env::var(key).unwrap_or_else(|_| default.into());
+    // Same defaults as Config; read directly so this doesn't need SECRET_KEY
+    let local = Storage::local(&path("TORRENT_STORAGE_PATH", "./torrents"), &path("AVATAR_STORAGE_PATH", "./avatars"))?;
+    let s3 = Storage::s3(&S3Settings::from_vars(|k| std::env::var(k).ok())?)?;
+    println!("{} files from {} to {}", if dry_run { "Checking" } else { "Copying" }, local.description(), s3.description());
+    let (copied, skipped) = local.copy_all(&s3, dry_run).await?;
+    println!("{} {copied}, already there {skipped}", if dry_run { "would copy" } else { "copied" });
+    if !dry_run {
+        println!("Set STORAGE_BACKEND=s3 and restart the server to use the bucket.");
+    }
     Ok(())
 }
 

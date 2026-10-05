@@ -1,0 +1,29 @@
+# S3-compatible servers written in Rust, for trying STORAGE_BACKEND=s3 locally.
+# See docker/README.md. Garage is started by default; RustFS with `--profile rustfs`.
+services:
+  garage:
+    image: dxflrs/garage:v2.4.1
+    ports:
+      - "3900:3900"   # S3 API
+    volumes:
+      - ./garage/garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+
+  rustfs:
+    profiles: [rustfs]
+    image: rustfs/rustfs:1.0.1
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # web console
+    environment:
+      RUSTFS_ACCESS_KEY: nyaa-dev
+      RUSTFS_SECRET_KEY: nyaa-dev-secret
+      RUSTFS_CONSOLE_ENABLE: "true"
+    volumes:
+      - rustfs-data:/data
+
+volumes:
+  garage-meta:
+  garage-data:
+  rustfs-data:

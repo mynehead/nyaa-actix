@@ -4,7 +4,7 @@ use actix_web::http::header::{Charset, ContentDisposition, DispositionParam, Dis
 use actix_web::{web, HttpRequest, HttpResponse, Result};
 use futures_util::StreamExt;
 use tera::Tera;
-use std::path::PathBuf;
+use crate::storage::{Kind, Storage};
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -24,6 +24,7 @@ pub async fn view_torrent(
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
+    storage: web::Data<Storage>,
     path: web::Path<i32>,
 ) -> Result<HttpResponse> {
     let torrent_id = path.into_inner();
@@ -74,11 +75,11 @@ pub async fn view_torrent(
         .map_err(actix_web::error::ErrorInternalServerError)?;
 
     // File list from the stored info dict; missing or unreadable means "not available"
-    let info_path: PathBuf = [&cfg.torrent_storage_path,
-        &format!("{}", torrent_id / 1000),
-        &format!("{}.torrent.info", torrent_id)
-    ].iter().collect();
-    let (files, file_count) = std::fs::read(&info_path).ok()
+    let info = storage.get(Kind::TorrentInfo, torrent_id).await.unwrap_or_else(|e| {
+        log::warn!("Reading info dict of torrent {torrent_id}: {e}");
+        None
+    });
+    let (files, file_count) = info
         .and_then(|info| crate::torrent::file_tree(&info))
         .map_or((None, 0), |(tree, count)| (Some(tree), count));
 
@@ -126,6 +127,7 @@ pub async fn download_torrent(
     session: Session,
     pool: web::Data<DbPool>,
     cfg: web::Data<Config>,
+    storage: web::Data<Storage>,
     path: web::Path<i32>,
 ) -> Result<HttpResponse> {
     let torrent_id = path.into_inner();
@@ -141,13 +143,12 @@ pub async fn download_torrent(
         return Err(actix_web::error::ErrorNotFound("Torrent file not available"));
     }
 
-    let path: PathBuf = [&cfg.torrent_storage_path,
-        &format!("{}", torrent_id / 1000),
-        &format!("{}.torrent.info", torrent_id)
-    ].iter().collect();
-
-    let bencoded_info = std::fs::read(&path)
-        .map_err(|_| actix_web::error::ErrorNotFound("Torrent file not found"))?;
+    let bencoded_info = storage.get(Kind::TorrentInfo, torrent_id).await
+        .map_err(|e| {
+            log::error!("Reading info dict of torrent {torrent_id}: {e}");
+            actix_web::error::ErrorInternalServerError("Torrent file could not be read")
+        })?
+        .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent file not found"))?;
 
     let torrent_data = rebuild_torrent(&torrent, &bencoded_info, &cfg.trackers(), &cfg.site_url);
 
@@ -264,6 +265,7 @@ pub async fn upload_post(
     session: Session,
     pool: web::Data<DbPool>,
     cfg: web::Data<Config>,
+    storage: web::Data<Storage>,
     mut payload: Multipart,
 ) -> Result<HttpResponse> {
     let current_user = get_current_user(&session, &pool);
@@ -376,8 +378,9 @@ pub async fn upload_post(
         group_id: resolved_group,
     };
 
-    // One transaction for the row, its statistics and the stored info dict,
-    // so a failed file write leaves no half-created torrent behind.
+    // One transaction for the row and its statistics. The info dict is stored after the
+    // commit (S3 writes can't sit inside a database transaction); if that fails the rows
+    // are removed again, so no torrent is left without its file.
     let inserted = conn.transaction::<Torrent, anyhow::Error, _>(|conn| {
         if let Some(old_id) = replaced_id {
             diesel::delete(nyaa_comments::table.filter(nyaa_comments::torrent_id.eq(old_id))).execute(conn)?;
@@ -403,20 +406,24 @@ pub async fn upload_post(
             })
             .execute(conn)?;
 
-        // Write to a temp file and rename, so readers never see a partial file
-        let dir: PathBuf = [&cfg.torrent_storage_path, &format!("{}", inserted.id / 1000)]
-            .iter().collect();
-        std::fs::create_dir_all(&dir)?;
-        let file_path = dir.join(format!("{}.torrent.info", inserted.id));
-        let tmp_path = dir.join(format!("{}.torrent.info.tmp", inserted.id));
-        std::fs::write(&tmp_path, &meta.bencoded_info)?;
-        std::fs::rename(&tmp_path, &file_path)?;
-
         Ok(inserted)
     }).map_err(|e| {
         log::error!("Failed to store upload: {:#}", e);
         actix_web::error::ErrorInternalServerError("Failed to store torrent")
     })?;
+
+    // Don't hold a pooled connection while waiting on the store
+    drop(conn);
+    let stored = storage.put(Kind::TorrentInfo, inserted.id, meta.bencoded_info).await;
+    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    if let Err(e) = stored {
+        log::error!("Failed to store info dict of torrent {}: {}", inserted.id, e);
+        conn.transaction::<_, diesel::result::Error, _>(|conn| {
+            diesel::delete(nyaa_statistics::table.find(inserted.id)).execute(conn)?;
+            diesel::delete(nyaa_torrents::table.find(inserted.id)).execute(conn)
+        }).map_err(|e| log::error!("Removing torrent {} after the failed write: {}", inserted.id, e)).ok();
+        return Err(actix_web::error::ErrorInternalServerError("Failed to store torrent"));
+    }
     crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), inserted.id);
 
     Ok(HttpResponse::Found()
@@ -743,6 +750,11 @@ mod tests {
             }
         }
 
+        fn storage() -> Storage {
+            let dir = config().torrent_storage_path;
+            Storage::local(&dir, &dir).unwrap()
+        }
+
         async fn login(session: Session, path: web::Path<i32>) -> HttpResponse {
             crate::middleware::auth::login_user(&session, path.into_inner()).unwrap();
             HttpResponse::Ok().finish()
@@ -750,12 +762,14 @@ mod tests {
 
         /// The edit routes plus a login shortcut; returns the app and a session cookie for `user`.
         macro_rules! app {
-            ($pool:expr, $user:expr) => {{
+            ($pool:expr, $user:expr) => { app!($pool, $user, storage()) };
+            ($pool:expr, $user:expr, $storage:expr) => {{
                 let mut tera = Tera::new("templates/**/*").unwrap();
                 crate::utils::tera_filters::register(&mut tera);
                 let app = test::init_service(App::new()
                     .app_data(web::Data::new(config()))
                     .app_data(web::Data::new($pool.clone()))
+                    .app_data(web::Data::new($storage))
                     .app_data(web::Data::new(tera))
                     .wrap(SessionMiddleware::new(CookieSessionStore::default(), Key::from(&[7u8; 64])))
                     .route("/login/{id}", web::get().to(login))
@@ -928,6 +942,37 @@ mod tests {
             let comments: i64 = nyaa_comments::table.count().get_result(&mut pool.get().unwrap()).unwrap();
             assert_eq!(comments, 0);
             std::fs::remove_dir_all(config().torrent_storage_path).ok();
+        }
+
+        /// A torrent whose info dict can't be stored is not left behind half-created.
+        #[actix_web::test]
+        async fn failed_file_write_removes_the_new_torrent() {
+            let info: &[u8] = b"d6:lengthi5e4:name5:b.txt12:piece lengthi16384e6:pieces20:BBBBBBBBBBBBBBBBBBBBe";
+            let mut file = b"d4:info".to_vec();
+            file.extend_from_slice(info);
+            file.push(b'e');
+            let pool = pool();
+            // The new torrent gets id 6, stored as 0/6.torrent.info; a file named 0 blocks it
+            let dir = std::path::PathBuf::from(format!("{}-blocked", config().torrent_storage_path));
+            let storage = Storage::local(dir.to_str().unwrap(), dir.to_str().unwrap()).unwrap();
+            std::fs::remove_dir_all(dir.join("0")).ok();
+            std::fs::write(dir.join("0"), b"in the way").unwrap();
+            let (app, cookie) = app!(pool, Some(2), storage);
+
+            let mut body = b"--XX\r\nContent-Disposition: form-data; name=\"category\"\r\n\r\n1_2\r\n\
+                             --XX\r\nContent-Disposition: form-data; name=\"torrent_file\"; filename=\"b.torrent\"\r\n\
+                             Content-Type: application/x-bittorrent\r\n\r\n".to_vec();
+            body.extend_from_slice(&file);
+            body.extend_from_slice(b"\r\n--XX--\r\n");
+            let res = test::call_service(&app, test::TestRequest::post().uri("/upload").cookie(cookie.unwrap())
+                .insert_header(("Content-Type", "multipart/form-data; boundary=XX"))
+                .set_payload(body).to_request()).await;
+            assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+            let mut conn = pool.get().unwrap();
+            let torrents: i64 = nyaa_torrents::table.count().get_result(&mut conn).unwrap();
+            let stats: i64 = nyaa_statistics::table.count().get_result(&mut conn).unwrap();
+            assert_eq!((torrents, stats), (1, 1), "only the seeded torrent is left");
+            std::fs::remove_dir_all(dir).ok();
         }
     }
 }
