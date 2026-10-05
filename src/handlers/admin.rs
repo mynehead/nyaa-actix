@@ -27,7 +27,6 @@ pub async fn reports(
 pub async fn log(
     session: Session,
     pool: web::Data<DbPool>,
-    cfg: web::Data<Config>,
 ) -> Result<HttpResponse> {
     let current_user = get_current_user(&session, &pool)
         .ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
@@ -40,7 +39,6 @@ pub async fn log(
 pub async fn bans(
     session: Session,
     pool: web::Data<DbPool>,
-    cfg: web::Data<Config>,
 ) -> Result<HttpResponse> {
     let current_user = get_current_user(&session, &pool)
         .ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;

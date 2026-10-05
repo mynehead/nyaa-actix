@@ -1,5 +1,4 @@
 use actix_session::Session;
-use actix_web::web;
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::SqliteConnection;
 use crate::models::User;

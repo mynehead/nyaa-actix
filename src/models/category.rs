@@ -18,6 +18,8 @@ pub struct SubCategory {
 }
 
 impl SubCategory {
+    /// The "main_sub" form used in the `c=` search param and the upload form (upstream `id_as_string`).
+    #[allow(dead_code)]
     pub fn id_str(&self) -> String {
         format!("{}_{}", self.main_category_id, self.id)
     }
@@ -41,6 +43,8 @@ pub fn get_all_categories(conn: &mut SqliteConnection) -> QueryResult<Vec<(MainC
     }).collect())
 }
 
+/// For checking an uploaded category exists; upload currently stores whatever it is sent.
+#[allow(dead_code)]
 pub fn get_sub_category(conn: &mut SqliteConnection, main_id: i32, sub_id: i32) -> QueryResult<Option<SubCategory>> {
     nyaa_sub_categories::table
         .filter(nyaa_sub_categories::main_category_id.eq(main_id))
@@ -49,7 +53,9 @@ pub fn get_sub_category(conn: &mut SqliteConnection, main_id: i32, sub_id: i32) 
         .optional()
 }
 
-/// Returns (main_name, sub_name) for a torrent's category ids
+/// "Main - Sub" name for a torrent's category ids. For the listing and view page, which
+/// still print the raw "1_2" ids.
+#[allow(dead_code)]
 pub fn category_display(conn: &mut SqliteConnection, main_id: i32, sub_id: i32) -> String {
     let main = nyaa_main_categories::table.find(main_id).first::<MainCategory>(conn).ok();
     let sub = nyaa_sub_categories::table

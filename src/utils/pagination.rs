@@ -36,10 +36,6 @@ impl Pagination {
             pages,
         }
     }
-
-    pub fn offset(&self) -> i64 {
-        (self.current - 1) * self.per_page
-    }
 }
 
 fn build_pages(current: i64, total: i64) -> Vec<PageItem> {
@@ -85,9 +81,9 @@ mod tests {
     }
 
     #[test]
-    fn clamps_current_page_and_computes_offset() {
+    fn clamps_current_page() {
         let p = Pagination::new(99, 150, 75);
-        assert_eq!((p.current, p.total_pages, p.offset()), (2, 2, 75));
+        assert_eq!((p.current, p.total_pages), (2, 2));
         assert_eq!(Pagination::new(-3, 150, 75).current, 1);
     }
 

@@ -1,5 +1,5 @@
 use actix_session::Session;
-use actix_web::{web, HttpRequest, HttpResponse, Result};
+use actix_web::{web, HttpResponse, Result};
 use serde::Deserialize;
 use tera::Tera;
 
@@ -20,7 +20,6 @@ pub struct SearchParams {
 }
 
 pub async fn home(
-    req: HttpRequest,
     session: Session,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
