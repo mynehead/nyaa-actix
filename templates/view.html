@@ -36,11 +36,21 @@
 				{%- else -%}
 				Anonymous {% if uploader %}({{ macros::user_link(user=uploader) }}){% endif %}
 				{%- endif -%}
+				{% if uploader_ip %}
+				({{ uploader_ip }})
+				{% endif %}
 			</div>
 
 			<div class="col-md-1">Seeders:</div>
 			<div class="col-md-5"><span style="color: green;">{% if stats %}{{ stats.seed_count }}{% else %}0{% endif %}</span></div>
 		</div>
+
+		{% if group %}
+		<div class="row">
+			<div class="col-md-1">Group:</div>
+			<div class="col-md-5"><a href="/group/{{ group.slug | urlencode }}">[{{ group.tag }}] {{ group.name }}</a></div>
+		</div>
+		{% endif %}
 
 		<div class="row">
 			<div class="col-md-1">Information:</div>
