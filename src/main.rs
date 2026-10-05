@@ -40,6 +40,12 @@ async fn main() -> std::io::Result<()> {
         conn.run_pending_migrations(MIGRATIONS).expect("Failed to run migrations");
     }
 
+    if let Some(meili) = cfg.meili.clone() {
+        let every = std::env::var("MEILI_STATS_SYNC_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(60);
+        log::info!("Searching with Meilisearch index `{}`; syncing tracker stats every {every} s", meili.index());
+        search::index::spawn_stats_sync(pool.clone(), meili, std::time::Duration::from_secs(every.max(1)));
+    }
+
     let secret_key = Key::from(cfg.secret_key.as_bytes());
     let cfg_data = web::Data::new(cfg.clone());
     let pool_data = web::Data::new(pool);

@@ -42,6 +42,10 @@ urlencoding = "2"
 percent-encoding = "2"
 bitflags = "2"
 socket2 = "0.6"
+# Meilisearch speaks plain JSON over HTTP; a small blocking client is all it needs.
+# No gzip: Meilisearch then sends a compressed reply's headers and body in separate packets,
+# and on a reused connection the body waited ~40 ms for a delayed ACK.
+ureq = { version = "3", default-features = false, features = ["json", "rustls"] }
 # Avatar uploads: decode, then scale and crop to 256x256 PNG
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 # Gravatar URLs (ENABLE_GRAVATAR) are keyed by the MD5 of the email

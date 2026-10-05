@@ -7,7 +7,8 @@ use crate::config::Config;
 use crate::db::DbPool;
 use crate::utils::context::base_context;
 use crate::middleware::auth::get_current_user;
-use crate::search::db::{search, with_stats, SearchQuery};
+use crate::search::db::{with_stats, SearchQuery};
+use crate::search::search;
 use crate::utils::context::SearchState;
 use crate::utils::pagination::Pagination;
 
@@ -48,7 +49,7 @@ pub async fn home(
         actix_web::error::ErrorInternalServerError(e)
     })?;
 
-    let result = search(&mut conn, &q).map_err(|e| {
+    let result = search(&mut conn, cfg.meili.as_ref(), &q).map_err(|e| {
         actix_web::error::ErrorInternalServerError(e)
     })?;
 
