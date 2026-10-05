@@ -11,6 +11,8 @@ mod utils;
 use actix_files as fs;
 use actix_session::{storage::CookieSessionStore, SessionMiddleware};
 use actix_web::{cookie::Key, http::StatusCode, middleware::{ErrorHandlers, Logger}, web, App, HttpServer};
+use socket2::{Domain, Protocol, Socket, Type};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 use tera::Tera;
 
@@ -42,10 +44,9 @@ async fn main() -> std::io::Result<()> {
     let cfg_data = web::Data::new(cfg.clone());
     let pool_data = web::Data::new(pool);
 
-    let bind_addr = "0.0.0.0:8080";
-    log::info!("Starting {} on http://{}", cfg.site_name, bind_addr);
+    log::info!("Starting {} on http://localhost:{}", cfg.site_name, PORT);
 
-    HttpServer::new(move || {
+    let server = HttpServer::new(move || {
         let mut tera = Tera::new("templates/**/*").expect("Failed to load templates");
         utils::tera_filters::register(&mut tera);
         let tmpl_data = web::Data::new(tera);
@@ -98,7 +99,51 @@ async fn main() -> std::io::Result<()> {
             .route("/admin/log", web::get().to(handlers::admin::log))
             .route("/admin/bans", web::get().to(handlers::admin::bans))
     })
-    .bind(bind_addr)?
-    .run()
-    .await
+    .listen(tcp_listener(SocketAddr::from((Ipv4Addr::UNSPECIFIED, PORT)))?)?;
+    // Windows resolves `localhost` to ::1 first and retries a refused connection, so with
+    // only IPv4 bound every new browser connection to localhost waited ~300 ms for the
+    // fallback to 127.0.0.1. Listen on IPv6 as well, where the host has it.
+    let server = match tcp_listener(SocketAddr::from((Ipv6Addr::UNSPECIFIED, PORT))) {
+        Ok(lst) => server.listen(lst)?,
+        Err(e) => {
+            log::warn!("Not listening on IPv6 ([::]:{PORT}): {e}");
+            server
+        }
+    };
+    server.run().await
+}
+
+const PORT: u16 = 8080;
+
+/// A listening socket like the one `HttpServer::bind` makes, except that an IPv6 one
+/// takes IPv6 only, so it can sit next to the IPv4 one on the same port on every OS.
+fn tcp_listener(addr: SocketAddr) -> std::io::Result<TcpListener> {
+    let socket = Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP))?;
+    if addr.is_ipv6() {
+        socket.set_only_v6(true)?;
+    }
+    // On Windows SO_REUSEADDR would let a second server take the port silently
+    #[cfg(not(windows))]
+    socket.set_reuse_address(true)?;
+    socket.bind(&addr.into())?;
+    socket.listen(1024)?;
+    Ok(socket.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ipv4_and_ipv6_listeners_share_a_port() {
+        let v4 = tcp_listener(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))).unwrap();
+        let port = v4.local_addr().unwrap().port();
+        match tcp_listener(SocketAddr::from((Ipv6Addr::UNSPECIFIED, port))) {
+            Ok(v6) => assert_eq!(v6.local_addr().unwrap().port(), port),
+            // Hosts without IPv6 can't make the socket at all; the server warns and goes on
+            // (EAFNOSUPPORT on Linux, WSAEAFNOSUPPORT on Windows)
+            Err(e) if matches!(e.raw_os_error(), Some(97 | 10047)) => {}
+            Err(e) => panic!("IPv6 listener next to IPv4 on port {port}: {e}"),
+        }
+    }
 }

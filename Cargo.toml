@@ -41,6 +41,13 @@ env_logger = "0.11"
 urlencoding = "2"
 percent-encoding = "2"
 bitflags = "2"
+socket2 = "0.6"
+
+# Optimize dependencies even in debug builds: argon2 (login, register) and Tera rendering
+# are many times slower unoptimized. Only the first debug build pays for it; this crate
+# itself stays unoptimized, so rebuilds after a change are as fast as before.
+[profile.dev.package."*"]
+opt-level = 3
 
 [profile.release]
 opt-level = 3
