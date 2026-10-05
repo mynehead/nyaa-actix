@@ -24,6 +24,36 @@ pub struct Config {
     pub tracker_urls: Vec<String>,
     /// Meilisearch for text search and stats sorts (MEILI_URL and friends); None keeps search on SQLite.
     pub meili: Option<crate::search::meili::Meili>,
+    /// Who may apply for trusted status (upstream's "Trusted Requirements").
+    pub trusted: TrustedConfig,
+}
+
+#[derive(Clone, Debug)]
+pub struct TrustedConfig {
+    /// TRUSTED_MIN_UPLOADS: non-remake uploads needed to apply.
+    pub min_uploads: i64,
+    /// TRUSTED_MIN_DOWNLOADS: total downloads of those uploads needed to apply.
+    pub min_downloads: i64,
+    /// TRUSTED_REAPPLY_COOLDOWN: days after a rejection before applying again.
+    pub reapply_cooldown_days: i64,
+}
+
+impl Default for TrustedConfig {
+    fn default() -> Self {
+        TrustedConfig { min_uploads: 10, min_downloads: 10000, reapply_cooldown_days: 90 }
+    }
+}
+
+impl TrustedConfig {
+    fn from_env() -> Self {
+        let num = |key: &str, default: i64| env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default);
+        let d = TrustedConfig::default();
+        TrustedConfig {
+            min_uploads: num("TRUSTED_MIN_UPLOADS", d.min_uploads),
+            min_downloads: num("TRUSTED_MIN_DOWNLOADS", d.min_downloads),
+            reapply_cooldown_days: num("TRUSTED_REAPPLY_COOLDOWN", d.reapply_cooldown_days),
+        }
+    }
 }
 
 impl Config {
@@ -62,6 +92,7 @@ impl Config {
                 .flat_map(|key| split_list(&env::var(key).unwrap_or_default()))
                 .collect(),
             meili: crate::search::meili::Meili::from_env(),
+            trusted: TrustedConfig::from_env(),
         }
     }
 

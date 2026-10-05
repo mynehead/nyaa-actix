@@ -381,7 +381,7 @@ mod tests {
             site_flavor: "nyaa".into(), results_per_page: 75, max_pages: 0,
             torrent_storage_path: String::new(), avatar_storage_path: avatars.to_string_lossy().into_owned(),
             enable_gravatar: false, maintenance_mode: false,
-            site_url: "http://localhost:8080".into(), tracker_urls: vec![], meili: None,
+            site_url: "http://localhost:8080".into(), tracker_urls: vec![], meili: None, trusted: Default::default(),
         }
     }
 

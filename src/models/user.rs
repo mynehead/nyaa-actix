@@ -81,8 +81,8 @@ impl User {
         self.level >= UserLevel::Moderator as i32
     }
 
-    /// Admin-only actions upstream, such as changing a user's level or nuking a user (roadmap step 4).
-    #[allow(dead_code)]
+    /// Admin-only actions upstream, such as deciding trusted applications, changing a user's
+    /// level or nuking a user.
     pub fn is_superadmin(&self) -> bool {
         self.level == UserLevel::SuperAdmin as i32
     }

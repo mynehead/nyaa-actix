@@ -1,0 +1,68 @@
+{% extends "layout.html" %}
+{% macro filter_tab(name, label, list_filter) -%}
+	<li class="nav-item{% if list_filter == name %} active{% endif %}">
+		<a class="nav-link{% if list_filter == name %} active{% endif %}" href="/admin/trusted{% if name %}/{{ name }}{% endif %}">{{ label }}</a>
+	</li>
+{%- endmacro filter_tab %}
+{% block title %}Trusted Applications :: {{ config.site_name }}{% endblock %}
+{% block body %}
+{% set base = "/admin/trusted" %}{% if list_filter %}{% set base = base ~ "/" ~ list_filter %}{% endif %}
+<ul class="nav nav-tabs" role="tablist">
+	{{ self::filter_tab(name="", label="Open", list_filter=list_filter) }}
+	{{ self::filter_tab(name="new", label="New", list_filter=list_filter) }}
+	{{ self::filter_tab(name="reviewed", label="Reviewed", list_filter=list_filter) }}
+	{{ self::filter_tab(name="closed", label="Closed", list_filter=list_filter) }}
+</ul>
+<div class="table">
+	<table class="table table-bordered table-hover table-striped table-condensed">
+		<caption>List of {% if list_filter %}{{ list_filter }}{% else %}open{% endif %} applications</caption>
+		<thead>
+			<tr>
+				<th scope="col">#</th>
+				<th scope="col">Submitter</th>
+				<th scope="col">Submitted on</th>
+				<th scope="col">Status</th>
+				<th scope="col"></th>
+			</tr>
+		</thead>
+		<tbody>
+			{% for row in apps %}
+			<tr class="reports-row">
+				<td>{{ row.app.id }}</td>
+				<td>
+					<a href="/user/{{ row.submitter | urlencode }}">
+						{{ row.submitter }}
+					</a>
+				</td>
+				<td data-timestamp="{{ row.app.created_time | date(format="%s") }}">{{ row.app.created_time | date(format="%Y-%m-%d %H:%M") }}</td>
+				<td>{{ row.status }}</td>
+				<td><a class="btn btn-primary btn-sm" style="width:100%" href="/admin/trusted/application/{{ row.app.id }}" role="button">View</a></td>
+			</tr>
+			{% endfor %}
+		</tbody>
+	</table>
+</div>
+<div class="center">
+	<ul class="pagination">
+		{% if pagination.has_prev %}
+		<li><a rel="prev" href="{{ base }}?p={{ pagination.current - 1 }}">&laquo;</a></li>
+		{% else %}
+		<li class="disabled"><a href="#">&laquo;</a></li>
+		{% endif %}
+		{% for page in pagination.pages %}
+		{% if page.is_ellipsis %}
+		<li class="disabled"><a href="#">…</a></li>
+		{% elif page.is_current %}
+		<li class="active"><a href="#">{{ page.num }} <span class="sr-only">(current)</span></a></li>
+		{% else %}
+		<li><a href="{{ base }}?p={{ page.num }}">{{ page.num }}</a></li>
+		{% endif %}
+		{% endfor %}
+		{% if pagination.has_next %}
+		<li><a rel="next" href="{{ base }}?p={{ pagination.current + 1 }}">&raquo;</a></li>
+		{% else %}
+		<li class="disabled"><a href="#">&raquo;</a></li>
+		{% endif %}
+	</ul>
+</div>
+{% endblock %}
