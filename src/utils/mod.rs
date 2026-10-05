@@ -18,6 +18,17 @@ pub fn pack_ip(addr: IpAddr) -> Vec<u8> {
     }
 }
 
+/// Text form of an address stored by `pack_ip` (IPv4 in the last four bytes of 16, or 4 bytes).
+pub fn ip_string(packed: &[u8]) -> Option<String> {
+    let v4 = |b: &[u8]| std::net::Ipv4Addr::new(b[0], b[1], b[2], b[3]).to_string();
+    match packed.len() {
+        4 => Some(v4(packed)),
+        16 if packed[..12].iter().all(|&b| b == 0) => Some(v4(&packed[12..])),
+        16 => <[u8; 16]>::try_from(packed).ok().map(|b| std::net::Ipv6Addr::from(b).to_string()),
+        _ => None,
+    }
+}
+
 pub fn sanitize_string(s: &str) -> String {
     s.chars().filter(|c| !c.is_control()).collect()
 }
@@ -47,6 +58,15 @@ mod tests {
     fn packs_ipv6_as_is() {
         let addr: std::net::Ipv6Addr = "2001:db8::1".parse().unwrap();
         assert_eq!(pack_ip(IpAddr::V6(addr)), addr.octets().to_vec());
+    }
+
+    #[test]
+    fn ip_string_reverses_pack_ip() {
+        for ip in ["192.168.1.2", "2001:db8::1"] {
+            assert_eq!(ip_string(&pack_ip(ip.parse().unwrap())).as_deref(), Some(ip));
+        }
+        assert_eq!(ip_string(&[127, 0, 0, 1]).as_deref(), Some("127.0.0.1"));
+        assert_eq!(ip_string(&[1, 2]), None);
     }
 
     #[test]

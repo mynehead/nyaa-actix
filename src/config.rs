@@ -22,6 +22,8 @@ pub struct Config {
     pub site_url: String,
     /// Announce URLs written into magnets and .torrent files, own tracker first.
     pub tracker_urls: Vec<String>,
+    /// Upstream RATELIMIT_ACCOUNT_AGE, in seconds: accounts must be older than this to report torrents.
+    pub ratelimit_account_age: i64,
     /// Meilisearch for text search and stats sorts (MEILI_URL and friends); None keeps search on SQLite.
     pub meili: Option<crate::search::meili::Meili>,
 }
@@ -61,6 +63,8 @@ impl Config {
                 .iter()
                 .flat_map(|key| split_list(&env::var(key).unwrap_or_default()))
                 .collect(),
+            ratelimit_account_age: env::var("RATELIMIT_ACCOUNT_AGE")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(7 * 24 * 3600),
             meili: crate::search::meili::Meili::from_env(),
         }
     }

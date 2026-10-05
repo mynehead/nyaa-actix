@@ -113,6 +113,28 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    nyaa_reports (id) {
+        id -> Integer,
+        created_time -> Timestamp,
+        reason -> Text,
+        status -> Integer,
+        torrent_id -> Integer,
+        user_id -> Nullable<Integer>,
+    }
+}
+
+diesel::table! {
+    group_reports (id) {
+        id -> Integer,
+        created_time -> Timestamp,
+        reason -> Text,
+        status -> Integer,
+        group_id -> Integer,
+        user_id -> Nullable<Integer>,
+    }
+}
+
 diesel::joinable!(groups -> users (owner_id));
 diesel::joinable!(nyaa_torrents -> users (uploader_id));
 diesel::joinable!(nyaa_torrents -> groups (group_id));
@@ -122,6 +144,10 @@ diesel::joinable!(nyaa_comments -> users (user_id));
 diesel::joinable!(user_preferences -> users (user_id));
 diesel::joinable!(group_members -> groups (group_id));
 diesel::joinable!(group_members -> users (user_id));
+diesel::joinable!(nyaa_reports -> nyaa_torrents (torrent_id));
+diesel::joinable!(nyaa_reports -> users (user_id));
+diesel::joinable!(group_reports -> groups (group_id));
+diesel::joinable!(group_reports -> users (user_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     users,
@@ -134,4 +160,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     nyaa_comments,
     bans,
     user_preferences,
+    nyaa_reports,
+    group_reports,
 );

@@ -71,6 +71,11 @@
 
 	<div class="panel-footer clearfix">
 		{% if torrent.has_torrent %}<a href="/download/{{ torrent.id }}"><i class="fa fa-download fa-fw"></i>Download Torrent</a> or {% endif %}<a href="{{ magnet }}" class="card-footer-item"><i class="fa fa-magnet fa-fw"></i>Magnet</a>
+		{% if can_report %}
+		<button type="button" class="btn btn-xs btn-danger pull-right" data-toggle="modal" data-target="#reportModal">
+			Report
+		</button>
+		{% endif %}
 	</div>
 </div><!--/.panel -->
 
@@ -164,5 +169,12 @@
 	{% endif %}
 	</div>
 </div>
+
+{% if can_report %}
+{% set report_title = "Report torrent #" ~ torrent.id %}
+{% set report_subject = "torrent" %}
+{% set report_url = "/view/" ~ torrent.id ~ "/submit_report" %}
+{% include "report_modal.html" %}
+{% endif %}
 
 {% endblock %}

@@ -10,6 +10,9 @@
             <a href="/group/{{ group.slug | urlencode }}/edit" class="btn btn-default btn-xs">Edit</a>
             <a href="/group/{{ group.slug | urlencode }}/members" class="btn btn-default btn-xs">Manage Members</a>
             {% endif %}
+            {% if can_report %}
+            <button type="button" class="btn btn-xs btn-danger pull-right" data-toggle="modal" data-target="#reportModal">Report</button>
+            {% endif %}
         </h3>
         {% if owner %}<p>Owner: {{ macros::user_link(user=owner) }}</p>{% endif %}
         {% if group.description %}<div markdown-text class="text-muted">{{ group.description }}</div>{% endif %}
@@ -19,4 +22,11 @@
     <h3>Torrents uploaded under [{{ group.tag }}]</h3>
     {% include "search_results.html" %}
 </div>
+{% if can_report %}
+{% set report_title = "Report group [" ~ group.tag ~ "] " ~ group.name %}
+{% set report_subject = "group" %}
+{% set slug = group.slug | urlencode %}
+{% set report_url = "/group/" ~ slug ~ "/submit_report" %}
+{% include "report_modal.html" %}
+{% endif %}
 {% endblock %}

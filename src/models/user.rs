@@ -87,6 +87,11 @@ impl User {
         self.level == UserLevel::SuperAdmin as i32
     }
 
+    /// Seconds since the account was created (upstream `User.age`).
+    pub fn age_secs(&self) -> i64 {
+        (chrono::Utc::now().naive_utc() - self.created_time).num_seconds()
+    }
+
     pub fn level_str(&self) -> String {
         let level = match UserLevel::from_i32(self.level) {
             UserLevel::Regular => "User",

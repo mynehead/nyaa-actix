@@ -2,6 +2,7 @@ pub mod account;
 pub mod admin;
 pub mod groups;
 pub mod home;
+pub mod reports;
 pub mod torrents;
 pub mod users;
 pub mod site;

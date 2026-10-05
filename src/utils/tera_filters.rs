@@ -83,7 +83,7 @@ mod render_tests {
             maintenance_mode: false,
             site_url: String::new(),
             tracker_urls: vec![],
-            meili: None,
+            ratelimit_account_age: 0, meili: None,
         }
     }
 
