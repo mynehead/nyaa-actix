@@ -211,6 +211,8 @@ mod tests {
         // Stats sync sends whole documents, so it adds the torrent rather than a nameless stub
         index::sync_stats(&mut conn, &meili, None).unwrap();
         wait_for(&mut conn, &query(Some("Name2"), None, None, None, None), vec![7]);
+        // Digits inside a word match on their own, as do numbers without leading zeros ("02")
+        assert_eq!(ids(&mut conn, Some(&meili), &query(Some("2"), None, None, None, None)), (vec![7, 2], 2));
         // One with no stats change never reaches it that way; the count check catches it
         diesel::sql_query("INSERT INTO nyaa_torrents (id, info_hash, display_name, torrent_name, flags, uploader_id, \
                            main_category_id, sub_category_id) VALUES (8, X'08', 'Display Name3', 't', 0, 1, 1, 1)")
@@ -219,6 +221,18 @@ mod tests {
         index::check(&mut conn, &meili).unwrap();
         assert!(meili.is_ready());
         assert_eq!(ids(&mut conn, Some(&meili), &query(Some("display"), None, None, None, None)), (vec![8, 7], 2));
+
+        // An index with other settings (built by an older version) is rebuilt
+        assert!(meili.settings_current().unwrap());
+        let mut old = meili::index_settings(1000);
+        old["searchableAttributes"] = serde_json::json!(["display_name"]);
+        let req = ureq::patch(&format!("{url}/indexes/{index}/settings"))
+            .header("Authorization", &format!("Bearer {}", std::env::var("MEILI_TEST_KEY").unwrap_or_default()));
+        req.send_json(&old).unwrap();
+        while meili.has_pending_tasks().unwrap() { std::thread::sleep(Duration::from_millis(20)); }
+        assert!(!meili.settings_current().unwrap());
+        index::check(&mut conn, &meili).unwrap();
+        assert!(meili.settings_current().unwrap() && meili.is_ready());
 
         meili.delete_index().unwrap();
     }

@@ -96,7 +96,8 @@ pub fn check(conn: &mut DbConnection, meili: &Meili) -> anyhow::Result<()> {
     let stale = meili.take_stale();
     let torrents: i64 = nyaa_torrents::table.count().get_result(conn)?;
     let indexed = meili.document_count()?;
-    if !stale && indexed == Some(torrents) {
+    let outdated = indexed.is_some() && !meili.settings_current()?;
+    if !stale && !outdated && indexed == Some(torrents) {
         if !meili.is_ready() {
             log::info!("Meilisearch index `{}` holds all {torrents} torrents; searching with it", meili.index());
         }
@@ -108,7 +109,7 @@ pub fn check(conn: &mut DbConnection, meili: &Meili) -> anyhow::Result<()> {
         "Rebuilding Meilisearch index `{}` ({} of {torrents} torrents indexed{}); searching SQLite meanwhile",
         meili.index(),
         indexed.map_or("none".into(), |n| n.to_string()),
-        if stale { ", an update failed" } else { "" },
+        if stale { ", an update failed" } else if outdated { ", built by an older version" } else { "" },
     );
     let start = Instant::now();
     let count = rebuild(conn, meili, |_| {})?;
