@@ -1,6 +1,7 @@
 {% extends "layout.html" %}
 {% import "macros.html" as macros %}
 {% block title %}{{ profile_user.username }} :: {{ config.site_name }}{% endblock %}
+{% block meta_image %}{{ avatar_url }}{% endblock %}
 {% block metatags %}
 {% if search.term %}
 <meta property="og:description" content="Search for '{{ search.term }}' in torrents uploaded by {{ profile_user.username }}">
@@ -14,7 +15,7 @@
 	<h2>User Information</h2><br>
 	<div class="row" style="margin-bottom: 20px;">
 		<div class="col-md-2" style="max-width: 150px;">
-			<img class="avatar" src="/static/img/avatar/default.png">
+			<img class="avatar" src="{{ avatar_url }}">
 		</div>
 		<div class="col-md-4">
 			<div class="row">

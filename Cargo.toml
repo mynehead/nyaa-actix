@@ -42,6 +42,10 @@ urlencoding = "2"
 percent-encoding = "2"
 bitflags = "2"
 socket2 = "0.6"
+# Avatar uploads: decode, then scale and crop to 256x256 PNG
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+# Gravatar URLs (ENABLE_GRAVATAR) are keyed by the MD5 of the email
+md5 = { package = "md-5", version = "0.10" }
 
 # Optimize dependencies even in debug builds: argon2 (login, register) and Tera rendering
 # are many times slower unoptimized. Only the first debug build pays for it; this crate

@@ -59,6 +59,7 @@ mod tests {
 
 #[cfg(test)]
 mod render_tests {
+    use std::collections::HashMap;
     use crate::search::db::ListedTorrent;
     use crate::utils::context::{base_context, SearchState};
     use crate::utils::pagination::Pagination;
@@ -78,7 +79,7 @@ mod render_tests {
             results_per_page: 75,
             max_pages: 0,
             torrent_storage_path: String::new(),
-            enable_gravatar: false,
+            avatar_storage_path: String::new(), enable_gravatar: false,
             maintenance_mode: false,
             site_url: String::new(),
             tracker_urls: vec![],
@@ -114,7 +115,7 @@ mod render_tests {
         crate::models::User {
             id: 1, username: "alice".into(), email: Some("a@example.com".into()), password_hash: String::new(),
             status: 1, level, created_time: chrono::NaiveDateTime::default(),
-            last_login_date: None, last_login_ip: None, registration_ip: None,
+            last_login_date: None, last_login_ip: None, registration_ip: None, avatar_time: None,
         }
     }
 
@@ -140,6 +141,7 @@ mod render_tests {
         ctx.insert("comments", &vec![serde_json::json!({
             "comment": { "id": 3, "torrent_id": 7, "user_id": 1, "created_time": "2024-01-01T00:00:00", "edited_time": null, "text": "hi" },
             "user": user(0),
+            "avatar_url": "/avatar/1?v=5",
         })]);
         ctx.insert("uploader", &Some(user(0)));
         ctx.insert("magnet", "magnet:?xt=urn:btih:ab");
@@ -150,6 +152,13 @@ mod render_tests {
         assert!(html.contains("href=\"https://example.com\""));
         // Anonymous upload: the commenter isn't marked as the uploader
         assert!(!html.contains("(uploader)"));
+        assert!(html.contains("<img class=\"avatar\" src=\"&#x2F;avatar&#x2F;1?v=5\""), "{}", html);
+        assert!(html.contains("<div class=\"collapse in\" id=\"collapse-comments\">"));
+        // "Hide comments by default" starts the panel collapsed
+        ctx.insert("hide_comments", &true);
+        let html = render("view.html", &ctx);
+        assert!(html.contains("<div class=\"collapse \" id=\"collapse-comments\">"), "{}", html);
+        assert!(html.contains("aria-expanded=\"false\" aria-controls=\"collapse-comments\""));
     }
 
     #[test]
@@ -159,6 +168,14 @@ mod render_tests {
             let u = user(3);
             let mut ctx = base_context(&cfg, logged_in.then_some(&u));
             ctx.insert("error", &Option::<String>::None);
+            // profile.html
+            ctx.insert("avatar_url", crate::models::DEFAULT_AVATAR);
+            ctx.insert("active_tab", "password");
+            ctx.insert("hide_comments", &false);
+            ctx.insert("email_value", "");
+            for errors in ["password_errors", "email_errors"] {
+                ctx.insert(errors, &HashMap::<String, Vec<String>>::new());
+            }
             render(page, &ctx);
         }
         let mut ctx = base_context(&cfg, None);
