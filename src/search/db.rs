@@ -1,6 +1,8 @@
 use diesel::prelude::*;
-use crate::db::schema::nyaa_torrents;
-use crate::models::Torrent;
+use serde::Serialize;
+
+use crate::db::schema::{nyaa_statistics, nyaa_torrents};
+use crate::models::{Statistic, Torrent};
 
 // Diesel has no built-in bitwise AND; define the SQL `&` operator for integer columns.
 diesel::infix_operator!(BitAnd, " & ", diesel::sql_types::Integer);
@@ -39,6 +41,7 @@ pub enum SearchSort {
     Seeders,
     Leechers,
     Downloads,
+    Comments,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -88,6 +91,7 @@ impl SearchQuery {
             Some("seeders") | Some("5") => SearchSort::Seeders,
             Some("leechers") | Some("6") => SearchSort::Leechers,
             Some("downloads") | Some("7") => SearchSort::Downloads,
+            Some("comments") => SearchSort::Comments,
             _ => SearchSort::Id,
         };
         let order = match order {
@@ -194,21 +198,70 @@ pub fn search(conn: &mut SqliteConnection, q: &SearchQuery) -> QueryResult<Searc
 
     // Sort
     let offset = (q.page - 1) * q.per_page;
-    let torrents = match (q.sort, q.order) {
+    // Stats live in their own table; sort on a correlated subquery so torrents
+    // without a stats row still list (NULL sorts as lowest).
+    macro_rules! stat {
+        ($col:expr) => {
+            nyaa_statistics::table
+                .filter(nyaa_statistics::torrent_id.eq(nyaa_torrents::id))
+                .select($col)
+                .single_value()
+        };
+    }
+    let query = match (q.sort, q.order) {
         (SearchSort::Id, SearchOrder::Desc) => query.order(nyaa_torrents::id.desc()),
         (SearchSort::Id, SearchOrder::Asc) => query.order(nyaa_torrents::id.asc()),
         (SearchSort::Name, SearchOrder::Desc) => query.order(nyaa_torrents::display_name.desc()),
         (SearchSort::Name, SearchOrder::Asc) => query.order(nyaa_torrents::display_name.asc()),
         (SearchSort::Size, SearchOrder::Desc) => query.order(nyaa_torrents::filesize.desc()),
         (SearchSort::Size, SearchOrder::Asc) => query.order(nyaa_torrents::filesize.asc()),
-        // Seeders/leechers/downloads would need a join — fall back to id
-        _ => query.order(nyaa_torrents::id.desc()),
-    }
+        (SearchSort::Comments, SearchOrder::Desc) => query.order(nyaa_torrents::comment_count.desc()),
+        (SearchSort::Comments, SearchOrder::Asc) => query.order(nyaa_torrents::comment_count.asc()),
+        (SearchSort::Seeders, SearchOrder::Desc) => query.order(stat!(nyaa_statistics::seed_count).desc()),
+        (SearchSort::Seeders, SearchOrder::Asc) => query.order(stat!(nyaa_statistics::seed_count).asc()),
+        (SearchSort::Leechers, SearchOrder::Desc) => query.order(stat!(nyaa_statistics::leech_count).desc()),
+        (SearchSort::Leechers, SearchOrder::Asc) => query.order(stat!(nyaa_statistics::leech_count).asc()),
+        (SearchSort::Downloads, SearchOrder::Desc) => query.order(stat!(nyaa_statistics::download_count).desc()),
+        (SearchSort::Downloads, SearchOrder::Asc) => query.order(stat!(nyaa_statistics::download_count).asc()),
+    };
+    // Newest first among ties
+    let torrents = query.then_order_by(nyaa_torrents::id.desc())
     .limit(q.per_page)
     .offset(offset)
     .load::<Torrent>(conn)?;
 
     Ok(SearchResult { torrents, total })
+}
+
+/// A listing row: the torrent plus its tracker stats, flattened so templates
+/// (and the torrent filters) see one object.
+#[derive(Debug, Serialize)]
+pub struct ListedTorrent {
+    #[serde(flatten)]
+    pub torrent: Torrent,
+    pub seed_count: i32,
+    pub leech_count: i32,
+    pub download_count: i32,
+}
+
+/// Attaches stats to a page of torrents with one query.
+pub fn with_stats(conn: &mut SqliteConnection, torrents: Vec<Torrent>) -> QueryResult<Vec<ListedTorrent>> {
+    let ids: Vec<i32> = torrents.iter().map(|t| t.id).collect();
+    let stats: std::collections::HashMap<i32, Statistic> = nyaa_statistics::table
+        .filter(nyaa_statistics::torrent_id.eq_any(&ids))
+        .load::<Statistic>(conn)?
+        .into_iter()
+        .map(|s| (s.torrent_id, s))
+        .collect();
+    Ok(torrents.into_iter().map(|torrent| {
+        let s = stats.get(&torrent.id);
+        ListedTorrent {
+            seed_count: s.map_or(0, |s| s.seed_count),
+            leech_count: s.map_or(0, |s| s.leech_count),
+            download_count: s.map_or(0, |s| s.download_count),
+            torrent,
+        }
+    }).collect())
 }
 
 #[cfg(test)]
@@ -266,5 +319,23 @@ mod tests {
             (3, TorrentFlags::ANONYMOUS),
         ]);
         assert_eq!(ids(&mut conn, &SearchQuery::new()), (vec![3, 1], 2));
+    }
+
+    #[test]
+    fn sorts_by_seeders_and_attaches_stats() {
+        let mut conn = db_with(&[(1, TorrentFlags::empty()), (2, TorrentFlags::empty()), (3, TorrentFlags::empty())]);
+        diesel::sql_query("INSERT INTO nyaa_statistics (torrent_id, seed_count, leech_count, download_count) \
+                           VALUES (1, 5, 1, 9), (2, 7, 0, 0)")
+            .execute(&mut conn).unwrap();
+        let mut q = SearchQuery::new();
+        q.sort = SearchSort::Seeders;
+        assert_eq!(ids(&mut conn, &q).0, vec![2, 1, 3]);
+        q.order = SearchOrder::Asc;
+        assert_eq!(ids(&mut conn, &q).0, vec![3, 1, 2]);
+
+        let torrents = search(&mut conn, &q).unwrap().torrents;
+        let rows = with_stats(&mut conn, torrents).unwrap();
+        let counts: Vec<(i32, i32, i32)> = rows.iter().map(|r| (r.seed_count, r.leech_count, r.download_count)).collect();
+        assert_eq!(counts, vec![(0, 0, 0), (5, 1, 9), (7, 0, 0)]);
     }
 }

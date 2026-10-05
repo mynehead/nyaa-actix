@@ -1,76 +1,231 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{% block title %}{{ config.site_name }}{% endblock %}</title>
-    <link rel="stylesheet" href="/static/css/bootstrap.min.css">
-    <link rel="stylesheet" href="/static/css/main.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
-</head>
-<body>
-<nav class="navbar navbar-default navbar-static-top navbar-inverse">
-    <div class="container">
-        <div class="navbar-header">
-            <button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target="#navbar">
-                <span class="icon-bar"></span><span class="icon-bar"></span><span class="icon-bar"></span>
-            </button>
-            <a class="navbar-brand" href="/">{{ config.site_name }}</a>
-        </div>
-        <div id="navbar" class="navbar-collapse collapse">
-            <ul class="nav navbar-nav">
-                <li{% if active_page is defined and active_page == "upload" %} class="active"{% endif %}><a href="/upload">Upload</a></li>
-                <li{% if active_page is defined and active_page == "groups" %} class="active"{% endif %}><a href="/groups">Groups</a></li>
-                <li class="dropdown">
-                    <a href="#" class="dropdown-toggle" data-toggle="dropdown">Info <span class="caret"></span></a>
-                    <ul class="dropdown-menu">
-                        <li><a href="/rules">Rules</a></li>
-                        <li><a href="/help">Help</a></li>
-                    </ul>
-                </li>
-            </ul>
-            <form class="navbar-form navbar-left" action="/" method="get">
-                <div class="input-group">
-                    <input type="text" name="q" class="form-control" placeholder="Search..." value="{{ search_term | default(value='') }}">
-                    <span class="input-group-btn">
-                        <button class="btn btn-default" type="submit"><i class="fa fa-search"></i></button>
-                    </span>
-                </div>
-            </form>
-            <ul class="nav navbar-nav navbar-right">
-                {% if current_user %}
-                <li class="dropdown">
-                    <a href="#" class="dropdown-toggle" data-toggle="dropdown">
-                        <i class="fa fa-user fa-fw"></i> {{ current_user.username }} <span class="caret"></span>
-                    </a>
-                    <ul class="dropdown-menu">
-                        <li><a href="/user/{{ current_user.username }}"><i class="fa fa-user fa-fw"></i> Torrents</a></li>
-                        <li><a href="/account/profile"><i class="fa fa-gear fa-fw"></i> Profile</a></li>
-                        <li><a href="/account/logout"><i class="fa fa-times fa-fw"></i> Logout</a></li>
-                        {% if current_user.level >= 2 %}
-                        <li class="divider"></li>
-                        <li><a href="/admin/reports">Admin</a></li>
-                        {% endif %}
-                    </ul>
-                </li>
-                {% else %}
-                <li><a href="/account/login">Login</a></li>
-                <li><a href="/account/register">Register</a></li>
-                {% endif %}
-            </ul>
-        </div>
-    </div>
-</nav>
+	<head>
+		<meta charset="utf-8">
+		<title>{% block title %}{{ config.site_name }}{% endblock %}</title>
 
-<div class="container">
-    {% for msg in flash_messages | default(value=[]) %}
-    <div class="alert alert-{{ msg.category }}">{{ msg.text }}</div>
-    {% endfor %}
-    {% block body %}{% endblock %}
-</div>
+		<meta name="viewport" content="width=480">
+		<meta http-equiv="X-UA-Compatible" content="IE=edge">
+		<link rel="shortcut icon" type="image/png" href="/static/favicon.png">
+		<link rel="icon" type="image/png" href="/static/favicon.png">
+		<link rel="mask-icon" href="/static/pinned-tab.svg" color="#3582F7">
 
-<script src="/static/js/jquery.min.js"></script>
-<script src="/static/js/bootstrap.min.js"></script>
-<script src="/static/js/main.js"></script>
-</body>
+		<meta property="og:site_name" content="{{ config.site_name }}">
+		<meta property="og:image" content="{% block meta_image %}/static/img/avatar/default.png{% endblock %}">
+		{% block metatags %}{% endblock %}
+
+		<!-- Bootstrap core CSS (customized upstream: column breakpoint at tablet width) -->
+		<link href="/static/css/bootstrap.min.css" rel="stylesheet" id="bsThemeLink">
+		<link href="/static/css/bootstrap-xl-mod.css" rel="stylesheet">
+		<!-- Theme switcher; inline and right under the stylesheet to avoid a flash of the light theme. Unminified version at the bottom of static/js/main.js -->
+		<script>function toggleDarkMode(){"dark"===localStorage.getItem("theme")?setThemeLight():setThemeDark()}function setThemeDark(){bsThemeLink.href="/static/css/bootstrap-dark.min.css",localStorage.setItem("theme","dark"),document.body!==null&&document.body.classList.add('dark')}function setThemeLight(){bsThemeLink.href="/static/css/bootstrap.min.css",localStorage.setItem("theme","light"),document.body!==null&&document.body.classList.remove('dark')}if("undefined"!=typeof Storage){var bsThemeLink=document.getElementById("bsThemeLink");"dark"===localStorage.getItem("theme")&&setThemeDark()}</script>
+		<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-select/1.12.2/css/bootstrap-select.min.css" integrity="sha256-an4uqLnVJ2flr7w0U74xiF4PJjO2N5Df91R2CUmCLCA=" crossorigin="anonymous" />
+		<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css" integrity="sha256-eZrrJcwDc/3uDhsdt61sL2oOBY362qM3lon1gyExkL0=" crossorigin="anonymous" />
+
+		<!-- Custom styles for this template -->
+		<link href="/static/css/main.css" rel="stylesheet">
+
+		<!-- Core JavaScript -->
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.2.1/jquery.min.js" integrity="sha256-hwg4gsxgFZhOsEEamdOYGBf13FyQuiTwlAQgxVSNgt4=" crossorigin="anonymous"></script>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/3.3.7/js/bootstrap.min.js" integrity="sha256-U5ZEeKfGNOja007MMD3YBI0A3OSZOQbeG6z2f2Y0hu8=" crossorigin="anonymous"></script>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/markdown-it/8.3.1/markdown-it.min.js" integrity="sha256-3WZyZQOe+ql3pLo90lrkRtALrlniGdnf//gRpW0UQks=" crossorigin="anonymous"></script>
+		<!-- Modified to not apply border-radius to selectpickers and stuff so our navbar looks cool -->
+		<script src="/static/js/bootstrap-select.js"></script>
+		<script src="/static/js/main.js"></script>
+	</head>
+	<body>
+		<!-- Fixed navbar -->
+		<nav class="navbar navbar-default navbar-static-top navbar-inverse">
+			<div class="container">
+				<div class="navbar-header">
+					<button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target="#navbar" aria-expanded="false" aria-controls="navbar">
+					<span class="sr-only">Toggle navigation</span>
+					<span class="icon-bar"></span>
+					<span class="icon-bar"></span>
+					<span class="icon-bar"></span>
+					</button>
+					<a class="navbar-brand" href="/">{{ config.site_name }}</a>
+				</div><!--/.navbar-header -->
+				{% if user_page is defined and user_page %}
+					{% set encoded_username = profile_user.username | urlencode %}
+					{% set search_action = "/user/" ~ encoded_username %}
+					{% if profile_user.username is ending_with("s") %}{% set possessive = "'" %}{% else %}{% set possessive = "'s" %}{% endif %}
+					{% set search_placeholder = "Search " ~ profile_user.username ~ possessive ~ " torrents..." %}
+				{% else %}
+					{% set search_action = "/" %}
+					{% set search_placeholder = "Search..." %}
+				{% endif %}
+				<div id="navbar" class="navbar-collapse collapse">
+					<ul class="nav navbar-nav">
+						<li{% if active_page is defined and active_page == "upload" %} class="active"{% endif %}><a href="/upload">Upload</a></li>
+						<li{% if active_page is defined and active_page == "groups" %} class="active"{% endif %}><a href="/groups">Groups</a></li>
+						<li class="dropdown">
+							<a href="#" class="dropdown-toggle" data-toggle="dropdown" role="button" aria-haspopup="true" aria-expanded="false">
+								Info
+								<span class="caret"></span>
+							</a>
+							<ul class="dropdown-menu">
+								<li{% if active_page is defined and active_page == "rules" %} class="active"{% endif %}><a href="/rules">Rules</a></li>
+								<li{% if active_page is defined and active_page == "help" %} class="active"{% endif %}><a href="/help">Help</a></li>
+							</ul>
+						</li>
+						{% if current_user and current_user.level >= 2 %}
+						<li class="dropdown">
+							<a href="#" class="dropdown-toggle" data-toggle="dropdown" role="button" aria-haspopup="true" aria-expanded="false">
+								Admin
+								<span class="caret"></span>
+							</a>
+							<ul class="dropdown-menu">
+								<li><a href="/admin/reports">Reports</a></li>
+								<li><a href="/admin/log">Log</a></li>
+								<li><a href="/admin/bans">Bans</a></li>
+							</ul>
+						</li>
+						{% endif %}
+					</ul>
+
+					<ul class="nav navbar-nav navbar-right">
+						{% if current_user %}
+						<li class="dropdown">
+							<a href="#" class="dropdown-toggle visible-lg visible-sm visible-xs" data-toggle="dropdown" role="button" aria-haspopup="true" aria-expanded="false">
+								<i class="fa fa-user fa-fw"></i>
+								{{ current_user.username }}
+								<span class="caret"></span>
+							</a>
+							<a href="#" class="dropdown-toggle hidden-lg hidden-sm hidden-xs" data-toggle="dropdown" role="button" aria-haspopup="true" aria-expanded="false">
+								<i class="fa fa-user fa-fw"></i>
+								<span class="caret"></span>
+							</a>
+							<ul class="dropdown-menu">
+								<li class="hidden-lg hidden-sm hidden-xs">
+									<a><i class="fa fa-user fa-fw"></i>Logged in as {{ current_user.username }}</a>
+								</li>
+								<li class="hidden-lg hidden-sm hidden-xs divider" role="separator">
+								</li>
+								<li>
+									<a href="/user/{{ current_user.username | urlencode }}">
+										<i class="fa fa-user fa-fw"></i>
+										Torrents
+									</a>
+								</li>
+								<li>
+									<a href="/account/profile">
+										<i class="fa fa-gear fa-fw"></i>
+										Profile
+									</a>
+								</li>
+								<li>
+									<a href="/account/logout">
+										<i class="fa fa-times fa-fw"></i>
+										Logout
+									</a>
+								</li>
+							</ul>
+						</li>
+						{% else %}
+						<li class="dropdown">
+							<a href="#" class="dropdown-toggle visible-lg visible-sm visible-xs" data-toggle="dropdown" role="button" aria-haspopup="true" aria-expanded="false">
+								<i class="fa fa-user fa-fw"></i>
+								Guest
+								<span class="caret"></span>
+							</a>
+							<a href="#" class="dropdown-toggle hidden-lg hidden-sm hidden-xs" data-toggle="dropdown" role="button" aria-haspopup="true" aria-expanded="false">
+								<i class="fa fa-user fa-fw"></i>
+								<span class="caret"></span>
+							</a>
+							<ul class="dropdown-menu">
+								<li>
+									<a href="/account/login">
+										<i class="fa fa-sign-in fa-fw"></i>
+										Login
+									</a>
+								</li>
+								<li>
+									<a href="/account/register">
+										<i class="fa fa-pencil fa-fw"></i>
+										Register
+									</a>
+								</li>
+							</ul>
+						</li>
+						{% endif %}
+					</ul>
+
+					<div class="search-container visible-xs visible-sm">
+					{# The mobile menu #}
+						<form class="navbar-form navbar-right form" action="{{ search_action }}" method="get">
+							<input type="text" class="form-control" name="q" placeholder="{{ search_placeholder }}" value="{% if search is defined %}{{ search.term }}{% endif %}">
+							<br>
+
+							<select class="form-control" title="Filter" data-width="120px" name="f">
+								<option value="0" title="No filter" {% if search is not defined or search.quality_filter == "0" %}selected{% endif %}>No filter</option>
+								<option value="1" title="No remakes" {% if search is defined and search.quality_filter == "1" %}selected{% endif %}>No remakes</option>
+								<option value="2" title="Trusted only" {% if search is defined and search.quality_filter == "2" %}selected{% endif %}>Trusted only</option>
+							</select>
+
+							<br>
+
+							<select class="form-control" title="Category" data-width="200px" name="c">
+								<option value="0_0" title="All categories" {% if search is not defined or search.category == "0_0" %}selected{% endif %}>
+									All categories
+								</option>
+								{% for cat in nav_categories %}
+								<option value="{{ cat.id }}" title="{{ cat.title }}" {% if search is defined and search.category == cat.id %}selected{% endif %}>
+									{{ cat.name }}
+								</option>
+								{% endfor %}
+							</select>
+
+							<br>
+
+							<button class="btn btn-primary form-control" type="submit">
+								<i class="fa fa-search fa-fw"></i> Search
+							</button>
+						</form>
+					</div><!--/.search-container -->
+
+					<form class="navbar-form navbar-right form" action="{{ search_action }}" method="get">
+						<div class="input-group search-container hidden-xs hidden-sm">
+							<div class="input-group-btn nav-filter" id="navFilter-criteria">
+								<select class="selectpicker show-tick" title="Filter" data-width="120px" name="f">
+									<option value="0" title="No filter" {% if search is not defined or search.quality_filter == "0" %}selected{% endif %}>No filter</option>
+									<option value="1" title="No remakes" {% if search is defined and search.quality_filter == "1" %}selected{% endif %}>No remakes</option>
+									<option value="2" title="Trusted only" {% if search is defined and search.quality_filter == "2" %}selected{% endif %}>Trusted only</option>
+								</select>
+							</div>
+
+							<div class="input-group-btn nav-filter" id="navFilter-category">
+								<select class="selectpicker show-tick" title="Category" data-width="130px" name="c">
+									<option value="0_0" title="All categories" {% if search is not defined or search.category == "0_0" %}selected{% endif %}>
+										All categories
+									</option>
+									{% for cat in nav_categories %}
+									<option value="{{ cat.id }}" title="{{ cat.title }}" {% if search is defined and search.category == cat.id %}selected{% endif %}>
+										{{ cat.name }}
+									</option>
+									{% endfor %}
+								</select>
+							</div>
+							<input type="text" class="form-control search-bar" name="q" placeholder="{{ search_placeholder }}" value="{% if search is defined %}{{ search.term }}{% endif %}" />
+							<div class="input-group-btn search-btn">
+								<button class="btn btn-primary" type="submit">
+									<i class="fa fa-search fa-fw"></i>
+								</button>
+							</div>
+						</div>
+					</form>
+				</div><!--/.nav-collapse -->
+			</div><!--/.container -->
+		</nav>
+
+		<div class="container">
+			{% include "flashes.html" %}
+
+			{% block body %}{% endblock %}
+		</div> <!-- /container -->
+
+		<footer style="text-align: center;">
+			<p>Dark Mode: <a href="#" id="themeToggle">Toggle</a></p>
+		</footer>
+	</body>
 </html>

@@ -55,6 +55,68 @@ pub fn parse_torrent(data: &[u8]) -> Result<TorrentMeta, bencode::BencodeError> 
     })
 }
 
+/// A file or folder in a torrent's file list. Folders have `size: None`.
+#[derive(Debug, serde::Serialize, PartialEq)]
+pub struct FileNode {
+    pub name: String,
+    pub size: Option<i64>,
+    pub children: Vec<FileNode>,
+}
+
+impl FileNode {
+    fn folder(name: String) -> Self {
+        FileNode { name, size: None, children: Vec::new() }
+    }
+
+    fn insert(&mut self, path: &[String], size: i64) {
+        match path {
+            [] => {}
+            [file] => self.children.push(FileNode { name: file.clone(), size: Some(size), children: Vec::new() }),
+            [dir, rest @ ..] => {
+                let idx = match self.children.iter().position(|c| c.size.is_none() && &c.name == dir) {
+                    Some(i) => i,
+                    None => {
+                        self.children.push(FileNode::folder(dir.clone()));
+                        self.children.len() - 1
+                    }
+                };
+                self.children[idx].insert(rest, size);
+            }
+        }
+    }
+
+    /// Folders before files, each alphabetical, like upstream's sorted_pathdict.
+    fn sort(&mut self) {
+        self.children.sort_by(|a, b| (a.size.is_some(), &a.name).cmp(&(b.size.is_some(), &b.name)));
+        self.children.iter_mut().for_each(FileNode::sort);
+    }
+}
+
+/// The file list of a stored info dict, rooted at the torrent's name, plus the file count.
+/// `None` if the info dict can't be read.
+pub fn file_tree(bencoded_info: &[u8]) -> Option<(Vec<FileNode>, usize)> {
+    let info = bencode::decode(bencoded_info).ok()?;
+    let text = |v: &BencodeValue| v.as_bytes().map(|b| String::from_utf8_lossy(b).into_owned());
+    let name = info.get(b"name").and_then(text)?;
+
+    if let Some(length) = info.get(b"length").and_then(|v| v.as_int()) {
+        return Some((vec![FileNode { name, size: Some(length), children: Vec::new() }], 1));
+    }
+
+    let mut root = FileNode::folder(name);
+    let files = info.get(b"files")?.as_list()?;
+    for file in files {
+        let size = file.get(b"length").and_then(|v| v.as_int()).unwrap_or(0);
+        let path: Vec<String> = file.get(b"path")
+            .and_then(|p| p.as_list())
+            .map(|parts| parts.iter().filter_map(text).collect())
+            .unwrap_or_default();
+        root.insert(&path, size);
+    }
+    root.sort();
+    Some((vec![root], files.len()))
+}
+
 pub fn rebuild_torrent(torrent: &crate::models::Torrent, bencoded_info: &[u8], trackers: &[&str], site_url: &str) -> Vec<u8> {
     let mut dict = std::collections::BTreeMap::new();
 
@@ -126,6 +188,26 @@ pub(crate) mod tests {
     fn rejects_file_without_info() {
         assert!(parse_torrent(b"d8:announce1:xe").is_err());
         assert!(parse_torrent(b"not bencode").is_err());
+    }
+
+    #[test]
+    fn file_tree_single_file() {
+        let (tree, count) = file_tree(INFO).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(tree, vec![FileNode { name: "a.txt".into(), size: Some(5), children: vec![] }]);
+    }
+
+    #[test]
+    fn file_tree_nests_folders_first() {
+        let info = b"d5:filesld6:lengthi3e4:pathl5:z.txteed6:lengthi4e4:pathl3:sub5:b.txteed6:lengthi2e4:pathl3:sub5:a.txteee4:name4:root12:piece lengthi1e6:pieces0:e";
+        let (tree, count) = file_tree(info).unwrap();
+        assert_eq!(count, 3);
+        let root = &tree[0];
+        assert_eq!((root.name.as_str(), root.size), ("root", None));
+        let names: Vec<&str> = root.children.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, vec!["sub", "z.txt"]);
+        let sub: Vec<(&str, Option<i64>)> = root.children[0].children.iter().map(|c| (c.name.as_str(), c.size)).collect();
+        assert_eq!(sub, vec![("a.txt", Some(2)), ("b.txt", Some(4))]);
     }
 
     #[test]

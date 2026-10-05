@@ -1,79 +1,158 @@
 {% extends "layout.html" %}
-{% block title %}Upload :: {{ config.site_name }}{% endblock %}
+{% block title %}Upload Torrent :: {{ config.site_name }}{% endblock %}
+{% block metatags %}
+<meta property="og:description" content="Upload a torrent to {{ config.site_name }}">
+{% endblock %}
 {% block body %}
-<h3>Upload Torrent</h3>
-<form action="/upload" method="post" enctype="multipart/form-data">
-    <div class="row">
-        <div class="col-md-6">
-            <div class="form-group">
-                <label>Torrent file</label>
-                <input type="file" name="torrent_file" accept=".torrent" required class="form-control">
-            </div>
-        </div>
-        <div class="col-md-6">
-            <div class="form-group">
-                <label>Category</label>
-                <select name="category" class="form-control" required>
-                    <option value="">[Select a category]</option>
-                    {% for entry in categories %}
-                    {% set main = entry.0 %}
-                    <optgroup label="{{ main.name }}">
-                        {% for sub in entry.1 %}
-                        {% if sub.id != 0 %}
-                        <option value="{{ main.id }}_{{ sub.id }}">{{ main.name }} - {{ sub.name }}</option>
-                        {% endif %}
-                        {% endfor %}
-                    </optgroup>
-                    {% endfor %}
-                </select>
-            </div>
-        </div>
-    </div>
-    <div class="row">
-        <div class="col-md-6">
-            <div class="form-group">
-                <label>Display name <small>(optional)</small></label>
-                <input type="text" name="display_name" class="form-control" placeholder="Display name">
-            </div>
-        </div>
-        {% if current_user and groups | length > 0 %}
-        <div class="col-md-6">
-            <div class="form-group">
-                <label>Release under group</label>
-                <select name="group_id" class="form-control">
-                    <option value="0">None (personal upload)</option>
-                    {% for group in groups %}
-                    <option value="{{ group.id }}"> [{{ group.tag }}] {{ group.name }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-        </div>
-        {% endif %}
-    </div>
-    <div class="row">
-        <div class="col-md-6">
-            <div class="form-group">
-                <label>Information <small>(website or IRC)</small></label>
-                <input type="text" name="information" class="form-control" placeholder="https://...">
-            </div>
-        </div>
-        <div class="col-md-6">
-            <div class="form-group">
-                <label>Flags</label><br>
-                <label><input type="checkbox" name="is_hidden"> Hidden</label>&nbsp;
-                <label><input type="checkbox" name="is_remake"> Remake</label>&nbsp;
-                <label><input type="checkbox" name="is_anonymous"> Anonymous</label>&nbsp;
-                <label><input type="checkbox" name="is_complete"> Complete</label>
-                {% if current_user and current_user.level >= 1 %}
-                &nbsp;<label><input type="checkbox" name="is_trusted"> Trusted</label>
-                {% endif %}
-            </div>
-        </div>
-    </div>
-    <div class="form-group">
-        <label>Description <small>(Markdown supported)</small></label>
-        <textarea name="description" class="form-control" rows="5" placeholder="Optional description..."></textarea>
-    </div>
-    <button type="submit" class="btn btn-primary">Upload</button>
+
+<h1>Upload Torrent</h1>
+
+<div id="upload-drop-zone"><span>Drop here!</span></div>
+<form method="POST" action="/upload" enctype="multipart/form-data">
+	<p><strong>Important:</strong> Make sure you have read <strong><a href="/rules">the rules</a></strong> before uploading!</p>
+	<br>
+
+	<div class="row">
+		<div class="col-md-12">
+			<div class="form-group">
+				<label class="control-label" for="torrent_file">Torrent file</label>
+				<div class="input-group">
+					<label for="torrent_file" class="input-group-btn">
+						<span class="btn btn-default">Browse&hellip;</span>
+					</label>
+					<input type="text" class="form-control" readonly>
+				</div>
+				<div class="sr-only">
+					<input id="torrent_file" name="torrent_file" type="file" accept=".torrent" required>
+				</div>
+			</div>
+		</div>
+	</div>
+	<div class="row">
+		<div class="col-md-6">
+			<div class="form-group">
+				<label class="control-label" for="display_name">Torrent display name (optional)</label>
+				<input class="form-control" id="display_name" name="display_name" placeholder="Display name" type="text" minlength="3" maxlength="255">
+			</div>
+		</div>
+		<div class="col-md-6">
+			<div class="form-group">
+				<label class="control-label" for="category">Category</label>
+				<select class="form-control" id="category" name="category" required>
+					<option value="">[Select a category]</option>
+					{% for entry in categories %}
+					{% set main = entry.0 %}
+					<option value="{{ main.id }}_0" disabled>{{ main.name }}</option>
+					{% for sub in entry.1 %}
+					{% if sub.id != 0 %}
+					<option value="{{ main.id }}_{{ sub.id }}">{{ main.name }} - {{ sub.name }}</option>
+					{% endif %}
+					{% endfor %}
+					{% endfor %}
+				</select>
+			</div>
+		</div>
+	</div>
+	<div class="row form-group">
+		<div class="col-md-6">
+			<div class="form-group">
+				<label class="control-label" for="information">Information</label>
+				<input class="form-control" id="information" name="information" placeholder="Your website or IRC channel" type="text" maxlength="255">
+			</div>
+		</div>
+		<div class="col-md-6">
+			<label class="control-label">Torrent flags</label><br>
+
+			<div class="btn-group" data-toggle="buttons">
+				<label class="btn btn-default" title="Upload torrent anonymously (don't display your username)">
+					<input id="is_anonymous" name="is_anonymous" type="checkbox" value="y">
+					<span class="glyphicon glyphicon-check"></span>
+					<span class="glyphicon glyphicon-unchecked"></span>
+					Anonymous
+				</label>
+				<label class="btn btn-grey" title="Hide torrent from listing">
+					<input id="is_hidden" name="is_hidden" type="checkbox" value="y">
+					<span class="glyphicon glyphicon-check"></span>
+					<span class="glyphicon glyphicon-unchecked"></span>
+					Hidden
+				</label>
+			</div>
+			<div class="hidden-xl hidden-lg"><br></div>
+			<div class="btn-group" data-toggle="buttons">
+				<label class="btn btn-danger" title="This torrent is derived from another release">
+					<input id="is_remake" name="is_remake" type="checkbox" value="y">
+					<span class="glyphicon glyphicon-check"></span>
+					<span class="glyphicon glyphicon-unchecked"></span>
+					Remake
+				</label>
+				<label class="btn btn-warning" title="This torrent is a complete batch (eg. season)">
+					<input id="is_complete" name="is_complete" type="checkbox" value="y">
+					<span class="glyphicon glyphicon-check"></span>
+					<span class="glyphicon glyphicon-unchecked"></span>
+					Complete
+				</label>
+				{% if current_user and current_user.level >= 1 %}
+				<label class="btn btn-success active" title="Mark torrent trusted">
+					<input checked id="is_trusted" name="is_trusted" type="checkbox" value="y">
+					<span class="glyphicon glyphicon-check"></span>
+					<span class="glyphicon glyphicon-unchecked"></span>
+					Trusted
+				</label>
+				{% endif %}
+			</div>
+		</div>
+	</div>
+	{% if groups | length > 0 %}
+	<div class="row">
+		<div class="col-md-6">
+			<div class="form-group">
+				<label class="control-label" for="group_id">Release under group</label>
+				<select class="form-control" id="group_id" name="group_id">
+					<option value="0">None (personal upload)</option>
+					{% for group in groups %}
+					<option value="{{ group.id }}">[{{ group.tag }}] {{ group.name }}</option>
+					{% endfor %}
+				</select>
+			</div>
+		</div>
+	</div>
+	{% endif %}
+	<div class="row">
+		<div class="col-md-12">
+			<div class="form-group">
+				<div class="markdown-editor" id="description-markdown-editor" data-field-name="description">
+					<label class="control-label" for="description">Description</label>
+					<a href="https://github.com/adam-p/markdown-here/wiki/Markdown-Cheatsheet" class="small" target="_blank">Markdown supported</a>
+					<ul class="nav nav-tabs" role="tablist">
+						<li role="presentation" class="active">
+							<a href="#description-tab" role="tab" data-toggle="tab">
+								Write
+							</a>
+						</li>
+						<li role="presentation">
+							<a href="#description-preview" id="description-preview-tab" role="tab" data-toggle="tab">
+								Preview
+							</a>
+						</li>
+					</ul>
+					<div class="tab-content">
+						<div role="tabpanel" class="tab-pane active" id="description-tab" data-markdown-target="#description-markdown-target">
+							<textarea class="form-control markdown-source" id="description" name="description" maxlength="10240"></textarea>
+						</div>
+						<div role="tabpanel" class="tab-pane" id="description-preview">
+							<div class="well" id="description-markdown-target"></div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<br>
+	<div class="row">
+		<div class="form-group col-md-6">
+			<input type="submit" value="Upload" class="btn btn-primary">
+		</div>
+	</div>
 </form>
 {% endblock %}

@@ -1,66 +1,80 @@
+{# Included by listing pages, which must import "macros.html" as macros. #}
 {% if torrents | length > 0 %}
 <div class="table-responsive">
-    <table class="table table-bordered table-hover table-striped torrent-list">
-        <thead>
-            <tr>
-                <th style="width:80px;" class="text-center">Category</th>
-                <th style="width:auto;">Name</th>
-                <th style="width:70px;" class="text-center">Links</th>
-                <th style="width:100px;" class="text-center">Size</th>
-                <th style="width:140px;" class="text-center">Date</th>
-                <th style="width:50px;" class="text-center" title="Seeders"><i class="fa fa-arrow-up"></i></th>
-                <th style="width:50px;" class="text-center" title="Leechers"><i class="fa fa-arrow-down"></i></th>
-                <th style="width:50px;" class="text-center" title="Downloads"><i class="fa fa-check"></i></th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for torrent in torrents %}
-            <tr class="{{ torrent | row_class }}">
-                <td class="text-center">{{ torrent.main_category_id }}_{{ torrent.sub_category_id }}</td>
-                <td>
-                    <a href="/view/{{ torrent.id }}">{{ torrent.display_name }}</a>
-                    {% if torrent | is_trusted %}<span class="label label-success">Trusted</span>{% endif %}
-                    {% if torrent | is_remake %}<span class="label label-warning">Remake</span>{% endif %}
-                </td>
-                <td class="text-center">
-                    <a href="/download/{{ torrent.id }}" title="Download torrent"><i class="fa fa-download"></i></a>
-                    <a href="/magnet/{{ torrent.id }}" title="Magnet link"><i class="fa fa-magnet"></i></a>
-                </td>
-                <td class="text-center">{{ torrent | filesize_human }}</td>
-                <td class="text-center" title="{{ torrent.created_time }}">
-                    {{ torrent.created_time | date(format="%Y-%m-%d") }}
-                </td>
-                <td class="text-center">—</td>
-                <td class="text-center">—</td>
-                <td class="text-center">—</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+	<table class="table table-bordered table-hover table-striped torrent-list">
+		<thead>
+			<tr>
+				{{ macros::column_header(search=search, header_class="hdr-category", header_style="width:80px;", label="Category", center_text=true) }}
+				{{ macros::column_header(search=search, header_class="hdr-name", header_style="width:auto;", label="Name") }}
+				{{ macros::column_header(search=search, header_class="hdr-comments", header_style="width:50px;", label='<i class="fa fa-comments-o"></i>', center_text=true, sort_key="comments", header_title="Comments") }}
+				{{ macros::column_header(search=search, header_class="hdr-link", header_style="width:70px;", label="Link", center_text=true) }}
+				{{ macros::column_header(search=search, header_class="hdr-size", header_style="width:100px;", label="Size", center_text=true, sort_key="size") }}
+				{{ macros::column_header(search=search, header_class="hdr-date", header_style="width:140px;", label="Date", center_text=true, sort_key="id", header_title="In UTC") }}
+				{{ macros::column_header(search=search, header_class="hdr-seeders", header_style="width:50px;", label='<i class="fa fa-arrow-up" aria-hidden="true"></i>', center_text=true, sort_key="seeders", header_title="Seeders") }}
+				{{ macros::column_header(search=search, header_class="hdr-leechers", header_style="width:50px;", label='<i class="fa fa-arrow-down" aria-hidden="true"></i>', center_text=true, sort_key="leechers", header_title="Leechers") }}
+				{{ macros::column_header(search=search, header_class="hdr-downloads", header_style="width:50px;", label='<i class="fa fa-check" aria-hidden="true"></i>', center_text=true, sort_key="downloads", header_title="Completed downloads") }}
+			</tr>
+		</thead>
+		<tbody>
+			{% for torrent in torrents %}
+			{% set cat_id = torrent.main_category_id ~ "_" ~ torrent.sub_category_id %}
+			{% set cat_name = category_names[cat_id] | default(value=cat_id) %}
+			<tr class="{{ torrent | row_class }}">
+				<td>
+					<a href="/?c={{ cat_id }}" title="{{ cat_name }}">
+						<img src="/static/img/icons/{{ config.site_flavor }}/{{ cat_id }}.png" alt="{{ cat_name }}" class="category-icon">
+					</a>
+				</td>
+				<td colspan="2">
+					{% if torrent.comment_count > 0 %}
+					<a href="/view/{{ torrent.id }}#comments" class="comments" title="{{ torrent.comment_count }} comment{% if torrent.comment_count > 1 %}s{% endif %}">
+						<i class="fa fa-comments-o"></i>{{ torrent.comment_count -}}
+					</a>
+					{% endif %}
+					<a href="/view/{{ torrent.id }}" title="{{ torrent.display_name }}">{{ torrent.display_name }}</a>
+				</td>
+				<td class="text-center">
+					{% if torrent.has_torrent %}
+					<a href="/download/{{ torrent.id }}"><i class="fa fa-fw fa-download"></i></a>
+					{% endif %}
+					<a href="/magnet/{{ torrent.id }}"><i class="fa fa-fw fa-magnet"></i></a>
+				</td>
+				<td class="text-center">{{ torrent | filesize_human }}</td>
+				<td class="text-center" data-timestamp="{{ torrent.created_time | date(format="%s") }}">{{ torrent.created_time | date(format="%Y-%m-%d %H:%M") }}</td>
+				<td class="text-center">{{ torrent.seed_count }}</td>
+				<td class="text-center">{{ torrent.leech_count }}</td>
+				<td class="text-center">{{ torrent.download_count }}</td>
+			</tr>
+			{% endfor %}
+		</tbody>
+	</table>
 </div>
-
-{% if pagination.total_pages > 1 %}
-<div class="text-center">
-    <ul class="pagination">
-        {% if pagination.has_prev %}
-        <li><a href="?p={{ pagination.current - 1 }}{% if search_term %}&q={{ search_term }}{% endif %}">&laquo;</a></li>
-        {% endif %}
-        {% for page in pagination.pages %}
-            {% if page.is_ellipsis %}
-            <li class="disabled"><span>&hellip;</span></li>
-            {% elif page.is_current %}
-            <li class="active"><span>{{ page.num }}</span></li>
-            {% else %}
-            <li><a href="?p={{ page.num }}{% if search_term %}&q={{ search_term }}{% endif %}">{{ page.num }}</a></li>
-            {% endif %}
-        {% endfor %}
-        {% if pagination.has_next %}
-        <li><a href="?p={{ pagination.current + 1 }}{% if search_term %}&q={{ search_term }}{% endif %}">&raquo;</a></li>
-        {% endif %}
-    </ul>
-</div>
-{% endif %}
-
 {% else %}
-<p class="text-center text-muted">No torrents found.</p>
+<h3>No results found</h3>
 {% endif %}
+
+<div class="center">
+	<nav>
+		<ul class="pagination">
+			{% if pagination.has_prev %}
+			<li><a rel="prev" href="{{ macros::query(search=search, s=search.sort, o=search.order, p=pagination.current - 1) }}">&laquo;</a></li>
+			{% else %}
+			<li class="disabled"><a href="#">&laquo;</a></li>
+			{% endif %}
+			{% for page in pagination.pages %}
+			{% if page.is_ellipsis %}
+			<li class="disabled"><a href="#">…</a></li>
+			{% elif page.is_current %}
+			<li class="active"><a href="#">{{ page.num }} <span class="sr-only">(current)</span></a></li>
+			{% else %}
+			<li><a href="{{ macros::query(search=search, s=search.sort, o=search.order, p=page.num) }}">{{ page.num }}</a></li>
+			{% endif %}
+			{% endfor %}
+			{% if pagination.has_next %}
+			<li><a rel="next" href="{{ macros::query(search=search, s=search.sort, o=search.order, p=pagination.current + 1) }}">&raquo;</a></li>
+			{% else %}
+			<li class="disabled"><a href="#">&raquo;</a></li>
+			{% endif %}
+		</ul>
+	</nav>
+</div>

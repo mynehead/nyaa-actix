@@ -7,10 +7,12 @@ use tera::Tera;
 use crate::config::Config;
 use crate::db::DbPool;
 use crate::db::schema::groups;
+use crate::utils::context::base_context;
 use crate::middleware::auth::get_current_user;
 use crate::models::{Group, NewGroup, User};
 use crate::db::schema::group_members;
-use crate::search::db::{search, SearchQuery};
+use crate::search::db::{search, with_stats, SearchQuery};
+use crate::utils::context::SearchState;
 use crate::utils::pagination::Pagination;
 
 pub async fn group_list(
@@ -24,10 +26,14 @@ pub async fn group_list(
     let all_groups = Group::all(&mut conn)
         .map_err(actix_web::error::ErrorInternalServerError)?;
 
-    let mut ctx = tera::Context::new();
-    ctx.insert("current_user", &current_user);
-    ctx.insert("groups", &all_groups);
-    ctx.insert("config", &serde_json::json!({ "site_name": cfg.site_name }));
+    let groups: Vec<serde_json::Value> = all_groups.into_iter().map(|g| {
+        let owner = User::by_id(&mut conn, g.owner_id).ok().flatten().map(|u| u.username);
+        serde_json::json!({ "group": g, "owner": owner })
+    }).collect();
+
+    let mut ctx = base_context(&cfg, current_user.as_ref());
+    ctx.insert("active_page", "groups");
+    ctx.insert("groups", &groups);
     let html = tmpl.render("groups.html", &ctx)
         .map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
@@ -49,10 +55,8 @@ pub async fn create_group_get(
 ) -> Result<HttpResponse> {
     let current_user = get_current_user(&session, &pool)
         .ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
-    let mut ctx = tera::Context::new();
-    ctx.insert("current_user", &current_user);
+    let mut ctx = base_context(&cfg, Some(&current_user));
     ctx.insert("errors", &Vec::<String>::new());
-    ctx.insert("config", &serde_json::json!({ "site_name": cfg.site_name }));
     let html = tmpl.render("group_create.html", &ctx)
         .map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
@@ -78,10 +82,8 @@ pub async fn create_group_post(
     }
 
     if !errors.is_empty() {
-        let mut ctx = tera::Context::new();
-        ctx.insert("current_user", &current_user);
+        let mut ctx = base_context(&cfg, Some(&current_user));
         ctx.insert("errors", &errors);
-        ctx.insert("config", &serde_json::json!({ "site_name": cfg.site_name }));
         let html = tmpl.render("group_create.html", &ctx)
             .map_err(actix_web::error::ErrorInternalServerError)?;
         return Ok(HttpResponse::BadRequest().content_type("text/html").body(html));
@@ -160,14 +162,15 @@ pub async fn view_group(
         .map(|u| group.can_edit(&mut conn, u.id))
         .unwrap_or(false);
 
-    let mut ctx = tera::Context::new();
-    ctx.insert("current_user", &current_user);
+    let mut ctx = base_context(&cfg, current_user.as_ref());
     ctx.insert("group", &group);
     ctx.insert("owner", &owner);
     ctx.insert("can_edit", &can_edit);
-    ctx.insert("torrents", &result.torrents);
+    let torrents = with_stats(&mut conn, result.torrents)
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    ctx.insert("torrents", &torrents);
     ctx.insert("pagination", &pagination);
-    ctx.insert("config", &serde_json::json!({ "site_name": cfg.site_name }));
+    ctx.insert("search", &SearchState::new(&params.q, &params.c, &params.f, &params.s, &params.o));
     let html = tmpl.render("group.html", &ctx)
         .map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
@@ -197,10 +200,8 @@ pub async fn edit_group_get(
     if !group.can_edit(&mut conn, current_user.id) {
         return Err(actix_web::error::ErrorForbidden("Not allowed"));
     }
-    let mut ctx = tera::Context::new();
-    ctx.insert("current_user", &current_user);
+    let mut ctx = base_context(&cfg, Some(&current_user));
     ctx.insert("group", &group);
-    ctx.insert("config", &serde_json::json!({ "site_name": cfg.site_name }));
     let html = tmpl.render("group_edit.html", &ctx)
         .map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
@@ -268,11 +269,9 @@ pub async fn manage_members_get(
         }))
     }).collect();
 
-    let mut ctx = tera::Context::new();
-    ctx.insert("current_user", &current_user);
+    let mut ctx = base_context(&cfg, Some(&current_user));
     ctx.insert("group", &group);
     ctx.insert("members", &members);
-    ctx.insert("config", &serde_json::json!({ "site_name": cfg.site_name }));
     let html = tmpl.render("group_members.html", &ctx)
         .map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))

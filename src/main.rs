@@ -9,7 +9,7 @@ mod utils;
 
 use actix_files as fs;
 use actix_session::{storage::CookieSessionStore, SessionMiddleware};
-use actix_web::{cookie::Key, middleware::Logger, web, App, HttpServer};
+use actix_web::{cookie::Key, http::StatusCode, middleware::{ErrorHandlers, Logger}, web, App, HttpServer};
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 use tera::Tera;
 
@@ -44,12 +44,16 @@ async fn main() -> std::io::Result<()> {
             .app_data(cfg_data.clone())
             .app_data(pool_data.clone())
             .app_data(tmpl_data.clone())
+            .wrap(ErrorHandlers::new().handler(StatusCode::NOT_FOUND, handlers::site::not_found))
             .wrap(Logger::default())
             .wrap(SessionMiddleware::new(CookieSessionStore::default(), secret_key.clone()))
             // Static files
-            .service(fs::Files::new("/static", "./static").show_files_listing())
+            .service(fs::Files::new("/static", "./static"))
             // Home / search
             .route("/", web::get().to(handlers::home::home))
+            // Info pages
+            .route("/rules", web::get().to(handlers::site::rules))
+            .route("/help", web::get().to(handlers::site::help))
             // Torrents
             .route("/view/{id}", web::get().to(handlers::torrents::view_torrent))
             .route("/download/{id}", web::get().to(handlers::torrents::download_torrent))

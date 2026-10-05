@@ -1,0 +1,42 @@
+{# Query string for a listing link: the current search with sort, order and page set. #}
+{% macro query(search, s, o, p=1) -%}
+?{% if search.term %}q={{ search.term | urlencode }}&amp;{% endif %}{% if search.category != "0_0" %}c={{ search.category | urlencode }}&amp;{% endif %}{% if search.quality_filter != "0" %}f={{ search.quality_filter | urlencode }}&amp;{% endif %}{% if s != "id" or o != "desc" %}s={{ s | urlencode }}&amp;o={{ o | urlencode }}&amp;{% endif %}p={{ p }}
+{%- endmacro query %}
+
+{# Sortable column header, as upstream's render_column_header. #}
+{% macro column_header(search, header_class, header_style, label, center_text=false, sort_key="", header_title="") -%}
+{%- if sort_key and search.sort == sort_key %}{% set class_suffix = "_" ~ search.order %}{% else %}{% set class_suffix = "" %}{% endif -%}
+<th class="{{ header_class }}{% if sort_key %} sorting{{ class_suffix }}{% endif %}{% if center_text %} text-center{% endif %}"{% if header_title %} title="{{ header_title }}"{% endif %} style="{{ header_style }}">
+	{%- if sort_key -%}
+	<a href="{% if class_suffix == "_desc" %}{{ self::query(search=search, s=sort_key, o="asc") }}{% else %}{{ self::query(search=search, s=sort_key, o="desc") }}{% endif %}"></a>
+	{%- endif -%}
+	{{- label | safe -}}
+</th>
+{%- endmacro column_header %}
+
+{# A torrent's file list, as nested <li>s. Top-level folders with up to 20 entries start open. #}
+{% macro file_list(nodes, depth=0) -%}
+{% for node in nodes -%}
+{% if node.size is number %}
+	<li><i class="fa fa-file"></i>{{ node.name }} <span class="file-size">({{ node.size | filesize }})</span></li>
+{% else %}
+	{% set pre_expanded = depth == 0 and node.children | length <= 20 %}
+	<li>
+		<a href="" class="folder"><i class="fa fa-folder{% if pre_expanded %}-open{% endif %}"></i>{{ node.name }}</a>
+		<ul{% if pre_expanded %} data-show="yes"{% endif %}>
+		{{ self::file_list(nodes=node.children, depth=depth + 1) }}
+		</ul>
+	</li>
+{% endif %}
+{%- endfor %}
+{%- endmacro file_list %}
+
+{# Username linked to their torrents, colored by user level. #}
+{% macro user_link(user) -%}
+<a class="text-{{ user | level_color }}" href="/user/{{ user.username | urlencode }}" data-toggle="tooltip" title="{{ user | level_str }}">{{ user.username }}</a>
+{%- endmacro user_link %}
+
+{# Help page heading with a self-link. #}
+{% macro linkable_header(heading, label) -%}
+	<h3 id="{{ label }}">{{ heading }}<a class="header-anchor" href="#{{ label }}"><i class="fa fa-link" aria-hidden="true"></i></a></h3>
+{%- endmacro linkable_header %}

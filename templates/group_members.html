@@ -3,13 +3,13 @@
 {% block body %}
 <div class="row"><div class="col-md-8 col-md-offset-2">
     <h3>Manage Members: {{ group.name }}</h3>
-    <p><a href="/group/{{ group.slug }}">&larr; Back to group</a></p>
+    <p><a href="/group/{{ group.slug | urlencode }}">&larr; Back to group</a></p>
     <h4>Add / Update Member</h4>
-    <form method="post" action="/group/{{ group.slug }}/members">
-        <div class="form-group"><label>Username</label>
+    <form method="post" action="/group/{{ group.slug | urlencode }}/members">
+        <div class="form-group"><label class="control-label">Username</label>
             <input type="text" name="username" class="form-control" required></div>
-        <div class="checkbox"><label><input type="checkbox" name="can_upload" value="1"> Can upload under group</label></div>
-        <div class="checkbox"><label><input type="checkbox" name="can_edit" value="1"> Can edit group details</label></div>
+        <div class="checkbox"><label class="control-label"><input type="checkbox" name="can_upload" value="1"> Can upload under group</label></div>
+        <div class="checkbox"><label class="control-label"><input type="checkbox" name="can_edit" value="1"> Can edit group details</label></div>
         <p class="help-block">Setting no permissions removes the user from the group.</p>
         <button type="submit" class="btn btn-primary">Update Member</button>
     </form>

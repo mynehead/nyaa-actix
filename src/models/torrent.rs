@@ -50,8 +50,6 @@ impl Torrent {
         crate::torrent::magnet::create_magnet(&self.info_hash_hex(), display_name, trackers)
     }
 
-    // is_hidden and is_complete complete the flag getters; torrent edit (roadmap step 4) needs them.
-    #[allow(dead_code)]
     pub fn is_hidden(&self) -> bool {
         self.flags & TorrentFlags::HIDDEN.bits() != 0
     }
@@ -68,7 +66,6 @@ impl Torrent {
         self.flags & TorrentFlags::TRUSTED.bits() != 0
     }
 
-    #[allow(dead_code)]
     pub fn is_complete(&self) -> bool {
         self.flags & TorrentFlags::COMPLETE.bits() != 0
     }
@@ -81,16 +78,41 @@ impl Torrent {
         self.flags & TorrentFlags::BANNED.bits() != 0
     }
 
+    /// Listing row class, as upstream: deleted (grey), hidden (orange), remake (red), trusted (green).
     pub fn row_class(&self) -> &'static str {
         if self.is_deleted() || self.is_banned() {
-            "danger"
-        } else if self.is_remake() {
+            "deleted"
+        } else if self.is_hidden() {
             "warning"
+        } else if self.is_remake() {
+            "danger"
         } else if self.is_trusted() {
             "success"
         } else {
-            ""
+            "default"
         }
+    }
+
+    /// The information field as an IRC or http(s) link when it is one, otherwise
+    /// escaped text (upstream `information_as_link`). Returns HTML.
+    pub fn information_as_link(&self) -> String {
+        let info = self.information.as_str();
+        let is_ident = |s: &str, extra: &str| !s.is_empty()
+            && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c) || extra.contains(c));
+        if let Some((chan, server)) = info.strip_prefix('#').and_then(|rest| rest.split_once('@')) {
+            if is_ident(chan, "") && is_ident(server, ".:") {
+                return format!("<a href=\"irc://{server}/{chan}\">#{chan}@{server}</a>");
+            }
+        }
+        if (info.starts_with("http://") || info.starts_with("https://"))
+            && info.len() > info.find("://").unwrap() + 3
+            && !info.chars().any(|c| "<>\"".contains(c) || c.is_whitespace())
+        {
+            let text = percent_encoding::percent_decode_str(info).decode_utf8_lossy();
+            return format!("<a rel=\"noopener noreferrer nofollow\" href=\"{}\">{}</a>",
+                escape(info), escape(&text));
+        }
+        escape(info)
     }
 
     pub fn by_id(conn: &mut SqliteConnection, tid: i32) -> QueryResult<Option<Torrent>> {
@@ -105,17 +127,37 @@ impl Torrent {
     }
 
     pub fn filesize_human(&self) -> String {
-        let size = self.filesize as f64;
-        if size >= 1_073_741_824.0 {
-            format!("{:.1} GiB", size / 1_073_741_824.0)
-        } else if size >= 1_048_576.0 {
-            format!("{:.1} MiB", size / 1_048_576.0)
-        } else if size >= 1024.0 {
-            format!("{:.1} KiB", size / 1024.0)
-        } else {
-            format!("{} B", self.filesize)
+        format_filesize(self.filesize)
+    }
+
+    pub fn is_comment_locked(&self) -> bool {
+        self.flags & TorrentFlags::COMMENT_LOCKED.bits() != 0
+    }
+}
+
+/// Binary-unit size, like Jinja's `filesizeformat(True)` that upstream uses.
+pub fn format_filesize(bytes: i64) -> String {
+    let size = bytes as f64;
+    match bytes {
+        1 => "1 Byte".to_string(),
+        b if b < 1024 => format!("{} Bytes", b),
+        _ => {
+            let units = ["KiB", "MiB", "GiB", "TiB", "PiB"];
+            let mut unit = 1024.0_f64;
+            for (i, name) in units.iter().enumerate() {
+                if size < unit * 1024.0 || i == units.len() - 1 {
+                    return format!("{:.1} {}", size / unit, name);
+                }
+                unit *= 1024.0;
+            }
+            unreachable!()
         }
     }
+}
+
+fn escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+        .replace('"', "&quot;").replace('\'', "&#39;")
 }
 
 #[derive(Debug, Insertable)]
@@ -170,18 +212,29 @@ mod tests {
 
     #[test]
     fn human_file_sizes() {
-        assert_eq!(torrent(TorrentFlags::empty(), 512).filesize_human(), "512 B");
+        assert_eq!(torrent(TorrentFlags::empty(), 512).filesize_human(), "512 Bytes");
         assert_eq!(torrent(TorrentFlags::empty(), 1536).filesize_human(), "1.5 KiB");
         assert_eq!(torrent(TorrentFlags::empty(), 5 * 1_048_576).filesize_human(), "5.0 MiB");
         assert_eq!(torrent(TorrentFlags::empty(), 3 * 1_073_741_824).filesize_human(), "3.0 GiB");
+        assert_eq!(format_filesize(5 << 40), "5.0 TiB");
+    }
+
+    #[test]
+    fn information_links() {
+        let info = |s: &str| Torrent { information: s.into(), ..torrent(TorrentFlags::empty(), 0) }.information_as_link();
+        assert_eq!(info("#chan@irc.rizon.net"), "<a href=\"irc://irc.rizon.net/chan\">#chan@irc.rizon.net</a>");
+        assert_eq!(info("https://a.b/x%20y"), "<a rel=\"noopener noreferrer nofollow\" href=\"https://a.b/x%20y\">https://a.b/x y</a>");
+        assert_eq!(info("https://a.b/\"><script>"), "https://a.b/&quot;&gt;&lt;script&gt;");
+        assert_eq!(info("<b>hi</b>"), "&lt;b&gt;hi&lt;/b&gt;");
     }
 
     #[test]
     fn row_class_priority() {
-        assert_eq!(torrent(TorrentFlags::TRUSTED | TorrentFlags::REMAKE | TorrentFlags::DELETED, 0).row_class(), "danger");
-        assert_eq!(torrent(TorrentFlags::TRUSTED | TorrentFlags::REMAKE, 0).row_class(), "warning");
+        assert_eq!(torrent(TorrentFlags::TRUSTED | TorrentFlags::REMAKE | TorrentFlags::DELETED, 0).row_class(), "deleted");
+        assert_eq!(torrent(TorrentFlags::HIDDEN | TorrentFlags::REMAKE, 0).row_class(), "warning");
+        assert_eq!(torrent(TorrentFlags::TRUSTED | TorrentFlags::REMAKE, 0).row_class(), "danger");
         assert_eq!(torrent(TorrentFlags::TRUSTED, 0).row_class(), "success");
-        assert_eq!(torrent(TorrentFlags::empty(), 0).row_class(), "");
+        assert_eq!(torrent(TorrentFlags::empty(), 0).row_class(), "default");
     }
 
     #[test]

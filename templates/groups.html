@@ -14,12 +14,13 @@
             </tr>
         </thead>
         <tbody>
-            {% for group in groups %}
+            {% for row in groups %}
+            {% set group = row.group %}
             <tr>
-                <td><a href="/group/{{ group.slug }}">[{{ group.tag }}]</a></td>
-                <td><a href="/group/{{ group.slug }}">{{ group.name }}</a></td>
-                <td>{{ group.owner_id }}</td>
-                <td>{{ group.created_time | date(format="%Y-%m-%d") }}</td>
+                <td><a href="/group/{{ group.slug | urlencode }}">[{{ group.tag }}]</a></td>
+                <td><a href="/group/{{ group.slug | urlencode }}">{{ group.name }}</a></td>
+                <td>{% if row.owner %}<a href="/user/{{ row.owner | urlencode }}">{{ row.owner }}</a>{% else %}&mdash;{% endif %}</td>
+                <td data-timestamp="{{ group.created_time | date(format="%s") }}">{{ group.created_time | date(format="%Y-%m-%d %H:%M") }}</td>
             </tr>
             {% else %}
             <tr><td colspan="4" class="text-center">No groups yet.</td></tr>

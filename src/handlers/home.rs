@@ -5,8 +5,10 @@ use tera::Tera;
 
 use crate::config::Config;
 use crate::db::DbPool;
+use crate::utils::context::base_context;
 use crate::middleware::auth::get_current_user;
-use crate::search::db::{search, SearchQuery};
+use crate::search::db::{search, with_stats, SearchQuery};
+use crate::utils::context::SearchState;
 use crate::utils::pagination::Pagination;
 
 #[derive(Debug, Deserialize)]
@@ -52,19 +54,12 @@ pub async fn home(
 
     let pagination = Pagination::new(q.page, result.total, q.per_page);
 
-    let mut ctx = tera::Context::new();
-    ctx.insert("current_user", &current_user);
-    ctx.insert("torrents", &result.torrents);
+    let mut ctx = base_context(&cfg, current_user.as_ref());
+    let torrents = with_stats(&mut conn, result.torrents)
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    ctx.insert("torrents", &torrents);
     ctx.insert("pagination", &pagination);
-    ctx.insert("search_term", &params.q);
-    ctx.insert("sort", &params.s);
-    ctx.insert("order", &params.o);
-    ctx.insert("category", &params.c);
-    ctx.insert("filter", &params.f);
-    ctx.insert("config", &serde_json::json!({
-        "site_name": cfg.site_name,
-        "site_flavor": cfg.site_flavor,
-    }));
+    ctx.insert("search", &SearchState::new(&params.q, &params.c, &params.f, &params.s, &params.o));
 
     let html = tmpl.render("home.html", &ctx)
         .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;

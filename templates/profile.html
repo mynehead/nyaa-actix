@@ -1,13 +1,23 @@
 {% extends "layout.html" %}
-{% block title %}Profile :: {{ config.site_name }}{% endblock %}
+{% block title %}Edit Profile :: {{ config.site_name }}{% endblock %}
 {% block body %}
-<div class="row"><div class="col-md-6 col-md-offset-3">
-    <h3>Profile Settings</h3>
-    <dl class="dl-horizontal">
-        <dt>Username:</dt><dd>{{ current_user.username }}</dd>
-        <dt>Email:</dt><dd>{{ current_user.email | default(value="—") }}</dd>
-        <dt>Level:</dt><dd>{{ current_user | level_str }}</dd>
-        <dt>Member since:</dt><dd>{{ current_user.created_time }}</dd>
-    </dl>
-</div></div>
+
+<h2 style="margin-bottom: 20px;">Profile of <strong class="text-{{ current_user | level_color }}">{{ current_user.username }}</strong></h2>
+
+<div class="row" style="margin-bottom: 20px;">
+	<div class="col-sm-2" style="max-width: 150px;">
+		<img class="avatar" src="/static/img/avatar/default.png">
+	</div>
+	<div class="col-sm-10">
+		<dl class="row" style="margin: 20px 0 15px 0;">
+			<dt class="col-sm-2">User ID:</dt><dd class="col-sm-10">{{ current_user.id }}</dd>
+			<dt class="col-sm-2">User Class:</dt><dd class="col-sm-10">{{ current_user | level_str }}</dd>
+			<dt class="col-sm-2">User Created on:</dt><dd class="col-sm-10">{{ current_user.created_time | date(format="%Y-%m-%d %H:%M:%S") }}</dd>
+			<dt class="col-sm-2">Email:</dt><dd class="col-sm-10">{{ current_user.email | default(value="") }}</dd>
+		</dl>
+	</div>
+</div>
+
+<hr>
+
 {% endblock %}

@@ -38,29 +38,28 @@ impl Pagination {
     }
 }
 
+/// Page numbers as upstream shows them: Flask-SQLAlchemy's
+/// `iter_pages(left_edge=2, left_current=6, right_current=6, right_edge=0)`,
+/// with an ellipsis for each gap.
 fn build_pages(current: i64, total: i64) -> Vec<PageItem> {
-    let mut pages = Vec::new();
-    if total <= 9 {
-        for i in 1..=total {
-            pages.push(PageItem { num: i, is_current: i == current, is_ellipsis: false });
-        }
-        return pages;
-    }
-    // Always show first, last, and window around current
-    let mut nums: Vec<i64> = vec![1, total];
-    for i in (current - 2).max(2)..=(current + 2).min(total - 1) {
-        nums.push(i);
-    }
-    nums.sort_unstable();
-    nums.dedup();
+    const LEFT_EDGE: i64 = 2;
+    const LEFT_CURRENT: i64 = 6;
+    const RIGHT_CURRENT: i64 = 6;
+    const RIGHT_EDGE: i64 = 0;
 
-    let mut prev = 0i64;
-    for n in nums {
-        if prev > 0 && n - prev > 1 {
-            pages.push(PageItem { num: 0, is_current: false, is_ellipsis: true });
+    let mut pages = Vec::new();
+    let mut last = 0;
+    for num in 1..=total {
+        if num <= LEFT_EDGE
+            || (num > current - LEFT_CURRENT - 1 && num < current + RIGHT_CURRENT)
+            || num > total - RIGHT_EDGE
+        {
+            if last + 1 != num {
+                pages.push(PageItem { num: 0, is_current: false, is_ellipsis: true });
+            }
+            pages.push(PageItem { num, is_current: num == current, is_ellipsis: false });
+            last = num;
         }
-        pages.push(PageItem { num: n, is_current: n == current, is_ellipsis: false });
-        prev = n;
     }
     pages
 }
@@ -88,15 +87,17 @@ mod tests {
     }
 
     #[test]
-    fn short_lists_show_every_page() {
-        assert_eq!(nums(&Pagination::new(3, 9 * 10, 10)), (1..=9).collect::<Vec<_>>());
+    fn short_lists_show_pages_near_current() {
+        assert_eq!(nums(&Pagination::new(3, 8 * 10, 10)), (1..=8).collect::<Vec<_>>());
+        // No right edge: like upstream, the last page only shows once it is within reach
+        assert_eq!(nums(&Pagination::new(3, 9 * 10, 10)), (1..=8).collect::<Vec<_>>());
     }
 
     #[test]
-    fn long_lists_use_ellipses_around_a_window() {
-        // 0 marks an ellipsis
-        assert_eq!(nums(&Pagination::new(10, 200, 10)), vec![1, 0, 8, 9, 10, 11, 12, 0, 20]);
-        assert_eq!(nums(&Pagination::new(1, 200, 10)), vec![1, 2, 3, 0, 20]);
-        assert_eq!(nums(&Pagination::new(20, 200, 10)), vec![1, 0, 18, 19, 20]);
+    fn long_lists_match_upstream_window() {
+        // 0 marks an ellipsis; two edge pages, 5 before and 5 after the current one, no right edge
+        assert_eq!(nums(&Pagination::new(10, 200, 10)), vec![1, 2, 0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+        assert_eq!(nums(&Pagination::new(1, 200, 10)), vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(nums(&Pagination::new(20, 200, 10)), vec![1, 2, 0, 14, 15, 16, 17, 18, 19, 20]);
     }
 }
