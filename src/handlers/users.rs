@@ -79,12 +79,12 @@ pub async fn view_user(
 
 /// An uploaded avatar. Links carry `?v=` with the upload time, so a new one shows at once.
 pub async fn avatar(
-    cfg: web::Data<Config>,
+    storage: web::Data<crate::storage::Storage>,
     path: web::Path<i32>,
 ) -> Result<HttpResponse> {
-    let file = crate::utils::avatar::path(&cfg, path.into_inner());
-    let data = tokio::fs::read(file).await
-        .map_err(|_| actix_web::error::ErrorNotFound("No avatar"))?;
+    let data = storage.get(crate::storage::Kind::Avatar, path.into_inner()).await
+        .map_err(actix_web::error::ErrorInternalServerError)?
+        .ok_or_else(|| actix_web::error::ErrorNotFound("No avatar"))?;
     Ok(HttpResponse::Ok()
         .content_type("image/png")
         .insert_header(("Cache-Control", "public, max-age=86400"))

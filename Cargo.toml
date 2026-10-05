@@ -46,6 +46,11 @@ socket2 = "0.6"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 # Gravatar URLs (ENABLE_GRAVATAR) are keyed by the MD5 of the email
 md5 = { package = "md-5", version = "0.10" }
+# File storage (torrent info dicts, avatars): local disk or any S3-compatible service.
+# TLS uses ring rather than aws-lc-rs, so Windows (MSVC) builds need no CMake or NASM.
+object_store = { version = "0.14", default-features = false, features = ["fs", "aws-base", "reqwest", "ring"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
 # Optimize dependencies even in debug builds: argon2 (login, register) and Tera rendering
 # are many times slower unoptimized. Only the first debug build pays for it; this crate

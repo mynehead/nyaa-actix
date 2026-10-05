@@ -5,6 +5,7 @@ mod handlers;
 mod middleware;
 mod models;
 mod search;
+mod storage;
 mod torrent;
 mod utils;
 
@@ -23,7 +24,7 @@ async fn main() -> std::io::Result<()> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
 
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if let Some(result) = cli::run(&args) {
+    if let Some(result) = cli::run(&args).await {
         if let Err(e) = result {
             eprintln!("{e}");
             std::process::exit(1);
@@ -40,6 +41,13 @@ async fn main() -> std::io::Result<()> {
         conn.run_pending_migrations(MIGRATIONS).expect("Failed to run migrations");
     }
 
+    let storage = storage::Storage::from_env(&cfg).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
+    log::info!("Storing files on {}", storage.description());
+    let storage_data = web::Data::new(storage);
+
     let secret_key = Key::from(cfg.secret_key.as_bytes());
     let cfg_data = web::Data::new(cfg.clone());
     let pool_data = web::Data::new(pool);
@@ -54,6 +62,7 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .app_data(cfg_data.clone())
             .app_data(pool_data.clone())
+            .app_data(storage_data.clone())
             .app_data(tmpl_data.clone())
             .wrap(ErrorHandlers::new().handler(StatusCode::NOT_FOUND, handlers::site::not_found))
             .wrap(Logger::default())

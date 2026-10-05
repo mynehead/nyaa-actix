@@ -1,21 +1,15 @@
-//! Uploaded avatars: any common image, scaled and cropped to 256x256, stored as PNG.
+//! Uploaded avatars: any common image, scaled and cropped to 256x256, stored as PNG
+//! (`storage::Kind::Avatar`).
 
 use std::io::Cursor;
-use std::path::PathBuf;
 
 use image::{imageops::FilterType, ImageFormat, ImageReader, Limits};
-
-use crate::config::Config;
 
 pub const AVATAR_SIZE: u32 = 256;
 /// Largest file the avatar form accepts.
 pub const MAX_AVATAR_UPLOAD: usize = 4 * 1024 * 1024;
 /// Bigger images are refused before decoding, so a small file can't expand into gigabytes.
 const MAX_DIMENSION: u32 = 8192;
-
-pub fn path(cfg: &Config, user_id: i32) -> PathBuf {
-    PathBuf::from(&cfg.avatar_storage_path).join(format!("{}.png", user_id))
-}
 
 /// Decodes a PNG, JPEG, GIF (first frame) or WebP and returns the 256x256 PNG,
 /// or a message for the user.
@@ -40,15 +34,6 @@ pub fn process(data: &[u8]) -> Result<Vec<u8>, &'static str> {
     let mut out = Vec::new();
     img.write_to(&mut Cursor::new(&mut out), ImageFormat::Png).map_err(|_| UNSUPPORTED)?;
     Ok(out)
-}
-
-/// Writes the avatar next to its final name first, so readers never see half a file.
-pub fn save(cfg: &Config, user_id: i32, png: &[u8]) -> std::io::Result<()> {
-    let dest = path(cfg, user_id);
-    std::fs::create_dir_all(&cfg.avatar_storage_path)?;
-    let tmp = dest.with_extension("png.tmp");
-    std::fs::write(&tmp, png)?;
-    std::fs::rename(&tmp, &dest)
 }
 
 #[cfg(test)]

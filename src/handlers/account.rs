@@ -14,6 +14,7 @@ use crate::db::schema::users;
 use crate::utils::context::base_context;
 use crate::middleware::auth::{get_current_user, login_user, logout_user};
 use crate::models::{NewUser, User};
+use crate::storage::{Kind, Storage};
 use crate::utils::{avatar, flash};
 
 #[derive(Debug, Deserialize)]
@@ -310,7 +311,7 @@ pub async fn profile_post(
 pub async fn avatar_post(
     session: Session,
     pool: web::Data<DbPool>,
-    cfg: web::Data<Config>,
+    storage: web::Data<Storage>,
     mut payload: Multipart,
 ) -> Result<HttpResponse> {
     let Some(user) = get_current_user(&session, &pool) else {
@@ -342,8 +343,7 @@ pub async fn avatar_post(
         Ok(png) => png,
         Err(msg) => return fail(msg),
     };
-    let save_cfg = cfg.clone();
-    web::block(move || avatar::save(&save_cfg, user.id, &png)).await?
+    storage.put(Kind::Avatar, user.id, png).await
         .map_err(actix_web::error::ErrorInternalServerError)?;
     let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
     User::set_avatar_time(&mut conn, user.id, chrono::Utc::now().naive_utc())
@@ -399,6 +399,7 @@ mod tests {
             let app = test::init_service(App::new()
                 .app_data(web::Data::new($cfg.clone()))
                 .app_data(web::Data::new($pool.clone()))
+                .app_data(web::Data::new(Storage::local(&$cfg.avatar_storage_path, &$cfg.avatar_storage_path).unwrap()))
                 .app_data(web::Data::new(tera))
                 .wrap(SessionMiddleware::new(CookieSessionStore::default(), Key::from(&[7u8; 64])))
                 .route("/login/{id}", web::get().to(login_as))
