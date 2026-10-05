@@ -8,7 +8,7 @@ use diesel::prelude::*;
 
 use super::meili::{Meili, StatsDoc, TorrentDoc};
 use crate::db::schema::{nyaa_statistics, nyaa_torrents};
-use crate::db::DbPool;
+use crate::db::{DbConnection, DbPool};
 use crate::models::{Statistic, Torrent};
 
 /// Documents per indexing request.
@@ -16,7 +16,7 @@ const BATCH: i64 = 10_000;
 /// How long a rebuild waits for Meilisearch to process one batch or settings change.
 const TASK_TIMEOUT: Duration = Duration::from_secs(600);
 
-fn docs_for(conn: &mut SqliteConnection, torrents: &[Torrent]) -> QueryResult<Vec<TorrentDoc>> {
+fn docs_for(conn: &mut DbConnection, torrents: &[Torrent]) -> QueryResult<Vec<TorrentDoc>> {
     let ids: Vec<i32> = torrents.iter().map(|t| t.id).collect();
     let stats: std::collections::HashMap<i32, Statistic> = nyaa_statistics::table
         .filter(nyaa_statistics::torrent_id.eq_any(&ids))
@@ -30,7 +30,7 @@ fn docs_for(conn: &mut SqliteConnection, torrents: &[Torrent]) -> QueryResult<Ve
 /// Pushes the current state of one torrent to the index, if there is one. Search falls
 /// back to SQLite when the index misbehaves, so a failure here is logged, not returned:
 /// the upload or edit itself already succeeded.
-pub fn torrent_changed(conn: &mut SqliteConnection, meili: Option<&Meili>, id: i32) {
+pub fn torrent_changed(conn: &mut DbConnection, meili: Option<&Meili>, id: i32) {
     let Some(meili) = meili else { return };
     let result = (|| -> anyhow::Result<()> {
         let Some(t) = Torrent::by_id(conn, id)? else { return Ok(()) };
@@ -44,7 +44,7 @@ pub fn torrent_changed(conn: &mut SqliteConnection, meili: Option<&Meili>, id: i
 
 /// Builds a complete index from SQLite under a temporary name, then swaps it in, so
 /// searches keep working on the old one meanwhile. Returns how many torrents it indexed.
-pub fn rebuild(conn: &mut SqliteConnection, meili: &Meili, progress: impl Fn(i64)) -> anyhow::Result<i64> {
+pub fn rebuild(conn: &mut DbConnection, meili: &Meili, progress: impl Fn(i64)) -> anyhow::Result<i64> {
     let fresh = meili.with_index(&format!("{}_rebuild", meili.index()));
     // Left over from an interrupted run; the task fails when there is none, which is fine
     if let Ok(uid) = fresh.delete_index() {
@@ -86,7 +86,7 @@ pub fn rebuild(conn: &mut SqliteConnection, meili: &Meili, progress: impl Fn(i64
 /// Pushes the tracker stats changed at or after `since` (all of them for None) and returns
 /// the newest `last_updated` seen, to pass as `since` next time.
 pub fn sync_stats(
-    conn: &mut SqliteConnection,
+    conn: &mut DbConnection,
     meili: &Meili,
     since: Option<NaiveDateTime>,
 ) -> anyhow::Result<Option<NaiveDateTime>> {

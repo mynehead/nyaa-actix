@@ -1,11 +1,10 @@
 use actix_session::Session;
-use diesel::r2d2::{ConnectionManager, Pool};
-use diesel::SqliteConnection;
+use crate::db::DbPool;
 use crate::models::User;
 
 pub const SESSION_USER_KEY: &str = "user_id";
 
-pub fn get_current_user(session: &Session, pool: &Pool<ConnectionManager<SqliteConnection>>) -> Option<User> {
+pub fn get_current_user(session: &Session, pool: &DbPool) -> Option<User> {
     let user_id: i32 = session.get(SESSION_USER_KEY).ok()??;
     let mut conn = pool.get().ok()?;
     // Banned or deactivated users lose access immediately, not at next login

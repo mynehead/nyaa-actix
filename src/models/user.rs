@@ -5,6 +5,7 @@ use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use argon2::password_hash::{rand_core::OsRng, SaltString};
 
 use crate::config::Config;
+use crate::db::DbConnection;
 use crate::db::schema::{user_preferences, users};
 
 #[repr(i32)]
@@ -141,47 +142,56 @@ impl User {
         }
     }
 
-    pub fn set_password(conn: &mut SqliteConnection, uid: i32, password: &str) -> QueryResult<usize> {
+    pub fn set_password(conn: &mut DbConnection, uid: i32, password: &str) -> QueryResult<usize> {
         diesel::update(users::table.find(uid))
             .set(users::password_hash.eq(hash_password(password)))
             .execute(conn)
     }
 
-    pub fn set_email(conn: &mut SqliteConnection, uid: i32, email: &str) -> QueryResult<usize> {
+    pub fn set_email(conn: &mut DbConnection, uid: i32, email: &str) -> QueryResult<usize> {
         diesel::update(users::table.find(uid)).set(users::email.eq(email)).execute(conn)
     }
 
-    pub fn set_avatar_time(conn: &mut SqliteConnection, uid: i32, time: NaiveDateTime) -> QueryResult<usize> {
+    pub fn set_avatar_time(conn: &mut DbConnection, uid: i32, time: NaiveDateTime) -> QueryResult<usize> {
         diesel::update(users::table.find(uid)).set(users::avatar_time.eq(time)).execute(conn)
     }
 
     /// The "Hide comments by default" preference; off when the user never saved preferences.
-    pub fn hide_comments(conn: &mut SqliteConnection, uid: i32) -> QueryResult<bool> {
+    pub fn hide_comments(conn: &mut DbConnection, uid: i32) -> QueryResult<bool> {
         let hide: Option<i32> = user_preferences::table.find(uid)
             .select(user_preferences::hide_comments)
             .first(conn).optional()?;
         Ok(hide.unwrap_or(0) != 0)
     }
 
-    pub fn set_hide_comments(conn: &mut SqliteConnection, uid: i32, hide: bool) -> QueryResult<usize> {
-        diesel::replace_into(user_preferences::table)
-            .values((user_preferences::user_id.eq(uid), user_preferences::hide_comments.eq(hide as i32)))
-            .execute(conn)
+    pub fn set_hide_comments(conn: &mut DbConnection, uid: i32, hide: bool) -> QueryResult<usize> {
+        // Update, else insert: REPLACE INTO only exists on SQLite
+        conn.transaction(|conn| {
+            let updated = diesel::update(user_preferences::table.find(uid))
+                .set(user_preferences::hide_comments.eq(hide as i32))
+                .execute(conn)?;
+            if updated > 0 {
+                return Ok(updated);
+            }
+            diesel::insert_into(user_preferences::table)
+                .values((user_preferences::user_id.eq(uid), user_preferences::hide_comments.eq(hide as i32)))
+                .execute(conn)
+        })
     }
 
-    pub fn by_id(conn: &mut SqliteConnection, uid: i32) -> QueryResult<Option<User>> {
+    pub fn by_id(conn: &mut DbConnection, uid: i32) -> QueryResult<Option<User>> {
         users::table.find(uid).first(conn).optional()
     }
 
-    pub fn by_username(conn: &mut SqliteConnection, name: &str) -> QueryResult<Option<User>> {
+    pub fn by_username(conn: &mut DbConnection, name: &str) -> QueryResult<Option<User>> {
         users::table.filter(users::username.eq(name)).first(conn).optional()
     }
 
-    pub fn by_email(conn: &mut SqliteConnection, addr: &str) -> QueryResult<Option<User>> {
+    pub fn by_email(conn: &mut DbConnection, addr: &str) -> QueryResult<Option<User>> {
         users::table.filter(users::email.eq(addr)).first(conn).optional()
     }
 
-    pub fn by_username_or_email(conn: &mut SqliteConnection, val: &str) -> QueryResult<Option<User>> {
+    pub fn by_username_or_email(conn: &mut DbConnection, val: &str) -> QueryResult<Option<User>> {
         let by_name = users::table.filter(users::username.eq(val)).first(conn).optional()?;
         if by_name.is_some() {
             return Ok(by_name);

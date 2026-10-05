@@ -9,7 +9,7 @@ use serde::Deserialize;
 use tera::Tera;
 
 use crate::config::Config;
-use crate::db::DbPool;
+use crate::db::{DbConnection, DbPool};
 use crate::db::schema::users;
 use crate::utils::context::base_context;
 use crate::middleware::auth::{get_current_user, login_user, logout_user};
@@ -191,7 +191,7 @@ fn looks_like_email(s: &str) -> bool {
 
 impl ProfileForm {
     /// Upstream's `ProfileForm` validators, with its messages.
-    fn validate(&self, conn: &mut SqliteConnection) -> QueryResult<FieldErrors> {
+    fn validate(&self, conn: &mut DbConnection) -> QueryResult<FieldErrors> {
         let mut errors = FieldErrors::new();
         let mut add = |field, msg: &str| errors.entry(field).or_default().push(msg.to_string());
         if self.current_password.is_empty() {
@@ -224,7 +224,7 @@ impl ProfileForm {
 /// The profile page; `errors` go to the form of `active_tab` ("password", "email" or "preferences").
 fn render_profile(
     session: &Session,
-    conn: &mut SqliteConnection,
+    conn: &mut DbConnection,
     tmpl: &Tera,
     cfg: &Config,
     user: &User,
@@ -357,17 +357,16 @@ mod tests {
     use super::*;
     use actix_session::{storage::CookieSessionStore, SessionMiddleware};
     use actix_web::{cookie::{Cookie, Key}, http::StatusCode, test, App};
-    use diesel::r2d2::{ConnectionManager, Pool};
-    use diesel_migrations::MigrationHarness;
+    use diesel::r2d2::Pool;
 
     const PASSWORD: &str = "hunter22";
 
     fn pool() -> DbPool {
         // One connection, so every request sees the same in-memory database
         let pool = Pool::builder().max_size(1)
-            .build(ConnectionManager::<SqliteConnection>::new(":memory:")).unwrap();
+            .build(crate::db::DbManager::new(":memory:")).unwrap();
         let mut conn = pool.get().unwrap();
-        conn.run_pending_migrations(crate::MIGRATIONS).unwrap();
+        crate::db::run_migrations(&mut conn).unwrap();
         for (name, email) in [("alice", "alice@example.com"), ("bob", "bob@example.com")] {
             diesel::insert_into(users::table).values(&NewUser::new(name, Some(email), PASSWORD))
                 .execute(&mut conn).unwrap();

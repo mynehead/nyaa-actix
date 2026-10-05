@@ -4,6 +4,7 @@ pub mod meili;
 
 use diesel::prelude::*;
 
+use crate::db::DbConnection;
 use crate::db::schema::nyaa_torrents;
 use crate::models::Torrent;
 use db::{SearchQuery, SearchResult, SearchSort};
@@ -19,7 +20,7 @@ fn wants_index(q: &SearchQuery) -> bool {
 
 /// One page of a listing. Uses Meilisearch where it helps and falls back to SQLite when it
 /// is not configured or fails, so search never breaks because the index is down.
-pub fn search(conn: &mut SqliteConnection, meili: Option<&Meili>, q: &SearchQuery) -> QueryResult<SearchResult> {
+pub fn search(conn: &mut DbConnection, meili: Option<&Meili>, q: &SearchQuery) -> QueryResult<SearchResult> {
     if let Some(meili) = meili.filter(|_| wants_index(q)) {
         match meili.search(q) {
             Ok((ids, total)) => return Ok(SearchResult { torrents: load_in_order(conn, &ids)?, total }),
@@ -31,7 +32,7 @@ pub fn search(conn: &mut SqliteConnection, meili: Option<&Meili>, q: &SearchQuer
 
 /// Loads torrents by id in the given order, skipping any gone from SQLite since they were
 /// indexed.
-fn load_in_order(conn: &mut SqliteConnection, ids: &[i32]) -> QueryResult<Vec<Torrent>> {
+fn load_in_order(conn: &mut DbConnection, ids: &[i32]) -> QueryResult<Vec<Torrent>> {
     let mut by_id: std::collections::HashMap<i32, Torrent> = nyaa_torrents::table
         .filter(nyaa_torrents::id.eq_any(ids))
         .load::<Torrent>(conn)?
@@ -45,14 +46,13 @@ fn load_in_order(conn: &mut SqliteConnection, ids: &[i32]) -> QueryResult<Vec<To
 mod tests {
     use super::*;
     use crate::models::TorrentFlags;
-    use diesel_migrations::MigrationHarness;
     use std::time::Duration;
 
     /// Torrents 1..=6: names, flags, categories, uploaders and seeders that the tests below
     /// filter and sort on.
-    fn db() -> SqliteConnection {
-        let mut conn = SqliteConnection::establish(":memory:").unwrap();
-        conn.run_pending_migrations(crate::MIGRATIONS).unwrap();
+    fn db() -> DbConnection {
+        let mut conn = crate::db::connect(":memory:").unwrap();
+        crate::db::run_migrations(&mut conn).unwrap();
         diesel::sql_query("INSERT INTO users (id, username, password_hash) VALUES (1, 'a', 'x'), (2, 'b', 'x')")
             .execute(&mut conn).unwrap();
         let rows = [
@@ -80,7 +80,7 @@ mod tests {
         SearchQuery::from_params(term.map(String::from), None, None, cat, filter, sort, order, None, 75, false)
     }
 
-    fn ids(conn: &mut SqliteConnection, meili: Option<&Meili>, q: &SearchQuery) -> (Vec<i32>, i64) {
+    fn ids(conn: &mut DbConnection, meili: Option<&Meili>, q: &SearchQuery) -> (Vec<i32>, i64) {
         let r = search(conn, meili, q).unwrap();
         (r.torrents.iter().map(|t| t.id).collect(), r.total)
     }
@@ -157,7 +157,7 @@ mod tests {
         q.page = 2;
         assert_eq!(ids(&mut conn, Some(&meili), &q), (vec![1], 3));
 
-        let wait_for = |conn: &mut SqliteConnection, q: &SearchQuery, want: Vec<i32>| {
+        let wait_for = |conn: &mut DbConnection, q: &SearchQuery, want: Vec<i32>| {
             for _ in 0..100 {
                 if ids(conn, Some(&meili), q).0 == want { return; }
                 std::thread::sleep(Duration::from_millis(50));

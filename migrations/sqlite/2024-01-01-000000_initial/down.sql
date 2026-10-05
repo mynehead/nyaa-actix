@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS user_preferences;
+DROP TABLE IF EXISTS bans;
+DROP TABLE IF EXISTS nyaa_comments;
+DROP TABLE IF EXISTS nyaa_statistics;
+DROP TABLE IF EXISTS nyaa_torrents;
+DROP TABLE IF EXISTS nyaa_sub_categories;
+DROP TABLE IF EXISTS nyaa_main_categories;
+DROP TABLE IF EXISTS group_members;
+DROP TABLE IF EXISTS groups;
+DROP TABLE IF EXISTS users;

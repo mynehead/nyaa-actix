@@ -13,10 +13,7 @@ use actix_session::{storage::CookieSessionStore, SessionMiddleware};
 use actix_web::{cookie::Key, http::StatusCode, middleware::{ErrorHandlers, Logger}, web, App, HttpServer};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
-use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 use tera::Tera;
-
-pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -37,7 +34,7 @@ async fn main() -> std::io::Result<()> {
     // Run migrations
     {
         let mut conn = pool.get().expect("Failed to get DB connection");
-        conn.run_pending_migrations(MIGRATIONS).expect("Failed to run migrations");
+        db::run_migrations(&mut conn).expect("Failed to run migrations");
     }
 
     if let Some(meili) = cfg.meili.clone() {

@@ -13,8 +13,8 @@
 //! complete. Run it once after setting up Meilisearch, and again if the index is lost.
 
 use diesel::prelude::*;
-use diesel_migrations::MigrationHarness;
 
+use crate::db::DbConnection;
 use crate::db::schema::users;
 use crate::models::user::{NewUser, User, UserLevel};
 
@@ -77,16 +77,12 @@ fn parse_level(v: &str) -> Option<UserLevel> {
 }
 
 /// Opens DATABASE_URL (default nyaa.db) with migrations applied.
-fn open_db() -> Result<(SqliteConnection, String), String> {
+fn open_db() -> Result<(DbConnection, String), String> {
     dotenvy::dotenv().ok();
     let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "nyaa.db".into());
-    let mut conn = SqliteConnection::establish(&database_url)
+    let mut conn = crate::db::connect(&database_url)
         .map_err(|e| format!("cannot open {database_url}: {e}"))?;
-    // The server may be writing at the same moment; wait for its lock instead of failing.
-    diesel::sql_query("PRAGMA busy_timeout = 5000")
-        .execute(&mut conn)
-        .map_err(|e| e.to_string())?;
-    conn.run_pending_migrations(crate::MIGRATIONS)
+    crate::db::run_migrations(&mut conn)
         .map_err(|e| format!("migrations failed: {e}"))?;
     Ok((conn, database_url))
 }
@@ -146,8 +142,8 @@ mod tests {
 
     #[test]
     fn created_user_can_log_in() {
-        let mut conn = SqliteConnection::establish(":memory:").unwrap();
-        conn.run_pending_migrations(crate::MIGRATIONS).unwrap();
+        let mut conn = crate::db::connect(":memory:").unwrap();
+        crate::db::run_migrations(&mut conn).unwrap();
         let mut u = NewUser::new("admin", None, "admin");
         u.level = UserLevel::SuperAdmin as i32;
         diesel::insert_into(users::table).values(&u).execute(&mut conn).unwrap();

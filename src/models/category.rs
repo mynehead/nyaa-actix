@@ -1,5 +1,6 @@
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
+use crate::db::DbConnection;
 use crate::db::schema::{nyaa_main_categories, nyaa_sub_categories};
 
 #[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
@@ -25,7 +26,7 @@ impl SubCategory {
     }
 }
 
-pub fn get_all_categories(conn: &mut SqliteConnection) -> QueryResult<Vec<(MainCategory, Vec<SubCategory>)>> {
+pub fn get_all_categories(conn: &mut DbConnection) -> QueryResult<Vec<(MainCategory, Vec<SubCategory>)>> {
     let mains = nyaa_main_categories::table
         .order(nyaa_main_categories::id.asc())
         .load::<MainCategory>(conn)?;
@@ -44,7 +45,7 @@ pub fn get_all_categories(conn: &mut SqliteConnection) -> QueryResult<Vec<(MainC
 }
 
 /// Looks up a subcategory, for the view page (and later for validating uploads).
-pub fn get_sub_category(conn: &mut SqliteConnection, main_id: i32, sub_id: i32) -> QueryResult<Option<SubCategory>> {
+pub fn get_sub_category(conn: &mut DbConnection, main_id: i32, sub_id: i32) -> QueryResult<Option<SubCategory>> {
     nyaa_sub_categories::table
         .filter(nyaa_sub_categories::main_category_id.eq(main_id))
         .filter(nyaa_sub_categories::id.eq(sub_id))
@@ -55,7 +56,7 @@ pub fn get_sub_category(conn: &mut SqliteConnection, main_id: i32, sub_id: i32) 
 /// "Main - Sub" name for a torrent's category ids. For the listing and view page, which
 /// still print the raw "1_2" ids.
 #[allow(dead_code)]
-pub fn category_display(conn: &mut SqliteConnection, main_id: i32, sub_id: i32) -> String {
+pub fn category_display(conn: &mut DbConnection, main_id: i32, sub_id: i32) -> String {
     let main = nyaa_main_categories::table.find(main_id).first::<MainCategory>(conn).ok();
     let sub = nyaa_sub_categories::table
         .filter(nyaa_sub_categories::main_category_id.eq(main_id))

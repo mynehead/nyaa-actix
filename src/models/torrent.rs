@@ -2,6 +2,7 @@ use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::db::DbConnection;
 use crate::db::schema::{nyaa_torrents, nyaa_statistics};
 use crate::models::User;
 
@@ -116,11 +117,11 @@ impl Torrent {
         escape(info)
     }
 
-    pub fn by_id(conn: &mut SqliteConnection, tid: i32) -> QueryResult<Option<Torrent>> {
+    pub fn by_id(conn: &mut DbConnection, tid: i32) -> QueryResult<Option<Torrent>> {
         nyaa_torrents::table.find(tid).first(conn).optional()
     }
 
-    pub fn by_info_hash(conn: &mut SqliteConnection, hash: &[u8]) -> QueryResult<Option<Torrent>> {
+    pub fn by_info_hash(conn: &mut DbConnection, hash: &[u8]) -> QueryResult<Option<Torrent>> {
         nyaa_torrents::table
             .filter(nyaa_torrents::info_hash.eq(hash))
             .first(conn)

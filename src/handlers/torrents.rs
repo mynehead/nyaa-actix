@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::config::Config;
+use crate::db::DbConnection;
 use crate::db::DbPool;
 use crate::db::schema::{nyaa_torrents, nyaa_statistics, nyaa_comments};
 use crate::utils::context::base_context;
@@ -502,7 +503,7 @@ impl EditForm {
     }
 
     /// Upstream's `EditForm` validators. Returns the category ids, or errors by field.
-    fn validate(&self, conn: &mut SqliteConnection) -> std::result::Result<(i32, i32), HashMap<&'static str, String>> {
+    fn validate(&self, conn: &mut DbConnection) -> std::result::Result<(i32, i32), HashMap<&'static str, String>> {
         let mut errors = HashMap::new();
         let name_len = self.display_name.trim().chars().count();
         if !(3..=255).contains(&name_len) {
@@ -550,7 +551,7 @@ fn parse_category(value: &str) -> Option<(i32, i32)> {
 
 /// The torrent behind an edit request, or 404/403 as upstream: deleted torrents only
 /// exist for moderators, and only owners and moderators may edit.
-fn editable_torrent(conn: &mut SqliteConnection, torrent_id: i32, editor: Option<&User>) -> Result<Torrent> {
+fn editable_torrent(conn: &mut DbConnection, torrent_id: i32, editor: Option<&User>) -> Result<Torrent> {
     let torrent = Torrent::by_id(conn, torrent_id)
         .map_err(actix_web::error::ErrorInternalServerError)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))?;
@@ -565,7 +566,7 @@ fn editable_torrent(conn: &mut SqliteConnection, torrent_id: i32, editor: Option
 }
 
 fn render_edit(
-    conn: &mut SqliteConnection,
+    conn: &mut DbConnection,
     tmpl: &Tera,
     cfg: &Config,
     editor: &User,
@@ -710,15 +711,14 @@ mod tests {
         use super::super::*;
         use actix_session::{storage::CookieSessionStore, SessionMiddleware};
         use actix_web::{cookie::{Cookie, Key}, http::StatusCode, test, App};
-        use diesel::r2d2::{ConnectionManager, Pool};
-        use diesel_migrations::MigrationHarness;
+        use diesel::r2d2::Pool;
 
         fn pool() -> DbPool {
             // One connection, so every request sees the same in-memory database
             let pool = Pool::builder().max_size(1)
-                .build(ConnectionManager::<SqliteConnection>::new(":memory:")).unwrap();
+                .build(crate::db::DbManager::new(":memory:")).unwrap();
             let mut conn = pool.get().unwrap();
-            conn.run_pending_migrations(crate::MIGRATIONS).unwrap();
+            crate::db::run_migrations(&mut conn).unwrap();
             diesel::sql_query("INSERT INTO users (id, username, password_hash, status, level) VALUES \
                                (1, 'owner', 'x', 1, 0), (2, 'other', 'x', 1, 1), (3, 'mod', 'x', 1, 2)")
                 .execute(&mut conn).unwrap();
