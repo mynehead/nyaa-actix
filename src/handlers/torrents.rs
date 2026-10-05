@@ -60,7 +60,8 @@ pub async fn view_torrent(
     // Comment authors, for names, level colors and the "(uploader)" tag
     let comments: Vec<serde_json::Value> = comments.into_iter().map(|c| {
         let user = c.user_id.and_then(|uid| User::by_id(&mut conn, uid).ok().flatten());
-        serde_json::json!({ "comment": c, "user": user })
+        let avatar_url = user.as_ref().map_or_else(|| crate::models::DEFAULT_AVATAR.to_string(), |u| u.avatar_url(&cfg));
+        serde_json::json!({ "comment": c, "user": user, "avatar_url": avatar_url })
     }).collect();
 
     let main_category = crate::db::schema::nyaa_main_categories::table
@@ -94,6 +95,12 @@ pub async fn view_torrent(
     ctx.insert("file_count", &file_count);
     ctx.insert("max_files_view", &MAX_FILES_VIEW);
     ctx.insert("comments", &comments);
+    // Upstream's "Hide comments by default" preference collapses the comments panel
+    let hide_comments = match &current_user {
+        Some(u) => User::hide_comments(&mut conn, u.id).map_err(actix_web::error::ErrorInternalServerError)?,
+        None => false,
+    };
+    ctx.insert("hide_comments", &hide_comments);
     ctx.insert("uploader", &uploader);
     ctx.insert("magnet", &magnet);
 
@@ -239,7 +246,7 @@ const MAX_FIELDS: usize = 32;
 
 /// Reads one multipart field, failing with 413 as soon as it passes `limit`
 /// so a huge field is never buffered in memory.
-async fn read_field(field: &mut actix_multipart::Field, limit: usize) -> Result<Vec<u8>> {
+pub(crate) async fn read_field(field: &mut actix_multipart::Field, limit: usize) -> Result<Vec<u8>> {
     let mut data = Vec::new();
     while let Some(chunk) = field.next().await {
         let chunk = chunk.map_err(actix_web::error::ErrorBadRequest)?;
@@ -731,7 +738,7 @@ mod tests {
             Config {
                 database_url: String::new(), secret_key: String::new(), site_name: "Nyaa".into(),
                 site_flavor: "nyaa".into(), results_per_page: 75, max_pages: 0,
-                torrent_storage_path: storage.to_string_lossy().into_owned(), enable_gravatar: false, maintenance_mode: false,
+                torrent_storage_path: storage.to_string_lossy().into_owned(), avatar_storage_path: String::new(), enable_gravatar: false, maintenance_mode: false,
                 site_url: String::new(), tracker_urls: vec![], meili: None,
             }
         }

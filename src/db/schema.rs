@@ -12,6 +12,7 @@ diesel::table! {
         last_login_date -> Nullable<Timestamp>,
         last_login_ip -> Nullable<Binary>,
         registration_ip -> Nullable<Binary>,
+        avatar_time -> Nullable<Timestamp>,
     }
 }
 

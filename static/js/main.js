@@ -31,7 +31,8 @@ $(document).ready(function() {
 		var input = $(this).parent().prev().find(':text'),
 			log = numFiles > 1 ? numFiles + ' files selected' : label;
 
-		if (label.endsWith('.torrent')) {
+		// Only the upload page's torrent input is limited to .torrent files (not the profile's avatar)
+		if (this.id !== 'torrent_file' || label.endsWith('.torrent')) {
 			fileWarning.fadeOut('fast');
 		} else {
 			fileWarning.fadeIn('fast');

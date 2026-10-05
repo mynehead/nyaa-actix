@@ -319,7 +319,7 @@ mod tests {
     fn user(id: i32, level: i32) -> User {
         User {
             id, username: format!("u{id}"), email: None, password_hash: String::new(), status: 1, level,
-            created_time: NaiveDateTime::default(), last_login_date: None, last_login_ip: None, registration_ip: None,
+            created_time: NaiveDateTime::default(), last_login_date: None, last_login_ip: None, registration_ip: None, avatar_time: None,
         }
     }
 

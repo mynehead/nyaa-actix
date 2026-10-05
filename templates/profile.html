@@ -1,4 +1,5 @@
 {% extends "layout.html" %}
+{% import "macros.html" as macros %}
 {% block title %}Edit Profile :: {{ config.site_name }}{% endblock %}
 {% block body %}
 
@@ -6,15 +7,118 @@
 
 <div class="row" style="margin-bottom: 20px;">
 	<div class="col-sm-2" style="max-width: 150px;">
-		<img class="avatar" src="/static/img/avatar/default.png">
+		<img class="avatar" src="{{ avatar_url }}">
 	</div>
 	<div class="col-sm-10">
 		<dl class="row" style="margin: 20px 0 15px 0;">
 			<dt class="col-sm-2">User ID:</dt><dd class="col-sm-10">{{ current_user.id }}</dd>
 			<dt class="col-sm-2">User Class:</dt><dd class="col-sm-10">{{ current_user | level_str }}</dd>
 			<dt class="col-sm-2">User Created on:</dt><dd class="col-sm-10">{{ current_user.created_time | date(format="%Y-%m-%d %H:%M:%S") }}</dd>
-			<dt class="col-sm-2">Email:</dt><dd class="col-sm-10">{{ current_user.email | default(value="") }}</dd>
 		</dl>
+	</div>
+</div>
+
+<ul class="nav nav-tabs" id="profileTabs" role="tablist">
+	<li role="presentation"{% if active_tab == "password" %} class="active"{% endif %}>
+		<a href="#password-change" id="password-change-tab" role="tab" data-toggle="tab" aria-controls="profile" aria-expanded="{{ active_tab == "password" }}">Password</a>
+	</li>
+	<li role="presentation"{% if active_tab == "email" %} class="active"{% endif %}>
+		<a href="#email-change" id="email-change-tab" role="tab" data-toggle="tab" aria-controls="profile" aria-expanded="{{ active_tab == "email" }}">Email</a>
+	</li>
+	<li role="presentation"{% if active_tab == "preferences" %} class="active"{% endif %}>
+		<a href="#preferences-change" id="preferences-change-tab" role="tab" data-toggle="tab" aria-controls="profile" aria-expanded="{{ active_tab == "preferences" }}">Preferences</a>
+	</li>
+</ul>
+
+<div class="tab-content">
+	<div class="tab-pane fade{% if active_tab == "password" %} active in{% endif %}" role="tabpanel" id="password-change" aria-labelledby="password-change-tab">
+		<form method="POST">
+			<input type="hidden" name="tab" value="password">
+			<div class="row">
+				<div class="form-group col-md-4">
+					{{ macros::form_field(name="current_password", id="current_password", label="Current Password", placeholder="Current password", errors=password_errors) }}
+				</div>
+			</div>
+			<div class="row">
+				<div class="form-group col-md-4">
+					{{ macros::form_field(name="new_password", id="new_password", label="New Password", placeholder="New password", errors=password_errors) }}
+				</div>
+			</div>
+			<div class="row">
+				<div class="form-group col-md-4">
+					{{ macros::form_field(name="password_confirm", id="password_confirm", label="Repeat New Password", placeholder="New password (confirm)", errors=password_errors) }}
+				</div>
+			</div>
+			<div class="row">
+				<div class="col-md-4">
+					<input class="btn btn-primary" id="authorized_submit" name="authorized_submit" type="submit" value="Update">
+				</div>
+			</div>
+		</form>
+	</div>
+	<div class="tab-pane fade{% if active_tab == "email" %} active in{% endif %}" role="tabpanel" id="email-change" aria-labelledby="email-change-tab">
+		<form method="POST">
+			<input type="hidden" name="tab" value="email">
+			<div class="row">
+				<div class="form-group col-md-4">
+					<label class="control-label" for="current_email">Current Email</label>
+					<div id="current_email">{{ current_user.email | default(value="") }}</div>
+				</div>
+			</div>
+			<div class="row">
+				<div class="form-group col-md-4">
+					{{ macros::form_field(name="email", id="email", label="New Email Address", placeholder="New email address", errors=email_errors, type="text", value=email_value) }}
+				</div>
+			</div>
+			<div class="row">
+				<div class="form-group col-md-4">
+					{{ macros::form_field(name="current_password", id="email_current_password", label="Current Password", placeholder="Current password", errors=email_errors) }}
+				</div>
+			</div>
+			<div class="row">
+				<div class="col-md-4">
+					<input class="btn btn-primary" id="email_authorized_submit" name="authorized_submit" type="submit" value="Update">
+				</div>
+			</div>
+		</form>
+	</div>
+	<div class="tab-pane fade{% if active_tab == "preferences" %} active in{% endif %}" role="tabpanel" id="preferences-change" aria-labelledby="preferences-change-tab">
+		<form method="POST" action="/account/profile/avatar" enctype="multipart/form-data">
+			<div class="row">
+				<div class="form-group col-md-4">
+					<label class="control-label" for="avatar">Avatar</label>
+					<div class="input-group">
+						<label for="avatar" class="input-group-btn">
+							<span class="btn btn-default">Browse&hellip;</span>
+						</label>
+						<input type="text" class="form-control" readonly>
+					</div>
+					<div class="sr-only">
+						<input id="avatar" name="avatar" type="file" accept="image/png,image/jpeg,image/gif,image/webp">
+					</div>
+					Images will be scaled and cropped to 256x256.
+				</div>
+			</div>
+			<div class="row">
+				<div class="form-group col-md-4">
+					<input class="btn btn-primary" id="change_avatar" type="submit" value="Change avatar">
+				</div>
+			</div>
+		</form>
+		<form method="POST">
+			<input type="hidden" name="tab" value="preferences">
+				<div class="row">
+					<div class="form-group col-md-4">
+						<input id="hide_comments" name="hide_comments" type="checkbox" value="y"{% if hide_comments %} checked{% endif %}>
+						<label for="hide_comments">Hide comments by default</label>
+					</div>
+				</div>
+				<div class="row">
+					<div class="col-md-4">
+						<input class="btn btn-primary" id="submit_settings" name="submit_settings" type="submit" value="Update">
+					</div>
+				</div>
+		</form>
 	</div>
 </div>
 
