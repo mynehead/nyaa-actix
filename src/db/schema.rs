@@ -113,6 +113,16 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    site_banners (id) {
+        id -> Integer,
+        content -> Text,
+        active -> Bool,
+        created_time -> Timestamp,
+        created_by -> Integer,
+    }
+}
+
 diesel::joinable!(groups -> users (owner_id));
 diesel::joinable!(nyaa_torrents -> users (uploader_id));
 diesel::joinable!(nyaa_torrents -> groups (group_id));
@@ -122,6 +132,7 @@ diesel::joinable!(nyaa_comments -> users (user_id));
 diesel::joinable!(user_preferences -> users (user_id));
 diesel::joinable!(group_members -> groups (group_id));
 diesel::joinable!(group_members -> users (user_id));
+diesel::joinable!(site_banners -> users (created_by));
 
 diesel::allow_tables_to_appear_in_same_query!(
     users,
@@ -134,4 +145,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     nyaa_comments,
     bans,
     user_preferences,
+    site_banners,
 );

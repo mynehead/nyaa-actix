@@ -113,6 +113,10 @@ async fn main() -> std::io::Result<()> {
             .route("/admin/reports", web::get().to(handlers::admin::reports))
             .route("/admin/log", web::get().to(handlers::admin::log))
             .route("/admin/bans", web::get().to(handlers::admin::bans))
+            .route("/admin/banners", web::get().to(handlers::banners::list))
+            .route("/admin/banners", web::post().to(handlers::banners::create))
+            .route("/admin/banners/{id}/toggle", web::post().to(handlers::banners::toggle))
+            .route("/admin/banners/{id}/delete", web::post().to(handlers::banners::delete))
     })
     .listen(tcp_listener(SocketAddr::from((Ipv4Addr::UNSPECIFIED, PORT)))?)?;
     // Windows resolves `localhost` to ::1 first and retries a refused connection, so with

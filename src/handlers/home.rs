@@ -7,6 +7,7 @@ use crate::config::Config;
 use crate::db::DbPool;
 use crate::utils::context::base_context;
 use crate::middleware::auth::get_current_user;
+use crate::models::Banner;
 use crate::search::db::{with_stats, SearchQuery};
 use crate::search::search;
 use crate::utils::context::SearchState;
@@ -60,6 +61,7 @@ pub async fn home(
         .map_err(actix_web::error::ErrorInternalServerError)?;
     ctx.insert("torrents", &torrents);
     ctx.insert("pagination", &pagination);
+    ctx.insert("banners", &Banner::active(&mut conn).map_err(actix_web::error::ErrorInternalServerError)?);
     ctx.insert("search", &SearchState::new(&params.q, &params.c, &params.f, &params.s, &params.o));
 
     let html = tmpl.render("home.html", &ctx)
