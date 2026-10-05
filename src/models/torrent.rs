@@ -3,6 +3,7 @@ use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::db::schema::{nyaa_torrents, nyaa_statistics};
+use crate::models::User;
 
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -133,6 +134,82 @@ impl Torrent {
     pub fn is_comment_locked(&self) -> bool {
         self.flags & TorrentFlags::COMMENT_LOCKED.bits() != 0
     }
+
+    /// Owners and moderators may edit a torrent; once it is deleted only moderators
+    /// may (upstream `edit_torrent` and the view page's `can_edit`).
+    pub fn can_edit(&self, user: Option<&User>) -> bool {
+        match user {
+            Some(u) if u.is_moderator() => true,
+            Some(u) => Some(u.id) == self.uploader_id && !self.is_deleted() && !self.is_banned(),
+            None => false,
+        }
+    }
+}
+
+/// The checkboxes of the edit form.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct EditFlags {
+    pub hidden: bool,
+    pub remake: bool,
+    pub complete: bool,
+    pub anonymous: bool,
+    pub trusted: bool,
+    pub comment_locked: bool,
+}
+
+/// Flags after an edit, as upstream: anyone who may edit sets hidden, remake, complete
+/// and anonymous; only trusted users change the trusted flag, and only moderators the
+/// comment lock. Deleted and banned are left alone (see [`danger_action`]).
+pub fn edited_flags(old: i32, edit: &EditFlags, editor: &User) -> i32 {
+    let mut flags = TorrentFlags::from_bits_retain(old);
+    flags.set(TorrentFlags::HIDDEN, edit.hidden);
+    flags.set(TorrentFlags::REMAKE, edit.remake);
+    flags.set(TorrentFlags::COMPLETE, edit.complete);
+    flags.set(TorrentFlags::ANONYMOUS, edit.anonymous);
+    if editor.is_trusted() {
+        flags.set(TorrentFlags::TRUSTED, edit.trusted);
+    }
+    if editor.is_moderator() {
+        flags.set(TorrentFlags::COMMENT_LOCKED, edit.comment_locked);
+    }
+    flags.bits()
+}
+
+/// A button in the edit page's Danger Zone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DangerAction {
+    Delete,
+    Ban,
+    Undelete,
+    Unban,
+}
+
+/// New flags and the past-tense action for the flash text (upstream `_delete_torrent`),
+/// or `None` when the button doesn't apply to this torrent or editor.
+pub fn danger_action(old: i32, action: DangerAction, editor: &User) -> Option<(i32, &'static str)> {
+    let mut flags = TorrentFlags::from_bits_retain(old);
+    let deleted = flags.contains(TorrentFlags::DELETED);
+    let banned = flags.contains(TorrentFlags::BANNED);
+    let done = match action {
+        DangerAction::Delete if !deleted => {
+            flags.insert(TorrentFlags::DELETED);
+            "deleted"
+        }
+        DangerAction::Ban if !banned && editor.is_moderator() => {
+            flags.insert(TorrentFlags::DELETED | TorrentFlags::BANNED);
+            if deleted { "banned" } else { "deleted and banned" }
+        }
+        DangerAction::Undelete if deleted && editor.is_moderator() => {
+            flags.remove(TorrentFlags::DELETED | TorrentFlags::BANNED);
+            if banned { "undeleted and unbanned" } else { "undeleted" }
+        }
+        DangerAction::Unban if banned && editor.is_moderator() => {
+            flags.remove(TorrentFlags::BANNED);
+            "unbanned"
+        }
+        _ => return None,
+    };
+    Some((flags.bits(), done))
 }
 
 /// Binary-unit size, like Jinja's `filesizeformat(True)` that upstream uses.
@@ -163,6 +240,8 @@ fn escape(s: &str) -> String {
 #[derive(Debug, Insertable)]
 #[diesel(table_name = nyaa_torrents)]
 pub struct NewTorrent {
+    /// Set when a reupload replaces a deleted torrent, so it keeps its id (as upstream).
+    pub id: Option<i32>,
     pub info_hash: Vec<u8>,
     pub display_name: String,
     pub torrent_name: String,
@@ -235,6 +314,57 @@ mod tests {
         assert_eq!(torrent(TorrentFlags::TRUSTED | TorrentFlags::REMAKE, 0).row_class(), "danger");
         assert_eq!(torrent(TorrentFlags::TRUSTED, 0).row_class(), "success");
         assert_eq!(torrent(TorrentFlags::empty(), 0).row_class(), "default");
+    }
+
+    fn user(id: i32, level: i32) -> User {
+        User {
+            id, username: format!("u{id}"), email: None, password_hash: String::new(), status: 1, level,
+            created_time: NaiveDateTime::default(), last_login_date: None, last_login_ip: None, registration_ip: None,
+        }
+    }
+
+    #[test]
+    fn owners_and_moderators_can_edit() {
+        let mut t = Torrent { uploader_id: Some(1), ..torrent(TorrentFlags::empty(), 0) };
+        assert!(t.can_edit(Some(&user(1, 0))));
+        assert!(!t.can_edit(Some(&user(2, 1))), "trusted isn't enough for someone else's torrent");
+        assert!(t.can_edit(Some(&user(2, 2))));
+        assert!(!t.can_edit(None));
+        t.flags = TorrentFlags::DELETED.bits();
+        assert!(!t.can_edit(Some(&user(1, 0))), "deleted torrents are moderator-only");
+        assert!(t.can_edit(Some(&user(2, 2))));
+    }
+
+    #[test]
+    fn edit_keeps_flags_the_editor_may_not_change() {
+        let old = (TorrentFlags::TRUSTED | TorrentFlags::COMMENT_LOCKED | TorrentFlags::HIDDEN).bits();
+        let edit = EditFlags { remake: true, ..Default::default() };
+        // A regular owner can't drop trusted or the comment lock
+        assert_eq!(edited_flags(old, &edit, &user(1, 0)),
+            (TorrentFlags::TRUSTED | TorrentFlags::COMMENT_LOCKED | TorrentFlags::REMAKE).bits());
+        // Trusted users set trusted; moderators also set the lock
+        assert_eq!(edited_flags(old, &edit, &user(1, 1)), (TorrentFlags::COMMENT_LOCKED | TorrentFlags::REMAKE).bits());
+        assert_eq!(edited_flags(old, &edit, &user(1, 2)), TorrentFlags::REMAKE.bits());
+        // Deleted and banned are never touched by an edit
+        let deleted = (TorrentFlags::DELETED | TorrentFlags::BANNED).bits();
+        assert_eq!(edited_flags(deleted, &EditFlags::default(), &user(1, 3)), deleted);
+    }
+
+    #[test]
+    fn danger_zone_actions() {
+        let (owner, moderator) = (user(1, 0), user(2, 2));
+        let none = TorrentFlags::empty().bits();
+        let deleted = TorrentFlags::DELETED.bits();
+        let banned = (TorrentFlags::DELETED | TorrentFlags::BANNED).bits();
+        assert_eq!(danger_action(none, DangerAction::Delete, &owner), Some((deleted, "deleted")));
+        assert_eq!(danger_action(deleted, DangerAction::Delete, &owner), None);
+        assert_eq!(danger_action(none, DangerAction::Ban, &owner), None, "only moderators ban");
+        assert_eq!(danger_action(none, DangerAction::Ban, &moderator), Some((banned, "deleted and banned")));
+        assert_eq!(danger_action(deleted, DangerAction::Ban, &moderator), Some((banned, "banned")));
+        assert_eq!(danger_action(banned, DangerAction::Undelete, &moderator), Some((none, "undeleted and unbanned")));
+        assert_eq!(danger_action(deleted, DangerAction::Undelete, &owner), None);
+        assert_eq!(danger_action(banned, DangerAction::Unban, &moderator), Some((deleted, "unbanned")));
+        assert_eq!(danger_action(deleted, DangerAction::Unban, &moderator), None);
     }
 
     #[test]

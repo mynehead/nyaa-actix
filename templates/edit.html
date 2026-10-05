@@ -1,0 +1,215 @@
+{% extends "layout.html" %}
+{% block title %}Edit {{ torrent.display_name }} :: {{ config.site_name }}{% endblock %}
+{% block body %}
+{% set torrent_url = "/view/" ~ torrent.id %}
+<h1>
+	Edit Torrent <a href="{{ torrent_url }}">#{{ torrent.id }}</a>
+	{% if uploader %}
+	(by <a href="/user/{{ uploader.username | urlencode }}">{{ uploader.username }}</a>)
+	{% endif %}
+</h1>
+
+<form method="POST" action="{{ torrent_url }}/edit">
+	<div class="row">
+		<div class="col-md-6">
+			<div class="form-group{% if errors.display_name %} has-error{% endif %}">
+				<label class="control-label" for="display_name">Torrent display name</label>
+				<input class="form-control" id="display_name" name="display_name" placeholder="Display name" type="text" value="{{ form.display_name }}">
+				{% if errors.display_name %}<div class="help-block">{{ errors.display_name }}</div>{% endif %}
+			</div>
+		</div>
+		<div class="col-md-4">
+			<div class="form-group{% if errors.category %} has-error{% endif %}">
+				<label class="control-label" for="category">Category</label>
+				<select class="form-control" id="category" name="category">
+					{% for entry in categories %}
+					{% set main = entry.0 %}
+					<option value="{{ main.id }}_0" disabled>{{ main.name }}</option>
+					{% for sub in entry.1 %}
+					{% if sub.id != 0 %}
+					{% set value = main.id ~ "_" ~ sub.id %}
+					<option value="{{ value }}"{% if form.category == value %} selected{% endif %}>{{ main.name }} - {{ sub.name }}</option>
+					{% endif %}
+					{% endfor %}
+					{% endfor %}
+				</select>
+				{% if errors.category %}<div class="help-block">{{ errors.category }}</div>{% endif %}
+			</div>
+		</div>
+	</div>
+	<div class="row">
+		<div class="col-md-6">
+			<div class="form-group{% if errors.information %} has-error{% endif %}">
+				<label class="control-label" for="information">Information</label>
+				<input class="form-control" id="information" name="information" placeholder="Your website or IRC channel" type="text" value="{{ form.information }}">
+				{% if errors.information %}<div class="help-block">{{ errors.information }}</div>{% endif %}
+			</div>
+		</div>
+		<div class="col-md-6">
+			<label class="control-label">Torrent flags</label><br>
+			<div class="btn-group" data-toggle="buttons">
+				{# Only allow changing anonymous status when an uploader exists #}
+				{% if torrent.uploader_id %}
+				<label class="btn btn-default{% if form.is_anonymous %} active{% endif %}" title="Upload torrent anonymously (don't display your username)">
+					<input id="is_anonymous" name="is_anonymous" type="checkbox" value="y"{% if form.is_anonymous %} checked{% endif %}>
+					<span class="glyphicon glyphicon-check"></span>
+					<span class="glyphicon glyphicon-unchecked"></span>
+					Anonymous
+				</label>
+				{% endif %}
+				<label class="btn btn-grey{% if form.is_hidden %} active{% endif %}" title="Hide torrent from listing">
+					<input id="is_hidden" name="is_hidden" type="checkbox" value="y"{% if form.is_hidden %} checked{% endif %}>
+					<span class="glyphicon glyphicon-check"></span>
+					<span class="glyphicon glyphicon-unchecked"></span>
+					Hidden
+				</label>
+			</div>
+			<div class="hidden-xl"><br></div>
+			<div class="btn-group" data-toggle="buttons">
+				<label class="btn btn-danger{% if form.is_remake %} active{% endif %}" title="This torrent is derived from another release">
+					<input id="is_remake" name="is_remake" type="checkbox" value="y"{% if form.is_remake %} checked{% endif %}>
+					<span class="glyphicon glyphicon-check"></span>
+					<span class="glyphicon glyphicon-unchecked"></span>
+					Remake
+				</label>
+				<label class="btn btn-warning{% if form.is_complete %} active{% endif %}" title="This torrent is a complete batch (eg. season)">
+					<input id="is_complete" name="is_complete" type="checkbox" value="y"{% if form.is_complete %} checked{% endif %}>
+					<span class="glyphicon glyphicon-check"></span>
+					<span class="glyphicon glyphicon-unchecked"></span>
+					Complete
+				</label>
+				{% if current_user.level >= 1 %}
+				<label class="btn btn-success{% if form.is_trusted %} active{% endif %}" title="Mark torrent trusted">
+					<input id="is_trusted" name="is_trusted" type="checkbox" value="y"{% if form.is_trusted %} checked{% endif %}>
+					<span class="glyphicon glyphicon-check"></span>
+					<span class="glyphicon glyphicon-unchecked"></span>
+					Trusted
+				</label>
+				{% endif %}
+				{% if current_user.level >= 2 %}
+				<label class="btn btn-default{% if form.is_comment_locked %} active{% endif %}" title="Lock comments">
+					<input id="is_comment_locked" name="is_comment_locked" type="checkbox" value="y"{% if form.is_comment_locked %} checked{% endif %}>
+					<span class="glyphicon glyphicon-check"></span>
+					<span class="glyphicon glyphicon-unchecked"></span>
+					Lock Comments
+				</label>
+				{% endif %}
+			</div>
+		</div>
+	</div>
+
+	<div class="row">
+		<div class="col-md-12">
+			<div class="form-group{% if errors.description %} has-error{% endif %}">
+				<div class="markdown-editor" id="description-markdown-editor" data-field-name="description">
+					<label class="control-label" for="description">Description</label>
+					<a href="https://github.com/adam-p/markdown-here/wiki/Markdown-Cheatsheet" class="small" target="_blank">Markdown supported</a>
+					<ul class="nav nav-tabs" role="tablist">
+						<li role="presentation" class="active">
+							<a href="#description-tab" role="tab" data-toggle="tab">
+								Write
+							</a>
+						</li>
+						<li role="presentation">
+							<a href="#description-preview" id="description-preview-tab" role="tab" data-toggle="tab">
+								Preview
+							</a>
+						</li>
+					</ul>
+					<div class="tab-content">
+						<div role="tabpanel" class="tab-pane active" id="description-tab" data-markdown-target="#description-markdown-target">
+							<textarea class="form-control markdown-source" id="description" name="description">{{ form.description }}</textarea>
+						</div>
+						<div role="tabpanel" class="tab-pane" id="description-preview">
+							<div class="well" id="description-markdown-target"></div>
+						</div>
+					</div>
+					{% if errors.description %}<div class="help-block">{{ errors.description }}</div>{% endif %}
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<div class="row">
+		<div class="form-group col-md-6">
+			<input class="btn btn-primary" id="submit" name="submit" type="submit" value="Save Changes">
+		</div>
+	</div>
+</form>
+<hr>
+
+<div class="row">
+	<div class="col-md-5">
+		<div class="panel panel-danger">
+			<div class="panel-heading">
+				<h3 class="panel-title">Danger Zone</h3>
+			</div>
+			<div class="panel-body">
+				<form method="POST" action="{{ torrent_url }}/edit">
+					<p>
+						{% if is_deleted %}
+						This torrent is <strong>deleted</strong>{% if is_banned %} and <strong>banned</strong>{% endif %}.<br>
+						{% endif %}
+						{% if uploader and uploader.status == 2 %}
+						The uploader is <strong>banned</strong>.<br>
+						{% endif %}
+					</p>
+
+{% if not is_deleted %}
+					<p class="lead">
+						Delete torrent.
+						<input class="btn btn-danger pull-right" id="delete" name="delete" type="submit" value="Delete">
+					</p>
+					<p>
+						Deleted torrents are retained for backup purposes.<br>
+						You (or someone else) will be able to reupload the torrent.
+					</p>
+
+					{% if current_user.level >= 2 %}
+					<hr>
+					<p class="lead">
+						Delete and ban torrent.
+						<input class="btn btn-danger pull-right" id="ban" name="ban" type="submit" value="Delete &amp; Ban">
+					</p>
+					<p>
+						Soft deletes the torrent.<br>
+						Bans it from the tracker and disallows reuploading it.
+					</p>
+					{% endif %}
+{% else %}
+					<p class="lead">
+						Undelete{% if is_banned %} and unban{% endif %} torrent.
+						<input class="btn btn-info pull-right" id="undelete" name="undelete" type="submit" value="{% if is_banned %}Undelete &amp; Unban{% else %}Undelete{% endif %}">
+					</p>
+					<p>
+						Undeletes{% if is_banned %} and unbans{% endif %} this torrent.
+					</p>
+
+					{% if is_banned %}
+					<hr>
+					<p class="lead">
+						Unban torrent.
+						<input class="btn btn-info pull-right" id="unban" name="unban" type="submit" value="Unban">
+					</p>
+					<p>
+						Unbans torrent without undeleting it.<br>
+						Allows reuploading this torrent again.
+					</p>
+					{% else %}
+					<hr>
+					<p class="lead">
+						Ban torrent.
+						<input class="btn btn-danger pull-right" id="ban" name="ban" type="submit" value="Ban">
+					</p>
+					<p>
+						Bans it from the tracker and disallows reuploading it.
+					</p>
+					{% endif %}
+{% endif %}
+				</form>
+			</div>
+		</div>
+	</div>
+</div>
+
+{% endblock %}
