@@ -156,6 +156,12 @@ mod tests {
             let listed = with_stats(conn, page)?;
             let seeds: Vec<i32> = listed.iter().map(|t| t.seed_count).collect();
             assert_eq!(seeds, vec![20, 10, 0]);
+
+            // Preferences insert, then update, the same row
+            User::set_hide_comments(conn, user.id, true)?;
+            User::set_hide_comments(conn, user.id, false)?;
+            User::set_hide_comments(conn, user.id, true)?;
+            assert!(User::hide_comments(conn, user.id)?);
             Ok(())
         });
     }

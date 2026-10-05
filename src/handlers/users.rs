@@ -63,6 +63,7 @@ pub async fn view_user(
 
     let mut ctx = base_context(&cfg, current_user.as_ref());
     ctx.insert("profile_user", &profile_user);
+    ctx.insert("avatar_url", &profile_user.avatar_url(&cfg));
     let torrents = with_stats(&mut conn, result.torrents)
         .map_err(actix_web::error::ErrorInternalServerError)?;
     ctx.insert("torrents", &torrents);
@@ -74,4 +75,19 @@ pub async fn view_user(
     let html = tmpl.render("user.html", &ctx)
         .map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
+}
+
+/// An uploaded avatar. Links carry `?v=` with the upload time, so a new one shows at once.
+pub async fn avatar(
+    cfg: web::Data<Config>,
+    path: web::Path<i32>,
+) -> Result<HttpResponse> {
+    let file = crate::utils::avatar::path(&cfg, path.into_inner());
+    let data = tokio::fs::read(file).await
+        .map_err(|_| actix_web::error::ErrorNotFound("No avatar"))?;
+    Ok(HttpResponse::Ok()
+        .content_type("image/png")
+        .insert_header(("Cache-Control", "public, max-age=86400"))
+        .insert_header(("X-Content-Type-Options", "nosniff"))
+        .body(data))
 }

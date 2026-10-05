@@ -40,3 +40,20 @@
 {% macro linkable_header(heading, label) -%}
 	<h3 id="{{ label }}">{{ heading }}<a class="header-anchor" href="#{{ label }}"><i class="fa fa-link" aria-hidden="true"></i></a></h3>
 {%- endmacro linkable_header %}
+
+{# Upstream's render_field: label, input, then the field's errors -#}
+{% macro form_field(name, id, label, placeholder, errors, type="password", value="") -%}
+	<div class="form-group{% if errors[name] %} has-error{% endif %}">
+		<label class="control-label" for="{{ id }}">{{ label }}</label>
+		<input class="form-control" id="{{ id }}" name="{{ name }}" placeholder="{{ placeholder }}" type="{{ type }}" value="{{ value }}">
+		{% if errors[name] %}
+		<div class="help-block">
+			{% if errors[name] | length < 2 %}
+				{% for error in errors[name] %}{{ error }}{% endfor %}
+			{% else %}
+				<ul>{% for error in errors[name] %}<li>{{ error }}</li>{% endfor %}</ul>
+			{% endif %}
+		</div>
+		{% endif %}
+	</div>
+{%- endmacro form_field %}

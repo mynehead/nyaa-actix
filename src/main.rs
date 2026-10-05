@@ -82,6 +82,9 @@ async fn main() -> std::io::Result<()> {
             .route("/account/register", web::post().to(handlers::account::register_post))
             .route("/account/logout", web::get().to(handlers::account::logout))
             .route("/account/profile", web::get().to(handlers::account::profile))
+            .route("/account/profile", web::post().to(handlers::account::profile_post))
+            .route("/account/profile/avatar", web::post().to(handlers::account::avatar_post))
+            .route("/avatar/{id}", web::get().to(handlers::users::avatar))
             // Groups
             .route("/groups", web::get().to(handlers::groups::group_list))
             .route("/groups/create", web::get().to(handlers::groups::create_group_get))
