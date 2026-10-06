@@ -78,6 +78,9 @@ async fn main() -> std::io::Result<()> {
             // Info pages
             .route("/rules", web::get().to(handlers::site::rules))
             .route("/help", web::get().to(handlers::site::help))
+            .route("/trusted", web::get().to(handlers::trusted::trusted_info))
+            .route("/trusted/request", web::get().to(handlers::trusted::request_trusted))
+            .route("/trusted/request", web::post().to(handlers::trusted::request_trusted))
             // Torrents
             .route("/view/{id}", web::get().to(handlers::torrents::view_torrent))
             .service(web::resource("/view/{id}/edit")
@@ -118,6 +121,10 @@ async fn main() -> std::io::Result<()> {
             .route("/admin/log", web::get().to(handlers::admin::log))
             .route("/admin/bans", web::get().to(handlers::admin::bans))
             .route("/admin/bans", web::post().to(handlers::admin::bans_post))
+            .route("/admin/trusted", web::get().to(handlers::trusted::admin_trusted))
+            .route("/admin/trusted/{list_filter}", web::get().to(handlers::trusted::admin_trusted))
+            .route("/admin/trusted/application/{id}", web::get().to(handlers::trusted::admin_trusted_application))
+            .route("/admin/trusted/application/{id}", web::post().to(handlers::trusted::admin_trusted_application))
     })
     .listen(tcp_listener(SocketAddr::from((Ipv4Addr::UNSPECIFIED, PORT)))?)?;
     // Windows resolves `localhost` to ::1 first and retries a refused connection, so with

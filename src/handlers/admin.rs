@@ -166,6 +166,7 @@ mod tests {
             site_flavor: "nyaa".into(), results_per_page: 75, max_pages: 0,
             torrent_storage_path: String::new(), avatar_storage_path: String::new(), enable_gravatar: false,
             maintenance_mode: false, site_url: String::new(), tracker_urls: vec![], meili: None,
+            trusted: Default::default(),
         }
     }
 

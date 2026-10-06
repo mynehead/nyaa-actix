@@ -84,6 +84,7 @@ mod render_tests {
             site_url: String::new(),
             tracker_urls: vec![],
             meili: None,
+            trusted: Default::default(),
         }
     }
 
