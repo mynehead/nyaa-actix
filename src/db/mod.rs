@@ -120,8 +120,8 @@ pub fn init_pool(database_url: &str) -> DbPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::schema::{nyaa_statistics, nyaa_torrents, users};
-    use crate::models::{NewStatistic, NewTorrent, NewUser, User};
+    use crate::db::schema::{nyaa_statistics, nyaa_torrents, user_sessions, users};
+    use crate::models::{NewStatistic, NewTorrent, NewUser, TorrentFlags, User};
     use crate::search::db::{search, with_stats, SearchQuery, SearchSort};
     use diesel::prelude::*;
 
@@ -186,6 +186,62 @@ mod tests {
             names("migrations/postgres"),
             "every migration needs a SQLite and a PostgreSQL version"
         );
+    }
+
+    /// Torrents saved with the old bit values (HIDDEN=1, ANONYMOUS=2, REMAKE=4, TRUSTED=8),
+    /// the flags they must have after the migration, on either backend.
+    const OLD_AND_NEW_FLAGS: [(i32, TorrentFlags); 5] = [
+        (0x01, TorrentFlags::HIDDEN),
+        (0x02, TorrentFlags::ANONYMOUS),
+        (0x04, TorrentFlags::REMAKE),
+        (0x08, TorrentFlags::TRUSTED),
+        (
+            0x01 | 0x08 | 0x10 | 0x80,
+            TorrentFlags::HIDDEN
+                .union(TorrentFlags::TRUSTED)
+                .union(TorrentFlags::COMPLETE)
+                .union(TorrentFlags::COMMENT_LOCKED),
+        ),
+    ];
+
+    /// Inserts torrents with the old flags, runs the flag migration and checks the result;
+    /// running it again (down.sql is the same statement) restores the old values.
+    fn check_flag_migration(conn: &mut DbConnection, sql: &str) -> QueryResult<()> {
+        diesel::sql_query("INSERT INTO users (id, username, password_hash) VALUES (900, 'flags', 'x')")
+            .execute(conn)?;
+        for (i, (old, _)) in OLD_AND_NEW_FLAGS.iter().enumerate() {
+            diesel::sql_query(format!(
+                "INSERT INTO nyaa_torrents (id, info_hash, display_name, torrent_name, information, description, \
+                 flags, uploader_id, main_category_id, sub_category_id) \
+                 VALUES ({id}, '{hash}', 't', 't', '', '', {old}, 900, 1, 2)",
+                id = 900 + i,
+                hash = "x".repeat(19) + &i.to_string(),
+            ))
+            .execute(conn)?;
+        }
+        let flags = |conn: &mut DbConnection| -> QueryResult<Vec<i32>> {
+            nyaa_torrents::table
+                .filter(nyaa_torrents::uploader_id.eq(900))
+                .order(nyaa_torrents::id)
+                .select(nyaa_torrents::flags)
+                .load(conn)
+        };
+        diesel::sql_query(sql).execute(conn)?;
+        assert_eq!(flags(conn)?, OLD_AND_NEW_FLAGS.iter().map(|(_, new)| new.bits()).collect::<Vec<_>>());
+        diesel::sql_query(sql).execute(conn)?;
+        assert_eq!(flags(conn)?, OLD_AND_NEW_FLAGS.iter().map(|(old, _)| *old).collect::<Vec<_>>());
+        Ok(())
+    }
+
+    #[test]
+    fn flag_migration_converts_old_bits_on_sqlite() {
+        let mut conn = connect(":memory:").unwrap();
+        run_migrations(&mut conn).unwrap();
+        check_flag_migration(
+            &mut conn,
+            include_str!("../../migrations/sqlite/2026-10-06-160100_upstream_flag_bits/up.sql"),
+        )
+        .unwrap();
     }
 
     /// The other tests run on in-memory SQLite. This one runs the Postgres migrations and the
@@ -269,6 +325,34 @@ mod tests {
             User::set_hide_comments(conn, user.id, false)?;
             User::set_hide_comments(conn, user.id, true)?;
             assert!(User::hide_comments(conn, user.id)?);
+
+            // The uploader sees their own hidden torrent in the general listing
+            diesel::update(nyaa_torrents::table.filter(nyaa_torrents::display_name.eq("Gamma Movie")))
+                .set(nyaa_torrents::flags.eq(TorrentFlags::HIDDEN.bits()))
+                .execute(conn)?;
+            let mut q = SearchQuery::from_params(None, None, None, None, None, None, None, None, 75, false);
+            let others = search(conn, &q)?.total;
+            q.viewer_id = Some(user.id);
+            assert_eq!(search(conn, &q)?.total, others + 1);
+
+            // Sessions: touch, expiry check and revocation
+            diesel::insert_into(user_sessions::table)
+                .values((
+                    user_sessions::id.eq("pg-session"),
+                    user_sessions::user_id.eq(user.id),
+                    user_sessions::created_time.eq(now),
+                    user_sessions::last_seen.eq(now - chrono::Duration::hours(1)),
+                ))
+                .execute(conn)?;
+            crate::middleware::auth::touch_session(conn, "pg-session", Some(vec![10, 0, 0, 1]))?;
+            let ip: Option<Vec<u8>> = users::table.find(user.id).select(users::last_login_ip).first(conn)?;
+            assert_eq!(ip, Some(vec![10, 0, 0, 1]));
+            assert_eq!(crate::middleware::auth::logout_everywhere(conn, user.id)?, 1);
+
+            check_flag_migration(
+                conn,
+                include_str!("../../migrations/postgres/2026-10-06-160100_upstream_flag_bits/up.sql"),
+            )?;
             Ok(())
         });
     }

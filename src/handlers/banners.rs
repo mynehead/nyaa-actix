@@ -156,10 +156,7 @@ mod tests {
         }
     }
 
-    async fn login(session: Session, path: web::Path<i32>) -> HttpResponse {
-        crate::middleware::auth::login_user(&session, path.into_inner()).unwrap();
-        HttpResponse::Ok().finish()
-    }
+    use crate::middleware::auth::test_support::login;
 
     macro_rules! app {
         ($pool:expr, $user:expr) => {{

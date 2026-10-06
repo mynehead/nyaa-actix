@@ -7,6 +7,14 @@ pub mod throttle;
 
 use std::net::IpAddr;
 
+use actix_web::HttpRequest;
+
+/// The visitor's address, packed for storage. This is the one place that decides which
+/// address counts as the client's.
+pub fn client_ip(req: &HttpRequest) -> Option<Vec<u8>> {
+    req.peer_addr().map(|a| pack_ip(a.ip()))
+}
+
 pub fn pack_ip(addr: IpAddr) -> Vec<u8> {
     match addr {
         IpAddr::V4(v4) => {
