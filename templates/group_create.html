@@ -6,13 +6,13 @@
     {% for error in errors %}<div class="alert alert-danger">{{ error }}</div>{% endfor %}
     <form method="post" action="/groups/create">
         <div class="form-group"><label class="control-label">Group Name</label>
-            <input type="text" name="name" class="form-control" required placeholder="e.g. Cyan Subs"></div>
+            <input type="text" name="name" class="form-control" required maxlength="64" placeholder="e.g. Cyan Subs" value="{{ form.name }}"></div>
         <div class="form-group"><label class="control-label">Tag <small>(shown as [Tag])</small></label>
-            <input type="text" name="tag" class="form-control" required placeholder="e.g. Cyan"></div>
+            <input type="text" name="tag" class="form-control" required maxlength="32" placeholder="e.g. Cyan" value="{{ form.tag }}"></div>
         <div class="form-group"><label class="control-label">Slug <small>(URL: /group/slug)</small></label>
-            <input type="text" name="slug" class="form-control" required placeholder="e.g. cyan-subs"></div>
+            <input type="text" name="slug" class="form-control" required pattern="[a-z0-9_-]+" maxlength="64" placeholder="e.g. cyan-subs" value="{{ form.slug }}"></div>
         <div class="form-group"><label class="control-label">Description</label>
-            <textarea name="description" class="form-control" rows="3" placeholder="Optional..."></textarea></div>
+            <textarea name="description" class="form-control" rows="3" maxlength="2048" placeholder="Optional...">{{ form.description }}</textarea></div>
         <button type="submit" class="btn btn-success">Create</button>
         <a href="/groups" class="btn btn-default">Cancel</a>
     </form>
