@@ -22,6 +22,8 @@ pub struct Config {
     pub site_url: String,
     /// Announce URLs written into magnets and .torrent files, own tracker first.
     pub tracker_urls: Vec<String>,
+    /// TRUSTED_PROXIES: reverse proxies whose `X-Forwarded-For` names the visitor.
+    pub trusted_proxies: Vec<crate::utils::proxy::IpNet>,
     /// Meilisearch for text search and stats sorts (MEILI_URL and friends); None keeps search on SQLite.
     pub meili: Option<crate::search::meili::Meili>,
     /// Who may apply for trusted status (upstream's "Trusted Requirements").
@@ -85,8 +87,34 @@ impl Config {
                 .iter()
                 .flat_map(|key| split_list(&env::var(key).unwrap_or_default()))
                 .collect(),
+            trusted_proxies: crate::utils::proxy::parse_trusted_proxies(
+                &env::var("TRUSTED_PROXIES").unwrap_or_default(),
+            )
+            .unwrap_or_else(|e| panic!("{e}")),
             meili: crate::search::meili::Meili::from_env(),
             trusted: TrustedConfig::from_env(),
+        }
+    }
+
+    /// Defaults for handler tests: no files, no trackers, no Meilisearch.
+    #[cfg(test)]
+    pub fn for_tests() -> Config {
+        Config {
+            database_url: String::new(),
+            secret_key: String::new(),
+            site_name: "Nyaa".into(),
+            site_flavor: "nyaa".into(),
+            results_per_page: 75,
+            max_pages: 0,
+            torrent_storage_path: String::new(),
+            avatar_storage_path: String::new(),
+            enable_gravatar: false,
+            maintenance_mode: false,
+            site_url: String::new(),
+            tracker_urls: vec![],
+            trusted_proxies: vec![],
+            meili: None,
+            trusted: Default::default(),
         }
     }
 

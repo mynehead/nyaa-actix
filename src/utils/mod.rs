@@ -2,17 +2,29 @@ pub mod avatar;
 pub mod context;
 pub mod flash;
 pub mod pagination;
+pub mod proxy;
 pub mod tera_filters;
 pub mod throttle;
 
 use std::net::IpAddr;
 
-use actix_web::HttpRequest;
+/// For `map_err` on database, pool, storage and template errors: logs the error and
+/// answers a plain 500, so its text (SQL, file paths) never reaches the visitor.
+pub fn internal_error<E: std::fmt::Display>(e: E) -> actix_web::Error {
+    log::error!("Internal error: {e}");
+    actix_web::error::ErrorInternalServerError("Internal server error")
+}
 
-/// The visitor's address, packed for storage. This is the one place that decides which
-/// address counts as the client's.
-pub fn client_ip(req: &HttpRequest) -> Option<Vec<u8>> {
-    req.peer_addr().map(|a| pack_ip(a.ip()))
+/// The visitor's address: the connection's peer, or behind a proxy listed in
+/// `TRUSTED_PROXIES`, the address it forwarded (see `proxy`).
+pub fn client_addr(req: &actix_web::HttpRequest) -> Option<IpAddr> {
+    let trusted = req.app_data::<actix_web::web::Data<crate::config::Config>>().map(|c| c.trusted_proxies.as_slice());
+    proxy::resolve(req.peer_addr(), req.headers(), trusted.unwrap_or(&[]))
+}
+
+/// `client_addr` packed for the IP columns (see `pack_ip`).
+pub fn client_ip(req: &actix_web::HttpRequest) -> Option<Vec<u8>> {
+    client_addr(req).map(pack_ip)
 }
 
 pub fn pack_ip(addr: IpAddr) -> Vec<u8> {
@@ -71,6 +83,15 @@ mod tests {
         }
         assert_eq!(unpack_ip(&[10, 0, 0, 1]), Some("10.0.0.1".parse().unwrap()));
         assert_eq!(unpack_ip(&[1, 2]), None);
+    }
+
+    #[test]
+    fn internal_errors_hide_their_text() {
+        let response = internal_error("no such table: users").error_response();
+        assert_eq!(response.status(), actix_web::http::StatusCode::INTERNAL_SERVER_ERROR);
+        let body = actix_web::body::to_bytes(response.into_body());
+        let body = futures_util::FutureExt::now_or_never(body).unwrap().unwrap();
+        assert_eq!(body, "Internal server error");
     }
 
     #[test]

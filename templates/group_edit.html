@@ -3,15 +3,16 @@
 {% block body %}
 <div class="row"><div class="col-md-6 col-md-offset-3">
     <h3>Edit Group: {{ group.name }}</h3>
+    {% for error in errors %}<div class="alert alert-danger">{{ error }}</div>{% endfor %}
     <form method="post" action="/group/{{ group.slug | urlencode }}/edit">
         <div class="form-group"><label class="control-label">Name</label>
-            <input type="text" name="name" class="form-control" value="{{ group.name }}" required></div>
+            <input type="text" name="name" class="form-control" value="{{ form.name }}" required maxlength="64"></div>
         <div class="form-group"><label class="control-label">Tag</label>
-            <input type="text" name="tag" class="form-control" value="{{ group.tag }}" required></div>
+            <input type="text" name="tag" class="form-control" value="{{ form.tag }}" required maxlength="32"></div>
         <div class="form-group"><label class="control-label">Slug</label>
-            <input type="text" name="slug" class="form-control" value="{{ group.slug }}" required></div>
+            <input type="text" name="slug" class="form-control" value="{{ form.slug }}" required pattern="[a-z0-9_-]+" maxlength="64"></div>
         <div class="form-group"><label class="control-label">Description</label>
-            <textarea name="description" class="form-control" rows="3">{{ group.description | default(value="") }}</textarea></div>
+            <textarea name="description" class="form-control" rows="3" maxlength="2048">{{ form.description }}</textarea></div>
         <button type="submit" class="btn btn-primary">Save</button>
         <a href="/group/{{ group.slug | urlencode }}" class="btn btn-default">Cancel</a>
     </form>

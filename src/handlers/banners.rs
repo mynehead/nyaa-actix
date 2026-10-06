@@ -11,7 +11,7 @@ use crate::db::DbPool;
 use crate::middleware::auth::get_current_user;
 use crate::models::{AdminLog, Banner, User};
 use crate::utils::context::base_context;
-use crate::utils::flash;
+use crate::utils::{flash, internal_error};
 
 const MAX_LENGTH: usize = 1024;
 
@@ -34,12 +34,12 @@ pub async fn list(
     cfg: web::Data<Config>,
 ) -> Result<HttpResponse> {
     let user = require_moderator(&session, &pool)?;
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
-    let banners = Banner::all_with_creator(&mut conn).map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
+    let banners = Banner::all_with_creator(&mut conn).map_err(internal_error)?;
     let mut ctx = base_context(&cfg, Some(&user));
     ctx.insert("flash_messages", &flash::take(&session));
     ctx.insert("banners", &banners);
-    let html = tmpl.render("admin/banners.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("admin/banners.html", &ctx).map_err(internal_error)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
@@ -64,12 +64,12 @@ pub async fn create(session: Session, pool: web::Data<DbPool>, form: web::Form<B
         );
         return Ok(back_to_list());
     }
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
     conn.transaction::<_, diesel::result::Error, _>(|conn| {
         Banner::create(conn, content, user.id)?;
         AdminLog::add(conn, user.id, "Created banner")
     })
-    .map_err(actix_web::error::ErrorInternalServerError)?;
+    .map_err(internal_error)?;
     flash::push(&session, "success", "Banner created.", "");
     Ok(back_to_list())
 }
@@ -77,7 +77,7 @@ pub async fn create(session: Session, pool: web::Data<DbPool>, form: web::Form<B
 pub async fn toggle(session: Session, pool: web::Data<DbPool>, path: web::Path<i32>) -> Result<HttpResponse> {
     let user = require_moderator(&session, &pool)?;
     let id = path.into_inner();
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
     let state = conn
         .transaction::<_, diesel::result::Error, _>(|conn| {
             let Some(active) = Banner::toggle(conn, id)? else { return Ok(None) };
@@ -85,7 +85,7 @@ pub async fn toggle(session: Session, pool: web::Data<DbPool>, path: web::Path<i
             AdminLog::add(conn, user.id, &format!("Banner #{} {}", id, state))?;
             Ok(Some(state))
         })
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("No such banner"))?;
     flash::push(&session, "success", &format!("Banner #{} {}.", id, state), "");
     Ok(back_to_list())
@@ -94,7 +94,7 @@ pub async fn toggle(session: Session, pool: web::Data<DbPool>, path: web::Path<i
 pub async fn delete(session: Session, pool: web::Data<DbPool>, path: web::Path<i32>) -> Result<HttpResponse> {
     let user = require_moderator(&session, &pool)?;
     let id = path.into_inner();
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
     let deleted = conn
         .transaction::<_, diesel::result::Error, _>(|conn| {
             let deleted = Banner::delete(conn, id)?;
@@ -103,7 +103,7 @@ pub async fn delete(session: Session, pool: web::Data<DbPool>, path: web::Path<i
             }
             Ok(deleted)
         })
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+        .map_err(internal_error)?;
     if !deleted {
         return Err(actix_web::error::ErrorNotFound("No such banner"));
     }
@@ -151,6 +151,7 @@ mod tests {
             maintenance_mode: false,
             site_url: String::new(),
             tracker_urls: vec![],
+            trusted_proxies: vec![],
             meili: None,
             trusted: Default::default(),
         }

@@ -13,7 +13,7 @@ use crate::search::search;
 use crate::utils::context::base_context;
 use crate::utils::context::SearchState;
 use crate::utils::pagination::Pagination;
-use crate::utils::{flash, sanitize_text, unpack_ip};
+use crate::utils::{flash, internal_error, sanitize_text, unpack_ip};
 use diesel::prelude::*;
 
 #[derive(Debug, Deserialize)]
@@ -38,9 +38,9 @@ pub async fn view_user(
     let current_user = get_current_user(&session, &pool);
     let is_admin = current_user.as_ref().map(|u| u.is_moderator()).unwrap_or(false);
 
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
     let profile_user = User::by_username(&mut conn, &username)
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("User not found"))?;
 
     let mut q = SearchQuery::from_params(
@@ -61,13 +61,13 @@ pub async fn view_user(
     q.include_hidden = is_admin || is_owner;
     q.hide_anonymous = !(is_admin || is_owner);
 
-    let result = search(&mut conn, cfg.meili.as_ref(), &q).map_err(actix_web::error::ErrorInternalServerError)?;
+    let result = search(&mut conn, cfg.meili.as_ref(), &q).map_err(internal_error)?;
     let pagination = Pagination::new(q.page, result.total, q.per_page);
 
     let mut ctx = base_context(&cfg, current_user.as_ref());
     ctx.insert("profile_user", &profile_user);
     ctx.insert("avatar_url", &profile_user.avatar_url(&cfg));
-    let torrents = with_stats(&mut conn, result.torrents).map_err(actix_web::error::ErrorInternalServerError)?;
+    let torrents = with_stats(&mut conn, result.torrents).map_err(internal_error)?;
     ctx.insert("torrents", &torrents);
     ctx.insert("pagination", &pagination);
     ctx.insert("search", &SearchState::new(&params.q, &params.c, &params.f, &params.s, &params.o));
@@ -76,9 +76,9 @@ pub async fn view_user(
     ctx.insert("flash_messages", &flash::take(&session));
     if let Some(moderator) = current_user.as_ref().filter(|m| can_ban(m, &profile_user)) {
         let bans = Ban::banned(&mut conn, Some(profile_user.id), profile_user.last_login_ip.as_deref())
-            .map_err(actix_web::error::ErrorInternalServerError)?;
+            .map_err(internal_error)?;
         let ip_banned = bans.iter().any(|b| b.user_ip.is_some() && b.user_ip == profile_user.last_login_ip);
-        let bans = Ban::with_names(&mut conn, bans).map_err(actix_web::error::ErrorInternalServerError)?;
+        let bans = Ban::with_names(&mut conn, bans).map_err(internal_error)?;
         ctx.insert("ban_form", &true);
         ctx.insert("bans", &bans);
         ctx.insert("ip_banned", &ip_banned);
@@ -89,7 +89,7 @@ pub async fn view_user(
         }
     }
 
-    let html = tmpl.render("user.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("user.html", &ctx).map_err(internal_error)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
@@ -98,7 +98,7 @@ pub async fn avatar(storage: web::Data<crate::storage::Storage>, path: web::Path
     let data = storage
         .get(crate::storage::Kind::Avatar, path.into_inner())
         .await
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("No avatar"))?;
     Ok(HttpResponse::Ok()
         .content_type("image/png")
@@ -132,9 +132,9 @@ pub async fn ban_user_post(
 ) -> Result<HttpResponse> {
     let moderator =
         get_current_user(&session, &pool).ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
     let user = User::by_username(&mut conn, &path.into_inner())
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("User not found"))?;
     if !can_ban(&moderator, &user) {
         return Err(actix_web::error::ErrorForbidden("Not allowed"));
@@ -142,8 +142,7 @@ pub async fn ban_user_post(
     let url = format!("/user/{}", user.username);
     let back = || HttpResponse::SeeOther().insert_header(("Location", url.clone())).finish();
 
-    let bans = Ban::banned(&mut conn, Some(user.id), user.last_login_ip.as_deref())
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let bans = Ban::banned(&mut conn, Some(user.id), user.last_login_ip.as_deref()).map_err(internal_error)?;
     let ip_banned = bans.iter().any(|b| b.user_ip.is_some() && b.user_ip == user.last_login_ip);
     let unban = form.unban.is_some();
     let ban_ip = !unban && form.ban_userip.is_some();
@@ -223,7 +222,7 @@ pub async fn ban_user_post(
         }
         AdminLog::add(conn, moderator.id, &format!("User {} has been {}.", user_str, action))
     })
-    .map_err(actix_web::error::ErrorInternalServerError)?;
+    .map_err(internal_error)?;
     flash::push(&session, "success", "", &format!("User has been successfully {}.", action));
     Ok(back())
 }

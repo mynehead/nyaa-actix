@@ -18,7 +18,7 @@ use crate::models::{password_matches, Ban, NewUser, User};
 use crate::storage::{Kind, Storage};
 use crate::utils::context::base_context;
 use crate::utils::throttle::Throttle;
-use crate::utils::{avatar, client_ip, flash};
+use crate::utils::{avatar, client_addr, client_ip, flash, internal_error};
 
 #[derive(Debug, Deserialize)]
 pub struct LoginForm {
@@ -46,7 +46,7 @@ pub async fn login_get(
     }
     let mut ctx = base_context(&cfg, None);
     ctx.insert("error", &Option::<String>::None);
-    let html = tmpl.render("login.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("login.html", &ctx).map_err(internal_error)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
@@ -58,9 +58,8 @@ pub async fn login_post(
     cfg: web::Data<Config>,
     form: web::Form<LoginForm>,
 ) -> Result<HttpResponse> {
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
-    let user =
-        User::by_username_or_email(&mut conn, &form.username).map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
+    let user = User::by_username_or_email(&mut conn, &form.username).map_err(internal_error)?;
 
     // Count by account, so trying the username and then the email address shares one limit
     let ip = client_key(&req);
@@ -72,7 +71,7 @@ pub async fn login_post(
         let mut ctx = base_context(&cfg, None);
         ctx.insert("error", "Too many failed login attempts. Try again in 15 minutes.");
         ctx.insert("username", &form.username);
-        let html = tmpl.render("login.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+        let html = tmpl.render("login.html", &ctx).map_err(internal_error)?;
         return Ok(HttpResponse::TooManyRequests().content_type("text/html").body(html));
     }
 
@@ -88,17 +87,13 @@ pub async fn login_post(
         Some(ref u) if password_ok && u.is_active() => {
             LOGIN_FAILURES_BY_ACCOUNT.clear(&account);
             // Also records last_login_date and last_login_ip, which IP bans from the user page use
-            login_user(&session, &mut conn, u.id, client_ip(&req))
-                .map_err(actix_web::error::ErrorInternalServerError)?;
+            login_user(&session, &mut conn, u.id, client_ip(&req)).map_err(internal_error)?;
             return Ok(HttpResponse::Found().insert_header(("Location", "/")).finish());
         }
         // Like upstream, the ban (and its reason) only shows after the right password
         Some(ref u) if password_ok && u.is_banned() => {
-            let reason = Ban::banned(&mut conn, Some(u.id), None)
-                .map_err(actix_web::error::ErrorInternalServerError)?
-                .into_iter()
-                .next()
-                .map(|b| b.reason);
+            let reason =
+                Ban::banned(&mut conn, Some(u.id), None).map_err(internal_error)?.into_iter().next().map(|b| b.reason);
             Some(match reason {
                 Some(reason) => format!(
                     "You are banned with the reason \"{}\" If you believe that this \
@@ -114,7 +109,7 @@ pub async fn login_post(
     let mut ctx = base_context(&cfg, None);
     ctx.insert("error", &error);
     ctx.insert("username", &form.username);
-    let html = tmpl.render("login.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("login.html", &ctx).map_err(internal_error)?;
     Ok(HttpResponse::Ok().status(actix_web::http::StatusCode::UNAUTHORIZED).content_type("text/html").body(html))
 }
 
@@ -130,7 +125,7 @@ pub async fn register_get(
     }
     let mut ctx = base_context(&cfg, None);
     ctx.insert("errors", &Vec::<String>::new());
-    let html = tmpl.render("register.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("register.html", &ctx).map_err(internal_error)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
@@ -148,59 +143,72 @@ pub async fn register_post(
         ctx.insert("errors", &["Too many registrations from your address. Try again later."]);
         ctx.insert("username", &form.username);
         ctx.insert("email", &form.email);
-        let html = tmpl.render("register.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+        let html = tmpl.render("register.html", &ctx).map_err(internal_error)?;
         return Ok(HttpResponse::TooManyRequests().content_type("text/html").body(html));
     }
     REGISTRATIONS_BY_IP.hit(&ip);
 
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
-    let mut errors: Vec<String> = Vec::new();
-
-    if form.username.len() < 3 || form.username.len() > 32 {
-        errors.push("Username must be 3–32 characters.".into());
-    }
-    if !form.username.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
-        errors.push("Username may only contain letters, numbers, _ and -.".into());
-    }
-    if form.password != form.password_confirm {
-        errors.push("Passwords do not match.".into());
-    }
-    if form.password.len() < 6 {
-        errors.push("Password must be at least 6 characters.".into());
-    }
-    if User::by_username(&mut conn, &form.username).map_err(actix_web::error::ErrorInternalServerError)?.is_some() {
+    let mut conn = pool.get().map_err(internal_error)?;
+    let (username, email) = (form.username.trim(), form.email.trim());
+    let mut errors = register_errors(username, email, &form.password, &form.password_confirm);
+    if User::username_taken(&mut conn, username).map_err(internal_error)? {
         errors.push("Username is already taken.".into());
     }
-    if User::by_email(&mut conn, &form.email).map_err(actix_web::error::ErrorInternalServerError)?.is_some() {
+    if User::by_email(&mut conn, email).map_err(internal_error)?.is_some() {
         errors.push("Email is already in use.".into());
     }
 
-    if !errors.is_empty() {
+    let render_errors = |errors: &[String]| -> Result<HttpResponse> {
         let mut ctx = base_context(&cfg, None);
-        ctx.insert("errors", &errors);
-        ctx.insert("username", &form.username);
-        ctx.insert("email", &form.email);
-        let html = tmpl.render("register.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
-        return Ok(HttpResponse::Ok()
-            .status(actix_web::http::StatusCode::BAD_REQUEST)
-            .content_type("text/html")
-            .body(html));
+        ctx.insert("errors", errors);
+        ctx.insert("username", username);
+        ctx.insert("email", email);
+        let html = tmpl.render("register.html", &ctx).map_err(internal_error)?;
+        Ok(HttpResponse::BadRequest().content_type("text/html").body(html))
+    };
+    if !errors.is_empty() {
+        return render_errors(&errors);
     }
 
-    let (username, email, password) = (form.username.clone(), form.email.clone(), form.password.clone());
-    let mut new_user = web::block(move || NewUser::new(&username, Some(&email), &password)).await?;
+    let (name, mail, password) = (username.to_string(), email.to_string(), form.password.clone());
+    let mut new_user = web::block(move || NewUser::new(&name, Some(&mail), &password)).await?;
     new_user.registration_ip = client_ip(&req);
-    diesel::insert_into(users::table)
-        .values(&new_user)
-        .execute(&mut conn)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    // Two sign-ups for the same name or email at once: the second hits the UNIQUE index
+    match diesel::insert_into(users::table).values(&new_user).execute(&mut conn) {
+        Err(diesel::result::Error::DatabaseError(diesel::result::DatabaseErrorKind::UniqueViolation, _)) => {
+            return render_errors(&["Username or email is already taken.".to_string()]);
+        }
+        result => result.map_err(internal_error)?,
+    };
 
-    let user = User::by_username(&mut conn, &form.username)
-        .map_err(actix_web::error::ErrorInternalServerError)?
+    let user = User::by_username(&mut conn, username)
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorInternalServerError("Failed to fetch user"))?;
 
-    login_user(&session, &mut conn, user.id, client_ip(&req)).map_err(actix_web::error::ErrorInternalServerError)?;
+    login_user(&session, &mut conn, user.id, client_ip(&req)).map_err(internal_error)?;
     Ok(HttpResponse::Found().insert_header(("Location", "/")).finish())
+}
+
+/// Upstream's `RegisterForm` rules, counted in characters: usernames are 3 to 32 ASCII
+/// letters, digits, `_` or `-`; the email is required; passwords are 6 to 1024 characters.
+fn register_errors(username: &str, email: &str, password: &str, password_confirm: &str) -> Vec<String> {
+    let mut errors = Vec::new();
+    if !(3..=32).contains(&username.chars().count()) {
+        errors.push("Username must be 3–32 characters.".into());
+    }
+    if !username.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+        errors.push("Username may only contain letters, numbers, _ and -.".into());
+    }
+    if !looks_like_email(email) || !(5..=128).contains(&email.chars().count()) {
+        errors.push("Please enter a valid email address.".into());
+    }
+    if password != password_confirm {
+        errors.push("Passwords do not match.".into());
+    }
+    if !(6..=1024).contains(&password.chars().count()) {
+        errors.push("Password must be 6–1024 characters.".into());
+    }
+    errors
 }
 
 /// Failed logins allowed per address and per account name before a 15-minute pause.
@@ -212,7 +220,7 @@ static LOGIN_FAILURES_BY_ACCOUNT: LazyLock<Throttle> =
 static REGISTRATIONS_BY_IP: LazyLock<Throttle> = LazyLock::new(|| Throttle::new(20, Duration::from_secs(60 * 60)));
 
 fn client_key(req: &HttpRequest) -> String {
-    format!("ip:{}", req.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default())
+    format!("ip:{}", client_addr(req).map(|a| a.to_string()).unwrap_or_default())
 }
 
 pub async fn logout(session: Session, pool: web::Data<DbPool>) -> HttpResponse {
@@ -315,7 +323,7 @@ fn render_profile(
     errors: FieldErrors,
     email_value: &str,
 ) -> Result<HttpResponse> {
-    let hide_comments = User::hide_comments(conn, user.id).map_err(actix_web::error::ErrorInternalServerError)?;
+    let hide_comments = User::hide_comments(conn, user.id).map_err(internal_error)?;
     let no_errors = FieldErrors::new();
     let mut ctx = base_context(cfg, Some(user));
     ctx.insert("flash_messages", &flash::take(session));
@@ -325,7 +333,7 @@ fn render_profile(
     ctx.insert("password_errors", if active_tab == "password" { &errors } else { &no_errors });
     ctx.insert("email_errors", if active_tab == "email" { &errors } else { &no_errors });
     ctx.insert("email_value", email_value);
-    let html = tmpl.render("profile.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("profile.html", &ctx).map_err(internal_error)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
@@ -338,7 +346,7 @@ pub async fn profile(
     let Some(current_user) = get_current_user(&session, &pool) else {
         return Ok(redirect("/login"));
     };
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
     render_profile(&session, &mut conn, &tmpl, &cfg, &current_user, "password", FieldErrors::new(), "")
 }
 
@@ -355,8 +363,8 @@ pub async fn profile_post(
     let Some(user) = get_current_user(&session, &pool) else {
         return Ok(redirect("/login"));
     };
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
-    let internal = actix_web::error::ErrorInternalServerError;
+    let mut conn = pool.get().map_err(internal_error)?;
+    let internal = internal_error;
 
     if form.authorized_submit.is_some() {
         let errors = form.validate(&mut conn).map_err(internal)?;
@@ -381,8 +389,7 @@ pub async fn profile_post(
             User::set_password(&mut conn, user.id, &form.new_password).map_err(internal)?;
             // A new password ends every other session; this one starts over
             logout_everywhere(&mut conn, user.id).map_err(internal)?;
-            login_user(&session, &mut conn, user.id, client_ip(&req))
-                .map_err(actix_web::error::ErrorInternalServerError)?;
+            login_user(&session, &mut conn, user.id, client_ip(&req)).map_err(internal_error)?;
             flash::push(&session, "success", "Password successfully changed!", "");
         }
     } else if form.submit_settings.is_some() {
@@ -428,10 +435,9 @@ pub async fn avatar_post(
         Ok(png) => png,
         Err(msg) => return fail(msg),
     };
-    storage.put(Kind::Avatar, user.id, png).await.map_err(actix_web::error::ErrorInternalServerError)?;
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
-    User::set_avatar_time(&mut conn, user.id, chrono::Utc::now().naive_utc())
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    storage.put(Kind::Avatar, user.id, png).await.map_err(internal_error)?;
+    let mut conn = pool.get().map_err(internal_error)?;
+    User::set_avatar_time(&mut conn, user.id, chrono::Utc::now().naive_utc()).map_err(internal_error)?;
     flash::push(&session, "success", "Avatar successfully changed!", "");
     Ok(redirect(PROFILE_URL))
 }
@@ -478,6 +484,7 @@ mod tests {
             maintenance_mode: false,
             site_url: "http://localhost:8080".into(),
             tracker_urls: vec![],
+            trusted_proxies: vec![],
             meili: None,
             trusted: Default::default(),
         }
@@ -501,6 +508,7 @@ mod tests {
                     .wrap(SessionMiddleware::new(CookieSessionStore::default(), Key::from(&[7u8; 64])))
                     .route("/login/{id}", web::get().to(login_as))
                     .route("/login", web::post().to(login_post))
+                    .route("/register", web::post().to(register_post))
                     .route("/logout", web::post().to(logout))
                     .route("/account/{page:.+}", web::route().to(legacy_redirect))
                     .route("/profile", web::get().to(profile))
@@ -552,6 +560,52 @@ mod tests {
             let status = res.status();
             (status, String::from_utf8(test::read_body(res).await.to_vec()).unwrap())
         }};
+    }
+
+    #[actix_web::test]
+    async fn register_rules_count_characters() {
+        let ok = |u: &str, e: &str, p: &str| register_errors(u, e, p, p).is_empty();
+        assert!(ok("new_user-1", "a@b.co", "secret"));
+        assert!(!ok("ab", "a@b.co", "secret"));
+        assert!(!ok(&"a".repeat(33), "a@b.co", "secret"));
+        // Upstream allows ASCII only; non-ASCII letters were allowed but then counted in bytes
+        assert!(!ok("ゆきゆき", "a@b.co", "secret"));
+        assert!(!ok("new", "", "secret") && !ok("new", "not-an-email", "secret"));
+        // Six characters, even when they take more bytes
+        assert!(ok("new", "a@b.co", "éééééé") && !ok("new", "a@b.co", "ééééé"));
+        assert!(!register_errors("new", "a@b.co", "secret", "secreT").is_empty());
+    }
+
+    #[actix_web::test]
+    async fn register_rejects_lookalike_names_and_bad_email() {
+        let (pool, cfg) = (pool(), config("register"));
+        let (app, _) = app!(pool, cfg);
+        let register = |username: &'static str, email: &'static str| {
+            let app = &app;
+            async move {
+                let req = test::TestRequest::post()
+                    .uri("/register")
+                    .set_form([
+                        ("username", username),
+                        ("email", email),
+                        ("password", PASSWORD),
+                        ("password_confirm", PASSWORD),
+                    ])
+                    .to_request();
+                let res = test::call_service(app, req).await;
+                let status = res.status();
+                (status, String::from_utf8(test::read_body(res).await.to_vec()).unwrap())
+            }
+        };
+        let (status, page) = register("Alice", "x@example.com").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(page.contains("Username is already taken."), "{page}");
+        let (status, page) = register("carl", "carl").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(page.contains("Please enter a valid email address."), "{page}");
+        let (status, _) = register(" carl ", "carl@example.com").await;
+        assert_eq!(status, StatusCode::FOUND);
+        assert!(User::by_username(&mut pool.get().unwrap(), "carl").unwrap().is_some(), "stored trimmed");
     }
 
     #[actix_web::test]

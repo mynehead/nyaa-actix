@@ -4,8 +4,8 @@ use crate::db::DbPool;
 use crate::middleware::auth::get_current_user;
 use crate::models::{hide_ips, AdminLog, Ban, User, UserStatus};
 use crate::utils::context::base_context;
-use crate::utils::flash;
 use crate::utils::pagination::Pagination;
+use crate::utils::{flash, internal_error};
 use actix_session::Session;
 use actix_web::{web, HttpResponse, Result};
 use diesel::prelude::*;
@@ -64,9 +64,8 @@ pub async fn log(
     query: web::Query<PageParams>,
 ) -> Result<HttpResponse> {
     let current_user = require_moderator(&session, &pool)?;
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
-    let (mut logs, total) =
-        AdminLog::page(&mut conn, query.page(), ADMIN_PER_PAGE).map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
+    let (mut logs, total) = AdminLog::page(&mut conn, query.page(), ADMIN_PER_PAGE).map_err(internal_error)?;
     if !current_user.is_superadmin() {
         for entry in &mut logs {
             entry.entry.log = hide_ips(&entry.entry.log);
@@ -75,7 +74,7 @@ pub async fn log(
     let mut ctx = base_context(&cfg, Some(&current_user));
     ctx.insert("logs", &logs);
     ctx.insert("pagination", &Pagination::new(query.page(), total, ADMIN_PER_PAGE));
-    let html = tmpl.render("admin/log.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("admin/log.html", &ctx).map_err(internal_error)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
@@ -88,14 +87,13 @@ pub async fn bans(
     query: web::Query<PageParams>,
 ) -> Result<HttpResponse> {
     let current_user = require_moderator(&session, &pool)?;
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
-    let (bans, total) =
-        Ban::page(&mut conn, query.page(), ADMIN_PER_PAGE).map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
+    let (bans, total) = Ban::page(&mut conn, query.page(), ADMIN_PER_PAGE).map_err(internal_error)?;
     let mut ctx = base_context(&cfg, Some(&current_user));
     ctx.insert("bans", &bans);
     ctx.insert("pagination", &Pagination::new(query.page(), total, ADMIN_PER_PAGE));
     ctx.insert("flash_messages", &flash::take(&session));
-    let html = tmpl.render("admin/bans.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("admin/bans.html", &ctx).map_err(internal_error)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
@@ -108,9 +106,9 @@ pub struct UnbanForm {
 /// Lifts one ban, reactivates its user and logs it, as upstream's `view_adminbans` POST.
 pub async fn bans_post(session: Session, pool: web::Data<DbPool>, form: web::Form<UnbanForm>) -> Result<HttpResponse> {
     let current_user = require_moderator(&session, &pool)?;
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
     let ban = Ban::by_id(&mut conn, form.submit)
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Ban not found"))?;
     conn.transaction::<_, diesel::result::Error, _>(|conn| {
         let mut log = format!("Unbanned ban #{}", ban.id);
@@ -128,7 +126,7 @@ pub async fn bans_post(session: Session, pool: web::Data<DbPool>, form: web::For
         diesel::delete(bans::table.find(ban.id)).execute(conn)?;
         Ok(())
     })
-    .map_err(actix_web::error::ErrorInternalServerError)?;
+    .map_err(internal_error)?;
     flash::push(&session, "success", "", &format!("Unbanned ban #{}", ban.id));
     Ok(HttpResponse::SeeOther().insert_header(("Location", "/admin/bans")).finish())
 }
@@ -176,6 +174,7 @@ mod tests {
             maintenance_mode: false,
             site_url: String::new(),
             tracker_urls: vec![],
+            trusted_proxies: vec![],
             meili: None,
             trusted: Default::default(),
         }
