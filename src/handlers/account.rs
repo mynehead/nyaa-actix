@@ -9,12 +9,12 @@ use serde::Deserialize;
 use tera::Tera;
 
 use crate::config::Config;
-use crate::db::{DbConnection, DbPool};
 use crate::db::schema::users;
-use crate::utils::context::base_context;
+use crate::db::{DbConnection, DbPool};
 use crate::middleware::auth::{get_current_user, login_user, logout_user};
 use crate::models::{Ban, NewUser, User};
 use crate::storage::{Kind, Storage};
+use crate::utils::context::base_context;
 use crate::utils::{avatar, flash, pack_ip};
 
 #[derive(Debug, Deserialize)]
@@ -43,8 +43,7 @@ pub async fn login_get(
     }
     let mut ctx = base_context(&cfg, None);
     ctx.insert("error", &Option::<String>::None);
-    let html = tmpl.render("login.html", &ctx)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("login.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
@@ -57,15 +56,17 @@ pub async fn login_post(
     form: web::Form<LoginForm>,
 ) -> Result<HttpResponse> {
     let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
-    let user = User::by_username_or_email(&mut conn, &form.username)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let user =
+        User::by_username_or_email(&mut conn, &form.username).map_err(actix_web::error::ErrorInternalServerError)?;
 
     let error = match user {
         Some(ref u) if u.verify_password(&form.password) && u.is_active() => {
             // Upstream records these on login; IP bans from the user page use last_login_ip
             diesel::update(users::table.find(u.id))
-                .set((users::last_login_date.eq(chrono::Utc::now().naive_utc()),
-                      users::last_login_ip.eq(req.peer_addr().map(|a| pack_ip(a.ip())))))
+                .set((
+                    users::last_login_date.eq(chrono::Utc::now().naive_utc()),
+                    users::last_login_ip.eq(req.peer_addr().map(|a| pack_ip(a.ip()))),
+                ))
                 .execute(&mut conn)
                 .map_err(actix_web::error::ErrorInternalServerError)?;
             login_user(&session, u.id).ok();
@@ -74,10 +75,15 @@ pub async fn login_post(
         Some(ref u) if u.is_banned() => {
             let reason = Ban::banned(&mut conn, Some(u.id), None)
                 .map_err(actix_web::error::ErrorInternalServerError)?
-                .into_iter().next().map(|b| b.reason);
+                .into_iter()
+                .next()
+                .map(|b| b.reason);
             Some(match reason {
-                Some(reason) => format!("You are banned with the reason \"{}\" If you believe that this \
-                                         is a mistake, contact a moderator.", reason),
+                Some(reason) => format!(
+                    "You are banned with the reason \"{}\" If you believe that this \
+                                         is a mistake, contact a moderator.",
+                    reason
+                ),
                 None => "Your account has been banned.".to_string(),
             })
         }
@@ -88,10 +94,8 @@ pub async fn login_post(
     let mut ctx = base_context(&cfg, None);
     ctx.insert("error", &error);
     ctx.insert("username", &form.username);
-    let html = tmpl.render("login.html", &ctx)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
-    Ok(HttpResponse::Ok().status(actix_web::http::StatusCode::UNAUTHORIZED)
-        .content_type("text/html").body(html))
+    let html = tmpl.render("login.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+    Ok(HttpResponse::Ok().status(actix_web::http::StatusCode::UNAUTHORIZED).content_type("text/html").body(html))
 }
 
 pub async fn register_get(
@@ -106,8 +110,7 @@ pub async fn register_get(
     }
     let mut ctx = base_context(&cfg, None);
     ctx.insert("errors", &Vec::<String>::new());
-    let html = tmpl.render("register.html", &ctx)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("register.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
@@ -133,12 +136,10 @@ pub async fn register_post(
     if form.password.len() < 6 {
         errors.push("Password must be at least 6 characters.".into());
     }
-    if User::by_username(&mut conn, &form.username)
-        .map_err(actix_web::error::ErrorInternalServerError)?.is_some() {
+    if User::by_username(&mut conn, &form.username).map_err(actix_web::error::ErrorInternalServerError)?.is_some() {
         errors.push("Username is already taken.".into());
     }
-    if User::by_email(&mut conn, &form.email)
-        .map_err(actix_web::error::ErrorInternalServerError)?.is_some() {
+    if User::by_email(&mut conn, &form.email).map_err(actix_web::error::ErrorInternalServerError)?.is_some() {
         errors.push("Email is already in use.".into());
     }
 
@@ -147,10 +148,11 @@ pub async fn register_post(
         ctx.insert("errors", &errors);
         ctx.insert("username", &form.username);
         ctx.insert("email", &form.email);
-        let html = tmpl.render("register.html", &ctx)
-            .map_err(actix_web::error::ErrorInternalServerError)?;
-        return Ok(HttpResponse::Ok().status(actix_web::http::StatusCode::BAD_REQUEST)
-            .content_type("text/html").body(html));
+        let html = tmpl.render("register.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+        return Ok(HttpResponse::Ok()
+            .status(actix_web::http::StatusCode::BAD_REQUEST)
+            .content_type("text/html")
+            .body(html));
     }
 
     let new_user = NewUser::new(&form.username, Some(&form.email), &form.password);
@@ -202,8 +204,11 @@ type FieldErrors = HashMap<&'static str, Vec<String>>;
 /// Good enough to catch typos; there is no verification mail yet to prove it works.
 fn looks_like_email(s: &str) -> bool {
     let Some((local, domain)) = s.split_once('@') else { return false };
-    !local.is_empty() && !domain.contains('@') && !s.chars().any(char::is_whitespace)
-        && domain.split('.').count() >= 2 && domain.split('.').all(|part| !part.is_empty())
+    !local.is_empty()
+        && !domain.contains('@')
+        && !s.chars().any(char::is_whitespace)
+        && domain.split('.').count() >= 2
+        && domain.split('.').all(|part| !part.is_empty())
 }
 
 impl ProfileForm {
@@ -249,8 +254,7 @@ fn render_profile(
     errors: FieldErrors,
     email_value: &str,
 ) -> Result<HttpResponse> {
-    let hide_comments = User::hide_comments(conn, user.id)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let hide_comments = User::hide_comments(conn, user.id).map_err(actix_web::error::ErrorInternalServerError)?;
     let no_errors = FieldErrors::new();
     let mut ctx = base_context(cfg, Some(user));
     ctx.insert("flash_messages", &flash::take(session));
@@ -260,8 +264,7 @@ fn render_profile(
     ctx.insert("password_errors", if active_tab == "password" { &errors } else { &no_errors });
     ctx.insert("email_errors", if active_tab == "email" { &errors } else { &no_errors });
     ctx.insert("email_value", email_value);
-    let html = tmpl.render("profile.html", &ctx)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("profile.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
@@ -359,8 +362,7 @@ pub async fn avatar_post(
         Ok(png) => png,
         Err(msg) => return fail(msg),
     };
-    storage.put(Kind::Avatar, user.id, png).await
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    storage.put(Kind::Avatar, user.id, png).await.map_err(actix_web::error::ErrorInternalServerError)?;
     let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
     User::set_avatar_time(&mut conn, user.id, chrono::Utc::now().naive_utc())
         .map_err(actix_web::error::ErrorInternalServerError)?;
@@ -372,20 +374,25 @@ pub async fn avatar_post(
 mod tests {
     use super::*;
     use actix_session::{storage::CookieSessionStore, SessionMiddleware};
-    use actix_web::{cookie::{Cookie, Key}, http::StatusCode, test, App};
+    use actix_web::{
+        cookie::{Cookie, Key},
+        http::StatusCode,
+        test, App,
+    };
     use diesel::r2d2::Pool;
 
     const PASSWORD: &str = "hunter22";
 
     fn pool() -> DbPool {
         // One connection, so every request sees the same in-memory database
-        let pool = Pool::builder().max_size(1)
-            .build(crate::db::DbManager::new(":memory:")).unwrap();
+        let pool = Pool::builder().max_size(1).build(crate::db::DbManager::new(":memory:")).unwrap();
         let mut conn = pool.get().unwrap();
         crate::db::run_migrations(&mut conn).unwrap();
         for (name, email) in [("alice", "alice@example.com"), ("bob", "bob@example.com")] {
-            diesel::insert_into(users::table).values(&NewUser::new(name, Some(email), PASSWORD))
-                .execute(&mut conn).unwrap();
+            diesel::insert_into(users::table)
+                .values(&NewUser::new(name, Some(email), PASSWORD))
+                .execute(&mut conn)
+                .unwrap();
         }
         pool
     }
@@ -393,11 +400,20 @@ mod tests {
     fn config(test: &str) -> Config {
         let avatars = std::env::temp_dir().join(format!("nyaa-avatar-test-{}-{}", std::process::id(), test));
         Config {
-            database_url: String::new(), secret_key: String::new(), site_name: "Nyaa".into(),
-            site_flavor: "nyaa".into(), results_per_page: 75, max_pages: 0,
-            torrent_storage_path: String::new(), avatar_storage_path: avatars.to_string_lossy().into_owned(),
-            enable_gravatar: false, maintenance_mode: false,
-            site_url: "http://localhost:8080".into(), tracker_urls: vec![], meili: None, trusted: Default::default(),
+            database_url: String::new(),
+            secret_key: String::new(),
+            site_name: "Nyaa".into(),
+            site_flavor: "nyaa".into(),
+            results_per_page: 75,
+            max_pages: 0,
+            torrent_storage_path: String::new(),
+            avatar_storage_path: avatars.to_string_lossy().into_owned(),
+            enable_gravatar: false,
+            maintenance_mode: false,
+            site_url: "http://localhost:8080".into(),
+            tracker_urls: vec![],
+            meili: None,
+            trusted: Default::default(),
         }
     }
 
@@ -411,17 +427,22 @@ mod tests {
         ($pool:expr, $cfg:expr) => {{
             let mut tera = Tera::new("templates/**/*").unwrap();
             crate::utils::tera_filters::register(&mut tera);
-            let app = test::init_service(App::new()
-                .app_data(web::Data::new($cfg.clone()))
-                .app_data(web::Data::new($pool.clone()))
-                .app_data(web::Data::new(Storage::local(&$cfg.avatar_storage_path, &$cfg.avatar_storage_path).unwrap()))
-                .app_data(web::Data::new(tera))
-                .wrap(SessionMiddleware::new(CookieSessionStore::default(), Key::from(&[7u8; 64])))
-                .route("/login/{id}", web::get().to(login_as))
-                .route("/account/profile", web::get().to(profile))
-                .route("/account/profile", web::post().to(profile_post))
-                .route("/account/profile/avatar", web::post().to(avatar_post))
-                .route("/avatar/{id}", web::get().to(crate::handlers::users::avatar))).await;
+            let app = test::init_service(
+                App::new()
+                    .app_data(web::Data::new($cfg.clone()))
+                    .app_data(web::Data::new($pool.clone()))
+                    .app_data(web::Data::new(
+                        Storage::local(&$cfg.avatar_storage_path, &$cfg.avatar_storage_path).unwrap(),
+                    ))
+                    .app_data(web::Data::new(tera))
+                    .wrap(SessionMiddleware::new(CookieSessionStore::default(), Key::from(&[7u8; 64])))
+                    .route("/login/{id}", web::get().to(login_as))
+                    .route("/account/profile", web::get().to(profile))
+                    .route("/account/profile", web::post().to(profile_post))
+                    .route("/account/profile/avatar", web::post().to(avatar_post))
+                    .route("/avatar/{id}", web::get().to(crate::handlers::users::avatar)),
+            )
+            .await;
             let res = test::call_service(&app, test::TestRequest::get().uri("/login/1").to_request()).await;
             let cookie: Cookie<'static> = res.response().cookies().next().unwrap().into_owned();
             (app, cookie)
@@ -434,10 +455,14 @@ mod tests {
             let res = $res;
             assert_eq!(res.status(), StatusCode::FOUND);
             assert_eq!(res.headers().get("Location").unwrap(), PROFILE_URL);
-            if let Some(c) = res.response().cookies().next() { *$cookie = c.into_owned(); }
+            if let Some(c) = res.response().cookies().next() {
+                *$cookie = c.into_owned();
+            }
             let req = test::TestRequest::get().uri(PROFILE_URL).cookie($cookie.clone()).to_request();
             let res = test::call_service($app, req).await;
-            if let Some(c) = res.response().cookies().next() { *$cookie = c.into_owned(); }
+            if let Some(c) = res.response().cookies().next() {
+                *$cookie = c.into_owned();
+            }
             String::from_utf8(test::read_body(res).await.to_vec()).unwrap()
         }};
     }
@@ -457,8 +482,16 @@ mod tests {
         let req = test::TestRequest::get().uri(PROFILE_URL).cookie(cookie).to_request();
         let html = String::from_utf8(test::read_body(test::call_service(&app, req).await).await.to_vec()).unwrap();
         assert!(!html.contains("<dt class=\"col-sm-2\">Email:</dt>"), "{}", html);
-        for tab in ["Password</a>", "Email</a>", "Preferences</a>", "Repeat New Password", "New Email Address",
-                    "Images will be scaled and cropped to 256x256.", "Change avatar", "Hide comments by default"] {
+        for tab in [
+            "Password</a>",
+            "Email</a>",
+            "Preferences</a>",
+            "Repeat New Password",
+            "New Email Address",
+            "Images will be scaled and cropped to 256x256.",
+            "Change avatar",
+            "Hide comments by default",
+        ] {
             assert!(html.contains(tab), "missing {}", tab);
         }
         // Only the email tab shows the address
@@ -471,8 +504,14 @@ mod tests {
     async fn logged_out_profile_redirects_to_login() {
         let (pool, cfg) = (pool(), config("logged-out"));
         let (app, _) = app!(pool, cfg);
-        let res = test::call_service(&app, test::TestRequest::post().uri(PROFILE_URL)
-            .set_form([("submit_settings", "Update"), ("hide_comments", "y")]).to_request()).await;
+        let res = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri(PROFILE_URL)
+                .set_form([("submit_settings", "Update"), ("hide_comments", "y")])
+                .to_request(),
+        )
+        .await;
         assert_eq!(res.headers().get("Location").unwrap(), "/account/login");
         assert!(!User::hide_comments(&mut pool.get().unwrap(), 1).unwrap());
     }
@@ -482,14 +521,40 @@ mod tests {
         let (pool, cfg) = (pool(), config("password"));
         let (app, mut cookie) = app!(pool, cfg);
 
-        let res = test::call_service(&app, post(&cookie, &[("tab", "password"), ("current_password", "wrong"),
-            ("new_password", "newpass1"), ("password_confirm", "newpass1"), ("authorized_submit", "Update")]).to_request()).await;
+        let res = test::call_service(
+            &app,
+            post(
+                &cookie,
+                &[
+                    ("tab", "password"),
+                    ("current_password", "wrong"),
+                    ("new_password", "newpass1"),
+                    ("password_confirm", "newpass1"),
+                    ("authorized_submit", "Update"),
+                ],
+            )
+            .to_request(),
+        )
+        .await;
         let html = follow!(&app, res, &mut cookie);
         assert!(html.contains("<strong>Password change failed!</strong> Incorrect password."), "{}", html);
         assert!(alice(&pool).verify_password(PASSWORD));
 
-        let res = test::call_service(&app, post(&cookie, &[("tab", "password"), ("current_password", PASSWORD),
-            ("new_password", "newpass1"), ("password_confirm", "newpass1"), ("authorized_submit", "Update")]).to_request()).await;
+        let res = test::call_service(
+            &app,
+            post(
+                &cookie,
+                &[
+                    ("tab", "password"),
+                    ("current_password", PASSWORD),
+                    ("new_password", "newpass1"),
+                    ("password_confirm", "newpass1"),
+                    ("authorized_submit", "Update"),
+                ],
+            )
+            .to_request(),
+        )
+        .await;
         let html = follow!(&app, res, &mut cookie);
         assert!(html.contains("<strong>Password successfully changed!</strong>"), "{}", html);
         assert!(alice(&pool).verify_password("newpass1"));
@@ -502,23 +567,64 @@ mod tests {
         let (pool, cfg) = (pool(), config("validation"));
         let (app, cookie) = app!(pool, cfg);
 
-        let res = test::call_service(&app, post(&cookie, &[("tab", "password"), ("current_password", ""),
-            ("new_password", "abc"), ("password_confirm", "abd"), ("authorized_submit", "Update")]).to_request()).await;
+        let res = test::call_service(
+            &app,
+            post(
+                &cookie,
+                &[
+                    ("tab", "password"),
+                    ("current_password", ""),
+                    ("new_password", "abc"),
+                    ("password_confirm", "abd"),
+                    ("authorized_submit", "Update"),
+                ],
+            )
+            .to_request(),
+        )
+        .await;
         assert_eq!(res.status(), StatusCode::OK);
         let html = String::from_utf8(test::read_body(res).await.to_vec()).unwrap();
         assert!(html.contains("This field is required."));
-        assert!(html.contains("<li>Two passwords must match</li><li>Password must be at least 6 characters long.</li>"), "{}", html);
+        assert!(
+            html.contains("<li>Two passwords must match</li><li>Password must be at least 6 characters long.</li>"),
+            "{}",
+            html
+        );
         assert!(html.contains("<li role=\"presentation\" class=\"active\">\n\t\t<a href=\"#password-change\""));
 
-        let res = test::call_service(&app, post(&cookie, &[("tab", "email"), ("current_password", PASSWORD),
-            ("email", "bob@example.com"), ("authorized_submit", "Update")]).to_request()).await;
+        let res = test::call_service(
+            &app,
+            post(
+                &cookie,
+                &[
+                    ("tab", "email"),
+                    ("current_password", PASSWORD),
+                    ("email", "bob@example.com"),
+                    ("authorized_submit", "Update"),
+                ],
+            )
+            .to_request(),
+        )
+        .await;
         let html = String::from_utf8(test::read_body(res).await.to_vec()).unwrap();
         assert!(html.contains("This email address has been taken"), "{}", html);
         assert!(html.contains("<a href=\"#email-change\" id=\"email-change-tab\" role=\"tab\" data-toggle=\"tab\" aria-controls=\"profile\" aria-expanded=\"true\">"));
         assert!(html.contains("value=\"bob@example.com\""));
 
-        let res = test::call_service(&app, post(&cookie, &[("tab", "email"), ("current_password", PASSWORD),
-            ("email", "not-an-email"), ("authorized_submit", "Update")]).to_request()).await;
+        let res = test::call_service(
+            &app,
+            post(
+                &cookie,
+                &[
+                    ("tab", "email"),
+                    ("current_password", PASSWORD),
+                    ("email", "not-an-email"),
+                    ("authorized_submit", "Update"),
+                ],
+            )
+            .to_request(),
+        )
+        .await;
         let html = String::from_utf8(test::read_body(res).await.to_vec()).unwrap();
         assert!(html.contains("Invalid email address."));
         assert_eq!(alice(&pool).email.as_deref(), Some("alice@example.com"));
@@ -529,14 +635,38 @@ mod tests {
         let (pool, cfg) = (pool(), config("email"));
         let (app, mut cookie) = app!(pool, cfg);
 
-        let res = test::call_service(&app, post(&cookie, &[("tab", "email"), ("current_password", "wrong"),
-            ("email", "new@example.com"), ("authorized_submit", "Update")]).to_request()).await;
+        let res = test::call_service(
+            &app,
+            post(
+                &cookie,
+                &[
+                    ("tab", "email"),
+                    ("current_password", "wrong"),
+                    ("email", "new@example.com"),
+                    ("authorized_submit", "Update"),
+                ],
+            )
+            .to_request(),
+        )
+        .await;
         let html = follow!(&app, res, &mut cookie);
         assert!(html.contains("<strong>Email change failed!</strong> Incorrect password."));
         assert_eq!(alice(&pool).email.as_deref(), Some("alice@example.com"));
 
-        let res = test::call_service(&app, post(&cookie, &[("tab", "email"), ("current_password", PASSWORD),
-            ("email", " new@example.com "), ("authorized_submit", "Update")]).to_request()).await;
+        let res = test::call_service(
+            &app,
+            post(
+                &cookie,
+                &[
+                    ("tab", "email"),
+                    ("current_password", PASSWORD),
+                    ("email", " new@example.com "),
+                    ("authorized_submit", "Update"),
+                ],
+            )
+            .to_request(),
+        )
+        .await;
         let html = follow!(&app, res, &mut cookie);
         assert!(html.contains("<strong>Email successfully changed!</strong>"));
         assert!(html.contains("<div id=\"current_email\">new@example.com</div>"));
@@ -552,13 +682,22 @@ mod tests {
         let (pool, cfg) = (pool(), config("prefs"));
         let (app, mut cookie) = app!(pool, cfg);
 
-        let res = test::call_service(&app, post(&cookie, &[("tab", "preferences"), ("hide_comments", "y"), ("submit_settings", "Update")]).to_request()).await;
+        let res = test::call_service(
+            &app,
+            post(&cookie, &[("tab", "preferences"), ("hide_comments", "y"), ("submit_settings", "Update")])
+                .to_request(),
+        )
+        .await;
         let html = follow!(&app, res, &mut cookie);
         assert!(html.contains("<strong>Preferences successfully changed!</strong>"));
         assert!(html.contains("value=\"y\" checked>"));
         assert!(User::hide_comments(&mut pool.get().unwrap(), 1).unwrap());
 
-        let res = test::call_service(&app, post(&cookie, &[("tab", "preferences"), ("submit_settings", "Update")]).to_request()).await;
+        let res = test::call_service(
+            &app,
+            post(&cookie, &[("tab", "preferences"), ("submit_settings", "Update")]).to_request(),
+        )
+        .await;
         let html = follow!(&app, res, &mut cookie);
         assert!(!html.contains("value=\"y\" checked>"));
         assert!(!User::hide_comments(&mut pool.get().unwrap(), 1).unwrap());
@@ -566,11 +705,16 @@ mod tests {
 
     fn multipart(cookie: &Cookie<'static>, data: &[u8]) -> test::TestRequest {
         let boundary = "XBOUNDARYX";
-        let mut body = format!("--{boundary}\r\nContent-Disposition: form-data; name=\"avatar\"; filename=\"a.png\"\r\n\
-                                Content-Type: image/png\r\n\r\n").into_bytes();
+        let mut body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"avatar\"; filename=\"a.png\"\r\n\
+                                Content-Type: image/png\r\n\r\n"
+        )
+        .into_bytes();
         body.extend_from_slice(data);
         body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-        test::TestRequest::post().uri("/account/profile/avatar").cookie(cookie.clone())
+        test::TestRequest::post()
+            .uri("/account/profile/avatar")
+            .cookie(cookie.clone())
             .insert_header(("Content-Type", format!("multipart/form-data; boundary={boundary}")))
             .set_payload(body)
     }
@@ -610,15 +754,22 @@ mod tests {
         assert_eq!(user.avatar_url(&cfg), "/static/img/avatar/default.png");
         cfg.enable_gravatar = true;
         // md5("alice@example.com")
-        assert_eq!(user.avatar_url(&cfg), "https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060\
-            ?s=120&d=http%3A%2F%2Flocalhost%3A8080%2Fstatic%2Fimg%2Favatar%2Fdefault.png&r=pg");
+        assert_eq!(
+            user.avatar_url(&cfg),
+            "https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060\
+            ?s=120&d=http%3A%2F%2Flocalhost%3A8080%2Fstatic%2Fimg%2Favatar%2Fdefault.png&r=pg"
+        );
         user.avatar_time = Some(chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap().naive_utc());
         assert_eq!(user.avatar_url(&cfg), "/avatar/1?v=1700000000");
     }
 
     #[::core::prelude::v1::test]
     fn email_shape_check() {
-        for ok in ["a@b.co", "first.last+tag@sub.example.org"] { assert!(looks_like_email(ok), "{}", ok); }
-        for bad in ["", "a@b", "@b.co", "a@@b.co", "a b@c.de", "a@b..c", "a@.b"] { assert!(!looks_like_email(bad), "{}", bad); }
+        for ok in ["a@b.co", "first.last+tag@sub.example.org"] {
+            assert!(looks_like_email(ok), "{}", ok);
+        }
+        for bad in ["", "a@b", "@b.co", "a@@b.co", "a b@c.de", "a@b..c", "a@.b"] {
+            assert!(!looks_like_email(bad), "{}", bad);
+        }
     }
 }

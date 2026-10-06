@@ -6,8 +6,8 @@ use diesel::prelude::*;
 use serde::Serialize;
 
 use crate::config::TrustedConfig;
-use crate::db::DbConnection;
 use crate::db::schema::{nyaa_statistics, nyaa_torrents, trusted_applications, trusted_reviews, users};
+use crate::db::DbConnection;
 use crate::models::{user_link, AdminLog, TorrentFlags, User, UserLevel};
 
 #[repr(i32)]
@@ -147,8 +147,12 @@ impl TrustedApplication {
             let closed = TrustedApplicationStatus::FIRST_CLOSED;
             match filter {
                 TrustedListFilter::Open => q.filter(trusted_applications::status.lt(closed)),
-                TrustedListFilter::New => q.filter(trusted_applications::status.eq(TrustedApplicationStatus::New as i32)),
-                TrustedListFilter::Reviewed => q.filter(trusted_applications::status.eq(TrustedApplicationStatus::Reviewed as i32)),
+                TrustedListFilter::New => {
+                    q.filter(trusted_applications::status.eq(TrustedApplicationStatus::New as i32))
+                }
+                TrustedListFilter::Reviewed => {
+                    q.filter(trusted_applications::status.eq(TrustedApplicationStatus::Reviewed as i32))
+                }
                 TrustedListFilter::Closed => q.filter(trusted_applications::status.ge(closed)),
             }
         };
@@ -158,7 +162,8 @@ impl TrustedApplication {
             .limit(per_page)
             .offset((page.max(1) - 1) * per_page)
             .load(conn)?;
-        let rows = apps.into_iter()
+        let rows = apps
+            .into_iter()
             .map(|app| {
                 let user = users::table.find(app.submitter_id).first::<User>(conn)?;
                 Ok((app, user))
@@ -207,8 +212,12 @@ impl TrustedApplication {
                     recommendation: recommendation as i32,
                 })
                 .execute(conn)?;
-            let log = format!("Trusted application #{} of {}: reviewed, recommends {}",
-                self.id, self.submitter_link(conn)?, TrustedRecommendation::name(recommendation as i32));
+            let log = format!(
+                "Trusted application #{} of {}: reviewed, recommends {}",
+                self.id,
+                self.submitter_link(conn)?,
+                TrustedRecommendation::name(recommendation as i32)
+            );
             AdminLog::add(conn, reviewer_id, &log)?;
             diesel::update(trusted_applications::table.find(self.id))
                 .filter(trusted_applications::status.eq(TrustedApplicationStatus::New as i32))
@@ -238,8 +247,12 @@ impl TrustedApplication {
             if closed == 0 {
                 return Ok(false);
             }
-            let log = format!("Trusted application #{} of {}: {}",
-                self.id, self.submitter_link(conn)?, if accept { "accepted" } else { "rejected" });
+            let log = format!(
+                "Trusted application #{} of {}: {}",
+                self.id,
+                self.submitter_link(conn)?,
+                if accept { "accepted" } else { "rejected" }
+            );
             AdminLog::add(conn, admin_id, &log)?;
             if accept {
                 // Upstream sets the level outright; never demote someone promoted since applying
@@ -279,8 +292,8 @@ pub fn trusted_deny_reasons(conn: &mut DbConnection, user: &User, cfg: &TrustedC
         .optional()?;
     if let Some(Some(closed)) = last_rejected {
         if (chrono::Utc::now().naive_utc() - closed).num_days() < cfg.reapply_cooldown_days {
-            reasons.push(format!("Your last application was rejected less than {} days ago.",
-                                 cfg.reapply_cooldown_days));
+            reasons
+                .push(format!("Your last application was rejected less than {} days ago.", cfg.reapply_cooldown_days));
         }
     }
     Ok(reasons)
@@ -290,8 +303,8 @@ pub fn trusted_deny_reasons(conn: &mut DbConnection, user: &User, cfg: &TrustedC
 /// enough downloads of them.
 fn satisfies_trusted_reqs(conn: &mut DbConnection, user_id: i32, cfg: &TrustedConfig) -> QueryResult<bool> {
     use diesel::dsl::{count_star, sql, sum};
-    let not_remake = || sql::<diesel::sql_types::Bool>(
-        &format!("(nyaa_torrents.flags & {}) = 0", TorrentFlags::REMAKE.bits()));
+    let not_remake =
+        || sql::<diesel::sql_types::Bool>(&format!("(nyaa_torrents.flags & {}) = 0", TorrentFlags::REMAKE.bits()));
     let uploads: i64 = nyaa_torrents::table
         .filter(nyaa_torrents::uploader_id.eq(user_id))
         .filter(not_remake())
@@ -313,9 +326,12 @@ mod tests {
     fn conn() -> DbConnection {
         let mut conn = crate::db::connect(":memory:").unwrap();
         crate::db::run_migrations(&mut conn).unwrap();
-        diesel::sql_query("INSERT INTO users (id, username, password_hash, status, level) VALUES \
-                           (1, 'uploader', 'x', 1, 0), (2, 'mod', 'x', 1, 2)")
-            .execute(&mut conn).unwrap();
+        diesel::sql_query(
+            "INSERT INTO users (id, username, password_hash, status, level) VALUES \
+                           (1, 'uploader', 'x', 1, 0), (2, 'mod', 'x', 1, 2)",
+        )
+        .execute(&mut conn)
+        .unwrap();
         conn
     }
 
@@ -323,10 +339,17 @@ mod tests {
         diesel::sql_query(format!(
             "INSERT INTO nyaa_torrents (id, info_hash, display_name, torrent_name, information, description, \
              flags, uploader_id, main_category_id, sub_category_id) \
-             VALUES ({id}, X'{}', 't', 't.torrent', '', '', {flags}, 1, 1, 2)", format!("{id:02x}").repeat(20)
-        )).execute(conn).unwrap();
-        diesel::sql_query(format!("INSERT INTO nyaa_statistics (torrent_id, seed_count, leech_count, download_count) \
-                                   VALUES ({id}, 0, 0, {downloads})")).execute(conn).unwrap();
+             VALUES ({id}, X'{}', 't', 't.torrent', '', '', {flags}, 1, 1, 2)",
+            format!("{id:02x}").repeat(20)
+        ))
+        .execute(conn)
+        .unwrap();
+        diesel::sql_query(format!(
+            "INSERT INTO nyaa_statistics (torrent_id, seed_count, leech_count, download_count) \
+                                   VALUES ({id}, 0, 0, {downloads})"
+        ))
+        .execute(conn)
+        .unwrap();
     }
 
     fn user(conn: &mut DbConnection, id: i32) -> User {
@@ -352,8 +375,7 @@ mod tests {
         let u = user(&mut conn, 1);
         assert!(trusted_deny_reasons(&mut conn, &u, &cfg).unwrap().is_empty());
         TrustedApplication::submit(&mut conn, 1, "give", "want").unwrap();
-        assert_eq!(trusted_deny_reasons(&mut conn, &u, &cfg).unwrap(),
-                   vec!["You already have an open application."]);
+        assert_eq!(trusted_deny_reasons(&mut conn, &u, &cfg).unwrap(), vec!["You already have an open application."]);
 
         let app = TrustedApplication::by_id(&mut conn, 1).unwrap().unwrap();
         let (rows, total) = TrustedApplication::list(&mut conn, TrustedListFilter::New, 1, 20).unwrap();
@@ -372,8 +394,13 @@ mod tests {
         assert!(u.is_trusted());
         let (log, _) = AdminLog::page(&mut conn, 1, 10).unwrap();
         let log: Vec<&str> = log.iter().map(|e| e.entry.log.as_str()).collect();
-        assert_eq!(log, vec!["Trusted application #1 of [uploader](/user/uploader): accepted",
-                             "Trusted application #1 of [uploader](/user/uploader): reviewed, recommends accept"]);
+        assert_eq!(
+            log,
+            vec![
+                "Trusted application #1 of [uploader](/user/uploader): accepted",
+                "Trusted application #1 of [uploader](/user/uploader): reviewed, recommends accept"
+            ]
+        );
         assert_eq!(trusted_deny_reasons(&mut conn, &u, &cfg).unwrap(), vec!["You are already trusted."]);
     }
 
@@ -386,10 +413,13 @@ mod tests {
         assert!(app.decide(&mut conn, 2, false).unwrap());
         let u = user(&mut conn, 1);
         assert!(!u.is_trusted());
-        assert_eq!(trusted_deny_reasons(&mut conn, &u, &cfg).unwrap(),
-                   vec!["Your last application was rejected less than 90 days ago."]);
+        assert_eq!(
+            trusted_deny_reasons(&mut conn, &u, &cfg).unwrap(),
+            vec!["Your last application was rejected less than 90 days ago."]
+        );
         diesel::sql_query("UPDATE trusted_applications SET closed_time = '2020-01-01 00:00:00'")
-            .execute(&mut conn).unwrap();
+            .execute(&mut conn)
+            .unwrap();
         assert!(trusted_deny_reasons(&mut conn, &u, &cfg).unwrap().is_empty());
     }
 }

@@ -2,8 +2,8 @@ use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::Serialize;
 
-use crate::db::DbConnection;
 use crate::db::schema::{site_banners, users};
+use crate::db::DbConnection;
 
 /// Text shown above the torrent list on the main page while `active` (Admin > Banners).
 #[derive(Debug, Clone, Queryable, Selectable, Serialize)]
@@ -27,10 +27,7 @@ pub struct BannerRow {
 impl Banner {
     /// The banners shown on the main page, newest first.
     pub fn active(conn: &mut DbConnection) -> QueryResult<Vec<Banner>> {
-        site_banners::table
-            .filter(site_banners::active.eq(true))
-            .order(site_banners::id.desc())
-            .load(conn)
+        site_banners::table.filter(site_banners::active.eq(true)).order(site_banners::id.desc()).load(conn)
     }
 
     pub fn all_with_creator(conn: &mut DbConnection) -> QueryResult<Vec<BannerRow>> {
@@ -57,11 +54,11 @@ impl Banner {
 
     /// Flips the banner on or off; returns its new state, or None if it does not exist.
     pub fn toggle(conn: &mut DbConnection, id: i32) -> QueryResult<Option<bool>> {
-        let Some(active) = site_banners::table.find(id).select(site_banners::active)
-            .first::<bool>(conn).optional()? else { return Ok(None) };
-        diesel::update(site_banners::table.find(id))
-            .set(site_banners::active.eq(!active))
-            .execute(conn)?;
+        let Some(active) = site_banners::table.find(id).select(site_banners::active).first::<bool>(conn).optional()?
+        else {
+            return Ok(None);
+        };
+        diesel::update(site_banners::table.find(id)).set(site_banners::active.eq(!active)).execute(conn)?;
         Ok(Some(!active))
     }
 

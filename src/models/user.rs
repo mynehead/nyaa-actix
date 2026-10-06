@@ -1,12 +1,12 @@
+use argon2::password_hash::{rand_core::OsRng, SaltString};
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
-use argon2::password_hash::{rand_core::OsRng, SaltString};
 
 use crate::config::Config;
-use crate::db::DbConnection;
 use crate::db::schema::{user_preferences, users};
+use crate::db::DbConnection;
 
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,10 +56,7 @@ pub struct User {
 /// Argon2 hash with a fresh salt, as stored in `password_hash`.
 pub fn hash_password(password: &str) -> String {
     let salt = SaltString::generate(&mut OsRng);
-    Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
-        .expect("failed to hash password")
-        .to_string()
+    Argon2::default().hash_password(password.as_bytes(), &salt).expect("failed to hash password").to_string()
 }
 
 pub const DEFAULT_AVATAR: &str = "/static/img/avatar/default.png";
@@ -94,7 +91,11 @@ impl User {
             UserLevel::Moderator => "Moderator",
             UserLevel::SuperAdmin => "Administrator",
         };
-        if self.is_banned() { format!("BANNED {}", level) } else { level.to_string() }
+        if self.is_banned() {
+            format!("BANNED {}", level)
+        } else {
+            level.to_string()
+        }
     }
 
     pub fn status_str(&self) -> &'static str {
@@ -112,7 +113,11 @@ impl User {
             UserLevel::Trusted => "success",
             UserLevel::Moderator | UserLevel::SuperAdmin => "purple",
         };
-        if self.is_banned() { format!("{} strike", color) } else { color.to_string() }
+        if self.is_banned() {
+            format!("{} strike", color)
+        } else {
+            color.to_string()
+        }
     }
 
     pub fn verify_password(&self, password: &str) -> bool {
@@ -135,17 +140,19 @@ impl User {
                 let default_url = format!("{}{}", cfg.site_url, DEFAULT_AVATAR);
                 // Nyaa: PG-rated, Sukebei: X-rated
                 let rating = if cfg.site_flavor == "nyaa" { "pg" } else { "x" };
-                format!("https://www.gravatar.com/avatar/{}?s=120&d={}&r={}",
-                    hash, urlencoding::encode(&default_url), rating)
+                format!(
+                    "https://www.gravatar.com/avatar/{}?s=120&d={}&r={}",
+                    hash,
+                    urlencoding::encode(&default_url),
+                    rating
+                )
             }
             _ => DEFAULT_AVATAR.to_string(),
         }
     }
 
     pub fn set_password(conn: &mut DbConnection, uid: i32, password: &str) -> QueryResult<usize> {
-        diesel::update(users::table.find(uid))
-            .set(users::password_hash.eq(hash_password(password)))
-            .execute(conn)
+        diesel::update(users::table.find(uid)).set(users::password_hash.eq(hash_password(password))).execute(conn)
     }
 
     pub fn set_email(conn: &mut DbConnection, uid: i32, email: &str) -> QueryResult<usize> {
@@ -158,9 +165,8 @@ impl User {
 
     /// The "Hide comments by default" preference; off when the user never saved preferences.
     pub fn hide_comments(conn: &mut DbConnection, uid: i32) -> QueryResult<bool> {
-        let hide: Option<i32> = user_preferences::table.find(uid)
-            .select(user_preferences::hide_comments)
-            .first(conn).optional()?;
+        let hide: Option<i32> =
+            user_preferences::table.find(uid).select(user_preferences::hide_comments).first(conn).optional()?;
         Ok(hide.unwrap_or(0) != 0)
     }
 

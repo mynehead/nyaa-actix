@@ -91,9 +91,7 @@ impl S3Settings {
             .with_region(&self.region)
             .with_virtual_hosted_style_request(!self.path_style);
         if let Some(endpoint) = &self.endpoint {
-            builder = builder
-                .with_endpoint(endpoint)
-                .with_allow_http(endpoint.starts_with("http://"));
+            builder = builder.with_endpoint(endpoint).with_allow_http(endpoint.starts_with("http://"));
         }
         if let (Some(key), Some(secret)) = (&self.access_key, &self.secret_key) {
             builder = builder.with_access_key_id(key).with_secret_access_key(secret);
@@ -150,9 +148,12 @@ impl Storage {
         Ok(Storage {
             torrents: under(Kind::TorrentInfo),
             avatars: under(Kind::Avatar),
-            description: format!("S3 bucket {}{} at {}", settings.bucket,
+            description: format!(
+                "S3 bucket {}{} at {}",
+                settings.bucket,
                 if settings.prefix.is_empty() { String::new() } else { format!(" (under {}/)", settings.prefix) },
-                settings.endpoint.as_deref().unwrap_or("AWS")),
+                settings.endpoint.as_deref().unwrap_or("AWS")
+            ),
         })
     }
 
@@ -202,9 +203,8 @@ impl Storage {
 
     /// Every stored key of `kind` with its size, skipping leftover temp files.
     pub async fn list(&self, kind: Kind) -> object_store::Result<Vec<(Path, u64)>> {
-        let mut out: Vec<_> = self.store(kind).list(None)
-            .map_ok(|meta| (meta.location, meta.size))
-            .try_collect().await?;
+        let mut out: Vec<_> =
+            self.store(kind).list(None).map_ok(|meta| (meta.location, meta.size)).try_collect().await?;
         out.retain(|(key, _)| !key.as_ref().ends_with(".tmp"));
         out.sort();
         Ok(out)
@@ -215,18 +215,25 @@ impl Storage {
     pub async fn copy_all(&self, dest: &Storage, dry_run: bool) -> Result<(usize, usize), String> {
         let (mut copied, mut skipped) = (0, 0);
         for kind in Kind::ALL {
-            let have: std::collections::HashMap<Path, u64> = dest.list(kind).await
+            let have: std::collections::HashMap<Path, u64> = dest
+                .list(kind)
+                .await
                 .map_err(|e| format!("listing {} in {}: {e}", kind.folder(), dest.description))?
-                .into_iter().collect();
-            for (key, size) in self.list(kind).await
-                .map_err(|e| format!("listing {} in {}: {e}", kind.folder(), self.description))? {
+                .into_iter()
+                .collect();
+            for (key, size) in
+                self.list(kind).await.map_err(|e| format!("listing {} in {}: {e}", kind.folder(), self.description))?
+            {
                 if have.get(&key) == Some(&size) {
                     skipped += 1;
                     continue;
                 }
                 println!("{} {}/{key} ({size} bytes)", if dry_run { "would copy" } else { "copying" }, kind.folder());
                 if !dry_run {
-                    let data = self.get_key(kind, &key).await.map_err(|e| format!("reading {key}: {e}"))?
+                    let data = self
+                        .get_key(kind, &key)
+                        .await
+                        .map_err(|e| format!("reading {key}: {e}"))?
                         .ok_or_else(|| format!("{key} disappeared while copying"))?;
                     dest.put_key(kind, &key, data).await.map_err(|e| format!("writing {key}: {e}"))?;
                 }
@@ -264,12 +271,26 @@ pub(crate) mod tests {
 
     #[test]
     fn s3_settings_defaults_and_errors() {
-        let s = S3Settings::from_vars(vars(&[("S3_BUCKET", "nyaa"), ("S3_ENDPOINT", "http://localhost:3900/"),
-            ("S3_PATH_STYLE", "true"), ("S3_PREFIX", "/site/"), ("S3_ACCESS_KEY", " ")])).unwrap();
-        assert_eq!(s, S3Settings {
-            endpoint: Some("http://localhost:3900".into()), bucket: "nyaa".into(), region: "us-east-1".into(),
-            access_key: None, secret_key: None, path_style: true, prefix: "site".into(),
-        });
+        let s = S3Settings::from_vars(vars(&[
+            ("S3_BUCKET", "nyaa"),
+            ("S3_ENDPOINT", "http://localhost:3900/"),
+            ("S3_PATH_STYLE", "true"),
+            ("S3_PREFIX", "/site/"),
+            ("S3_ACCESS_KEY", " "),
+        ]))
+        .unwrap();
+        assert_eq!(
+            s,
+            S3Settings {
+                endpoint: Some("http://localhost:3900".into()),
+                bucket: "nyaa".into(),
+                region: "us-east-1".into(),
+                access_key: None,
+                secret_key: None,
+                path_style: true,
+                prefix: "site".into(),
+            }
+        );
         assert!(S3Settings::from_vars(vars(&[])).unwrap_err().contains("S3_BUCKET"));
         assert!(S3Settings::from_vars(vars(&[("S3_BUCKET", "b"), ("S3_PATH_STYLE", "yes")])).is_err());
         assert!(Storage::s3(&s).is_ok());

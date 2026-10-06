@@ -208,7 +208,10 @@ pub fn sort(q: &SearchQuery) -> Vec<String> {
         SearchSort::Downloads => "download_count",
         SearchSort::Comments => "comment_count",
     };
-    let dir = match q.order { SearchOrder::Asc => "asc", SearchOrder::Desc => "desc" };
+    let dir = match q.order {
+        SearchOrder::Asc => "asc",
+        SearchOrder::Desc => "desc",
+    };
     let mut s = vec![format!("{field}:{dir}")];
     if field != "id" {
         s.push("id:desc".into());
@@ -270,14 +273,24 @@ impl Meili {
         self.call_within(method, path, body, None)
     }
 
-    fn call_within(&self, method: &str, path: &str, body: Option<&Value>, timeout: Option<Duration>) -> MeiliResult<Value> {
+    fn call_within(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        timeout: Option<Duration>,
+    ) -> MeiliResult<Value> {
         let url = format!("{}{}", self.url, path);
         let auth = self.key.as_ref().map(|k| format!("Bearer {k}"));
         macro_rules! send {
             ($builder:expr) => {{
                 let mut b = $builder;
-                if let Some(t) = timeout { b = b.config().timeout_global(Some(t)).build(); }
-                if let Some(a) = &auth { b = b.header("Authorization", a); }
+                if let Some(t) = timeout {
+                    b = b.config().timeout_global(Some(t)).build();
+                }
+                if let Some(a) = &auth {
+                    b = b.header("Authorization", a);
+                }
                 b
             }};
         }
@@ -307,8 +320,14 @@ impl Meili {
     /// Torrent ids for one page of a listing, in order, and the number of matches.
     pub fn search(&self, q: &SearchQuery) -> MeiliResult<(Vec<i32>, i64)> {
         // A page waits on this; past the timeout SQLite answers instead
-        let r = self.call_within("POST", &format!("/indexes/{}/search", self.index), Some(&search_body(q)), Some(SEARCH_TIMEOUT))?;
-        let ids = r["hits"].as_array()
+        let r = self.call_within(
+            "POST",
+            &format!("/indexes/{}/search", self.index),
+            Some(&search_body(q)),
+            Some(SEARCH_TIMEOUT),
+        )?;
+        let ids = r["hits"]
+            .as_array()
             .ok_or_else(|| MeiliError::Response(r.to_string()))?
             .iter()
             .filter_map(|h| h["id"].as_i64().map(|id| id as i32))
@@ -348,7 +367,8 @@ impl Meili {
 
     /// Whether any update to the index is still queued or running.
     pub fn has_pending_tasks(&self) -> MeiliResult<bool> {
-        let v = self.call("GET", &format!("/tasks?indexUids={}&statuses=enqueued,processing&limit=1", self.index), None)?;
+        let v =
+            self.call("GET", &format!("/tasks?indexUids={}&statuses=enqueued,processing&limit=1", self.index), None)?;
         v["total"].as_u64().map(|t| t > 0).ok_or_else(|| MeiliError::Response(v.to_string()))
     }
 
@@ -362,7 +382,8 @@ impl Meili {
         };
         let want = index_settings(self.max_hits);
         let sorted = |v: &Value| {
-            let mut a: Vec<String> = v.as_array().into_iter().flatten().filter_map(|x| x.as_str().map(String::from)).collect();
+            let mut a: Vec<String> =
+                v.as_array().into_iter().flatten().filter_map(|x| x.as_str().map(String::from)).collect();
             a.sort();
             a
         };
@@ -380,7 +401,8 @@ impl Meili {
             Ok(_) | Err(MeiliError::Status { .. }) => {} // Already there is fine; the settings call reports real trouble
             Err(e) => return Err(e),
         }
-        let v = self.call("PATCH", &format!("/indexes/{}/settings", self.index), Some(&index_settings(self.max_hits)))?;
+        let v =
+            self.call("PATCH", &format!("/indexes/{}/settings", self.index), Some(&index_settings(self.max_hits)))?;
         Self::task_uid(&v)
     }
 
@@ -411,7 +433,11 @@ impl Meili {
                     return Err(MeiliError::Task { uid, status: s.into(), error: t["error"]["message"].to_string() })
                 }
                 _ if start.elapsed() > timeout => {
-                    return Err(MeiliError::Task { uid, status: "still running".into(), error: format!("after {timeout:?}") })
+                    return Err(MeiliError::Task {
+                        uid,
+                        status: "still running".into(),
+                        error: format!("after {timeout:?}"),
+                    })
                 }
                 _ => {
                     std::thread::sleep(pause);
@@ -427,22 +453,35 @@ mod tests {
     use super::*;
 
     fn query() -> SearchQuery {
-        SearchQuery::from_params(Some("show 1080p".into()), None, None, Some("1_2"), Some("3"),
-                                 Some("seeders"), Some("asc"), Some(3), 75, false)
+        SearchQuery::from_params(
+            Some("show 1080p".into()),
+            None,
+            None,
+            Some("1_2"),
+            Some("3"),
+            Some("seeders"),
+            Some("asc"),
+            Some(3),
+            75,
+            false,
+        )
     }
 
     #[test]
     fn search_body_carries_term_filters_sort_and_page() {
-        assert_eq!(search_body(&query()), json!({
-            "q": "show 1080p",
-            "filter": ["main_category_id = 1", "sub_category_id = 2", "trusted = true AND complete = true",
-                       "deleted = false", "hidden = false"],
-            "sort": ["seed_count:asc", "id:desc"],
-            "page": 3,
-            "hitsPerPage": 75,
-            "attributesToRetrieve": ["id"],
-            "matchingStrategy": "all",
-        }));
+        assert_eq!(
+            search_body(&query()),
+            json!({
+                "q": "show 1080p",
+                "filter": ["main_category_id = 1", "sub_category_id = 2", "trusted = true AND complete = true",
+                           "deleted = false", "hidden = false"],
+                "sort": ["seed_count:asc", "id:desc"],
+                "page": 3,
+                "hitsPerPage": 75,
+                "attributesToRetrieve": ["id"],
+                "matchingStrategy": "all",
+            })
+        );
     }
 
     #[test]
@@ -452,8 +491,17 @@ mod tests {
         q.group_id = Some(9);
         q.quality_filter = 1;
         q.hide_anonymous = true;
-        assert_eq!(filter(&q), ["uploader_id = 4", "group_id = 9", "remake = false",
-                                "deleted = false", "hidden = false", "anonymous = false"]);
+        assert_eq!(
+            filter(&q),
+            [
+                "uploader_id = 4",
+                "group_id = 9",
+                "remake = false",
+                "deleted = false",
+                "hidden = false",
+                "anonymous = false"
+            ]
+        );
         // Moderators: nothing hidden
         let mut q = SearchQuery::new();
         q.include_deleted = true;

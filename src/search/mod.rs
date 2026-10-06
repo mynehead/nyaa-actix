@@ -4,8 +4,8 @@ pub mod meili;
 
 use diesel::prelude::*;
 
-use crate::db::DbConnection;
 use crate::db::schema::nyaa_torrents;
+use crate::db::DbConnection;
 use crate::models::Torrent;
 use db::{SearchQuery, SearchResult, SearchSort};
 use meili::Meili;
@@ -54,14 +54,23 @@ mod tests {
         let mut conn = crate::db::connect(":memory:").unwrap();
         crate::db::run_migrations(&mut conn).unwrap();
         diesel::sql_query("INSERT INTO users (id, username, password_hash) VALUES (1, 'a', 'x'), (2, 'b', 'x')")
-            .execute(&mut conn).unwrap();
+            .execute(&mut conn)
+            .unwrap();
         let rows = [
             (1, "[Grp] Dragon Show - 01 [1080p]", TorrentFlags::empty(), 1, 1, 1, 10),
             (2, "[Grp] Dragon Show - 02 [720p]", TorrentFlags::TRUSTED, 1, 2, 1, 50),
             (3, "[Other] Sword Tale - 01 [1080p]", TorrentFlags::REMAKE, 2, 1, 2, 30),
             (4, "[Grp] Dragon Show - 03 [1080p]", TorrentFlags::HIDDEN, 1, 1, 1, 99),
             (5, "[Grp] Dragon Show - 04 [1080p]", TorrentFlags::DELETED, 1, 1, 1, 0),
-            (6, "[Other] Dragon Movie [1080p]", TorrentFlags::ANONYMOUS | TorrentFlags::TRUSTED | TorrentFlags::COMPLETE, 1, 2, 2, 20),
+            (
+                6,
+                "[Other] Dragon Movie [1080p]",
+                TorrentFlags::ANONYMOUS | TorrentFlags::TRUSTED | TorrentFlags::COMPLETE,
+                1,
+                2,
+                2,
+                20,
+            ),
         ];
         for (id, name, flags, main, sub, uploader, seeders) in rows {
             diesel::sql_query(format!(
@@ -76,7 +85,13 @@ mod tests {
         conn
     }
 
-    fn query(term: Option<&str>, cat: Option<&str>, filter: Option<&str>, sort: Option<&str>, order: Option<&str>) -> SearchQuery {
+    fn query(
+        term: Option<&str>,
+        cat: Option<&str>,
+        filter: Option<&str>,
+        sort: Option<&str>,
+        order: Option<&str>,
+    ) -> SearchQuery {
         SearchQuery::from_params(term.map(String::from), None, None, cat, filter, sort, order, None, 75, false)
     }
 
@@ -128,8 +143,11 @@ mod tests {
             eprintln!("MEILI_TEST_URL not set; skipping the Meilisearch round trip");
             return;
         };
-        let index = format!("test_{}_{}", std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        let index = format!(
+            "test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        );
         let meili = Meili::new(&url, std::env::var("MEILI_TEST_KEY").ok(), &index, 1000);
         let mut conn = db();
         // No index yet: the check builds one and only then lets searches use it
@@ -182,42 +200,60 @@ mod tests {
 
         let wait_for = |conn: &mut DbConnection, q: &SearchQuery, want: Vec<i32>| {
             for _ in 0..100 {
-                if ids(conn, Some(&meili), q).0 == want { return; }
+                if ids(conn, Some(&meili), q).0 == want {
+                    return;
+                }
                 std::thread::sleep(Duration::from_millis(50));
             }
             panic!("index never showed {want:?} for {q:?}");
         };
 
         // An edit (here a rename) reaches the index
-        diesel::sql_query("UPDATE nyaa_torrents SET display_name = 'Renamed Tale' WHERE id = 1").execute(&mut conn).unwrap();
+        diesel::sql_query("UPDATE nyaa_torrents SET display_name = 'Renamed Tale' WHERE id = 1")
+            .execute(&mut conn)
+            .unwrap();
         index::torrent_changed(&mut conn, Some(&meili), 1);
         wait_for(&mut conn, &query(Some("renamed"), None, None, None, None), vec![1]);
 
         // Changed tracker stats reach the index, and only those after `since` are sent
         let since = index::sync_stats(&mut conn, &meili, None).unwrap();
-        diesel::sql_query("UPDATE nyaa_statistics SET seed_count = 1000, last_updated = '2999-01-01 00:00:00' WHERE torrent_id = 3")
-            .execute(&mut conn).unwrap();
+        diesel::sql_query(
+            "UPDATE nyaa_statistics SET seed_count = 1000, last_updated = '2999-01-01 00:00:00' WHERE torrent_id = 3",
+        )
+        .execute(&mut conn)
+        .unwrap();
         let newest = index::sync_stats(&mut conn, &meili, since).unwrap();
         assert_eq!(newest.unwrap().to_string(), "2999-01-01 00:00:00");
         wait_for(&mut conn, &query(Some("tale"), None, None, Some("seeders"), None), vec![3, 1]);
 
         // A torrent that never reached the index (uploaded while it was down, or before it
         // was set up) gets the index rebuilt, instead of being missing from every search
-        diesel::sql_query("INSERT INTO nyaa_torrents (id, info_hash, display_name, torrent_name, flags, uploader_id, \
-                           main_category_id, sub_category_id) VALUES (7, X'07', 'Display Name2', 't', 0, 1, 1, 1)")
-            .execute(&mut conn).unwrap();
-        diesel::sql_query("INSERT INTO nyaa_statistics (torrent_id, seed_count, leech_count, download_count) VALUES (7, 1, 0, 0)")
-            .execute(&mut conn).unwrap();
+        diesel::sql_query(
+            "INSERT INTO nyaa_torrents (id, info_hash, display_name, torrent_name, flags, uploader_id, \
+                           main_category_id, sub_category_id) VALUES (7, X'07', 'Display Name2', 't', 0, 1, 1, 1)",
+        )
+        .execute(&mut conn)
+        .unwrap();
+        diesel::sql_query(
+            "INSERT INTO nyaa_statistics (torrent_id, seed_count, leech_count, download_count) VALUES (7, 1, 0, 0)",
+        )
+        .execute(&mut conn)
+        .unwrap();
         // Stats sync sends whole documents, so it adds the torrent rather than a nameless stub
         index::sync_stats(&mut conn, &meili, None).unwrap();
         wait_for(&mut conn, &query(Some("Name2"), None, None, None, None), vec![7]);
         // Digits inside a word match on their own, as do numbers without leading zeros ("02")
         assert_eq!(ids(&mut conn, Some(&meili), &query(Some("2"), None, None, None, None)), (vec![7, 2], 2));
         // One with no stats change never reaches it that way; the count check catches it
-        diesel::sql_query("INSERT INTO nyaa_torrents (id, info_hash, display_name, torrent_name, flags, uploader_id, \
-                           main_category_id, sub_category_id) VALUES (8, X'08', 'Display Name3', 't', 0, 1, 1, 1)")
-            .execute(&mut conn).unwrap();
-        while meili.has_pending_tasks().unwrap() { std::thread::sleep(Duration::from_millis(20)); }
+        diesel::sql_query(
+            "INSERT INTO nyaa_torrents (id, info_hash, display_name, torrent_name, flags, uploader_id, \
+                           main_category_id, sub_category_id) VALUES (8, X'08', 'Display Name3', 't', 0, 1, 1, 1)",
+        )
+        .execute(&mut conn)
+        .unwrap();
+        while meili.has_pending_tasks().unwrap() {
+            std::thread::sleep(Duration::from_millis(20));
+        }
         index::check(&mut conn, &meili).unwrap();
         assert!(meili.is_ready());
         assert_eq!(ids(&mut conn, Some(&meili), &query(Some("display"), None, None, None, None)), (vec![8, 7], 2));
@@ -229,7 +265,9 @@ mod tests {
         let req = ureq::patch(&format!("{url}/indexes/{index}/settings"))
             .header("Authorization", &format!("Bearer {}", std::env::var("MEILI_TEST_KEY").unwrap_or_default()));
         req.send_json(&old).unwrap();
-        while meili.has_pending_tasks().unwrap() { std::thread::sleep(Duration::from_millis(20)); }
+        while meili.has_pending_tasks().unwrap() {
+            std::thread::sleep(Duration::from_millis(20));
+        }
         assert!(!meili.settings_current().unwrap());
         index::check(&mut conn, &meili).unwrap();
         assert!(meili.settings_current().unwrap() && meili.is_ready());

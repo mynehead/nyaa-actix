@@ -1,16 +1,16 @@
+use crate::config::Config;
+use crate::db::schema::{bans, users};
+use crate::db::DbPool;
+use crate::middleware::auth::get_current_user;
+use crate::models::{hide_ips, AdminLog, Ban, User, UserStatus};
+use crate::utils::context::base_context;
+use crate::utils::flash;
+use crate::utils::pagination::Pagination;
 use actix_session::Session;
 use actix_web::{web, HttpResponse, Result};
-use tera::Tera;
-use crate::config::Config;
-use crate::db::DbPool;
-use crate::utils::context::base_context;
-use crate::middleware::auth::get_current_user;
-use crate::db::schema::{bans, users};
-use crate::models::{hide_ips, AdminLog, Ban, User, UserStatus};
-use crate::utils::flash;
 use diesel::prelude::*;
-use crate::utils::pagination::Pagination;
 use serde::Deserialize;
+use tera::Tera;
 
 pub async fn reports(
     session: Session,
@@ -18,13 +18,14 @@ pub async fn reports(
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
 ) -> Result<HttpResponse> {
-    let current_user = get_current_user(&session, &pool)
-        .ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
+    let current_user =
+        get_current_user(&session, &pool).ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
     if !current_user.is_moderator() {
         return Err(actix_web::error::ErrorForbidden("Not allowed"));
     }
     let ctx = base_context(&cfg, Some(&current_user));
-    let html = tmpl.render("admin/reports.html", &ctx)
+    let html = tmpl
+        .render("admin/reports.html", &ctx)
         .unwrap_or_else(|_| "<h1>Admin Reports</h1><p>Not yet implemented.</p>".to_string());
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
@@ -47,8 +48,7 @@ const ADMIN_PER_PAGE: i64 = 20;
 
 /// The signed-in moderator, or 401/403 as upstream's `is_moderator` check.
 fn require_moderator(session: &Session, pool: &DbPool) -> Result<User> {
-    let user = get_current_user(session, pool)
-        .ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
+    let user = get_current_user(session, pool).ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
     if !user.is_moderator() {
         return Err(actix_web::error::ErrorForbidden("Not allowed"));
     }
@@ -65,8 +65,8 @@ pub async fn log(
 ) -> Result<HttpResponse> {
     let current_user = require_moderator(&session, &pool)?;
     let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
-    let (mut logs, total) = AdminLog::page(&mut conn, query.page(), ADMIN_PER_PAGE)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let (mut logs, total) =
+        AdminLog::page(&mut conn, query.page(), ADMIN_PER_PAGE).map_err(actix_web::error::ErrorInternalServerError)?;
     if !current_user.is_superadmin() {
         for entry in &mut logs {
             entry.entry.log = hide_ips(&entry.entry.log);
@@ -75,8 +75,7 @@ pub async fn log(
     let mut ctx = base_context(&cfg, Some(&current_user));
     ctx.insert("logs", &logs);
     ctx.insert("pagination", &Pagination::new(query.page(), total, ADMIN_PER_PAGE));
-    let html = tmpl.render("admin/log.html", &ctx)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("admin/log.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
@@ -90,14 +89,13 @@ pub async fn bans(
 ) -> Result<HttpResponse> {
     let current_user = require_moderator(&session, &pool)?;
     let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
-    let (bans, total) = Ban::page(&mut conn, query.page(), ADMIN_PER_PAGE)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let (bans, total) =
+        Ban::page(&mut conn, query.page(), ADMIN_PER_PAGE).map_err(actix_web::error::ErrorInternalServerError)?;
     let mut ctx = base_context(&cfg, Some(&current_user));
     ctx.insert("bans", &bans);
     ctx.insert("pagination", &Pagination::new(query.page(), total, ADMIN_PER_PAGE));
     ctx.insert("flash_messages", &flash::take(&session));
-    let html = tmpl.render("admin/bans.html", &ctx)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("admin/bans.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
@@ -108,11 +106,7 @@ pub struct UnbanForm {
 }
 
 /// Lifts one ban, reactivates its user and logs it, as upstream's `view_adminbans` POST.
-pub async fn bans_post(
-    session: Session,
-    pool: web::Data<DbPool>,
-    form: web::Form<UnbanForm>,
-) -> Result<HttpResponse> {
+pub async fn bans_post(session: Session, pool: web::Data<DbPool>, form: web::Form<UnbanForm>) -> Result<HttpResponse> {
     let current_user = require_moderator(&session, &pool)?;
     let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
     let ban = Ban::by_id(&mut conn, form.submit)
@@ -133,7 +127,8 @@ pub async fn bans_post(
         AdminLog::add(conn, current_user.id, &log)?;
         diesel::delete(bans::table.find(ban.id)).execute(conn)?;
         Ok(())
-    }).map_err(actix_web::error::ErrorInternalServerError)?;
+    })
+    .map_err(actix_web::error::ErrorInternalServerError)?;
     flash::push(&session, "success", "", &format!("Unbanned ban #{}", ban.id));
     Ok(HttpResponse::SeeOther().insert_header(("Location", "/admin/bans")).finish())
 }
@@ -142,30 +137,46 @@ pub async fn bans_post(
 mod tests {
     use super::*;
     use actix_session::{storage::CookieSessionStore, SessionMiddleware};
-    use actix_web::{cookie::{Cookie, Key}, http::StatusCode, test, App};
+    use actix_web::{
+        cookie::{Cookie, Key},
+        http::StatusCode,
+        test, App,
+    };
     use diesel::r2d2::Pool;
     use diesel::RunQueryDsl;
 
     fn pool() -> DbPool {
-        let pool = Pool::builder().max_size(1)
-            .build(crate::db::DbManager::new(":memory:")).unwrap();
+        let pool = Pool::builder().max_size(1).build(crate::db::DbManager::new(":memory:")).unwrap();
         let mut conn = pool.get().unwrap();
         crate::db::run_migrations(&mut conn).unwrap();
-        diesel::sql_query("INSERT INTO users (id, username, password_hash, status, level) VALUES \
-                           (1, 'regular', 'x', 1, 0), (2, 'mod', 'x', 1, 2), (3, 'boss', 'x', 1, 3)")
-            .execute(&mut conn).unwrap();
+        diesel::sql_query(
+            "INSERT INTO users (id, username, password_hash, status, level) VALUES \
+                           (1, 'regular', 'x', 1, 0), (2, 'mod', 'x', 1, 2), (3, 'boss', 'x', 1, 3)",
+        )
+        .execute(&mut conn)
+        .unwrap();
         // 10.0.0.9, packed as crate::utils::pack_ip does
         diesel::sql_query("UPDATE users SET last_login_ip = X'0000000000000000000000000A000009' WHERE id = 1")
-            .execute(&mut conn).unwrap();
+            .execute(&mut conn)
+            .unwrap();
         pool
     }
 
     fn config() -> Config {
         Config {
-            database_url: String::new(), secret_key: String::new(), site_name: "Nyaa".into(),
-            site_flavor: "nyaa".into(), results_per_page: 75, max_pages: 0,
-            torrent_storage_path: String::new(), avatar_storage_path: String::new(), enable_gravatar: false,
-            maintenance_mode: false, site_url: String::new(), tracker_urls: vec![], meili: None,
+            database_url: String::new(),
+            secret_key: String::new(),
+            site_name: "Nyaa".into(),
+            site_flavor: "nyaa".into(),
+            results_per_page: 75,
+            max_pages: 0,
+            torrent_storage_path: String::new(),
+            avatar_storage_path: String::new(),
+            enable_gravatar: false,
+            maintenance_mode: false,
+            site_url: String::new(),
+            tracker_urls: vec![],
+            meili: None,
             trusted: Default::default(),
         }
     }
@@ -179,20 +190,23 @@ mod tests {
         ($pool:expr, $user:expr) => {{
             let mut tera = Tera::new("templates/**/*").unwrap();
             crate::utils::tera_filters::register(&mut tera);
-            let app = test::init_service(App::new()
-                .app_data(web::Data::new(config()))
-                .app_data(web::Data::new($pool.clone()))
-                .app_data(web::Data::new(tera))
-                .route("/login/{id}", web::get().to(login))
-                .wrap(actix_web::middleware::from_fn(crate::middleware::ip_ban::reject_banned_ip))
-                .wrap(SessionMiddleware::new(CookieSessionStore::default(), Key::from(&[7u8; 64])))
-                .route("/admin/log", web::get().to(log))
-                .route("/admin/bans", web::get().to(bans))
-                .route("/admin/bans", web::post().to(bans_post))
-                .route("/user/{username}", web::get().to(crate::handlers::users::view_user))
-                .route("/user/{username}", web::post().to(crate::handlers::users::ban_user_post))).await;
-            let res = test::call_service(&app,
-                test::TestRequest::get().uri(&format!("/login/{}", $user)).to_request()).await;
+            let app = test::init_service(
+                App::new()
+                    .app_data(web::Data::new(config()))
+                    .app_data(web::Data::new($pool.clone()))
+                    .app_data(web::Data::new(tera))
+                    .route("/login/{id}", web::get().to(login))
+                    .wrap(actix_web::middleware::from_fn(crate::middleware::ip_ban::reject_banned_ip))
+                    .wrap(SessionMiddleware::new(CookieSessionStore::default(), Key::from(&[7u8; 64])))
+                    .route("/admin/log", web::get().to(log))
+                    .route("/admin/bans", web::get().to(bans))
+                    .route("/admin/bans", web::post().to(bans_post))
+                    .route("/user/{username}", web::get().to(crate::handlers::users::view_user))
+                    .route("/user/{username}", web::post().to(crate::handlers::users::ban_user_post)),
+            )
+            .await;
+            let res =
+                test::call_service(&app, test::TestRequest::get().uri(&format!("/login/{}", $user)).to_request()).await;
             let cookie: Cookie<'static> = res.response().cookies().next().unwrap().into_owned();
             (app, cookie)
         }};
@@ -201,8 +215,9 @@ mod tests {
     /// GETs `uri` as the cookie's user; returns the status and body.
     macro_rules! page {
         ($app:expr, $cookie:expr, $uri:expr) => {{
-            let res = test::call_service(&$app,
-                test::TestRequest::get().uri($uri).cookie($cookie.clone()).to_request()).await;
+            let res =
+                test::call_service(&$app, test::TestRequest::get().uri($uri).cookie($cookie.clone()).to_request())
+                    .await;
             let status = res.status();
             (status, String::from_utf8(test::read_body(res).await.to_vec()).unwrap())
         }};
@@ -255,8 +270,11 @@ mod tests {
     /// POSTs a form as the cookie's user; returns the response.
     macro_rules! post {
         ($app:expr, $cookie:expr, $uri:expr, $form:expr) => {
-            test::call_service(&$app, test::TestRequest::post().uri($uri).cookie($cookie.clone())
-                .set_form($form).to_request()).await
+            test::call_service(
+                &$app,
+                test::TestRequest::post().uri($uri).cookie($cookie.clone()).set_form($form).to_request(),
+            )
+            .await
         };
     }
 
@@ -360,16 +378,28 @@ mod tests {
         post!(app, cookie, "/user/regular", &[("reason", "x"), ("ban_userip", "Ban User+IP")]);
 
         let banned: std::net::SocketAddr = "10.0.0.9:1234".parse().unwrap();
-        let res = test::call_service(&app, test::TestRequest::post().uri("/admin/bans")
-            .peer_addr(banned).set_form([("submit", "1")]).to_request()).await;
+        let res = test::call_service(
+            &app,
+            test::TestRequest::post().uri("/admin/bans").peer_addr(banned).set_form([("submit", "1")]).to_request(),
+        )
+        .await;
         assert_eq!(res.status(), StatusCode::FORBIDDEN);
         assert_eq!(test::read_body(res).await, "You are banned.");
         // GETs still work, and other IPs can still post
-        let res = test::call_service(&app, test::TestRequest::get().uri("/user/regular")
-            .peer_addr(banned).to_request()).await;
+        let res =
+            test::call_service(&app, test::TestRequest::get().uri("/user/regular").peer_addr(banned).to_request())
+                .await;
         assert_eq!(res.status(), StatusCode::OK);
-        let res = test::call_service(&app, test::TestRequest::post().uri("/user/regular")
-            .peer_addr("10.0.0.8:1".parse().unwrap()).cookie(cookie.clone()).set_form([("unban", "Unban")]).to_request()).await;
+        let res = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/user/regular")
+                .peer_addr("10.0.0.8:1".parse().unwrap())
+                .cookie(cookie.clone())
+                .set_form([("unban", "Unban")])
+                .to_request(),
+        )
+        .await;
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
         assert!(all_bans(&pool).is_empty());
     }

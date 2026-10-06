@@ -5,11 +5,11 @@ use tera::Tera;
 
 use crate::config::Config;
 use crate::db::DbPool;
-use crate::utils::context::base_context;
 use crate::middleware::auth::get_current_user;
 use crate::models::Banner;
 use crate::search::db::{with_stats, SearchQuery};
 use crate::search::search;
+use crate::utils::context::base_context;
 use crate::utils::context::SearchState;
 use crate::utils::pagination::Pagination;
 
@@ -46,26 +46,21 @@ pub async fn home(
         is_admin,
     );
 
-    let mut conn = pool.get().map_err(|e| {
-        actix_web::error::ErrorInternalServerError(e)
-    })?;
+    let mut conn = pool.get().map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
 
-    let result = search(&mut conn, cfg.meili.as_ref(), &q).map_err(|e| {
-        actix_web::error::ErrorInternalServerError(e)
-    })?;
+    let result =
+        search(&mut conn, cfg.meili.as_ref(), &q).map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
 
     let pagination = Pagination::new(q.page, result.total, q.per_page);
 
     let mut ctx = base_context(&cfg, current_user.as_ref());
-    let torrents = with_stats(&mut conn, result.torrents)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let torrents = with_stats(&mut conn, result.torrents).map_err(actix_web::error::ErrorInternalServerError)?;
     ctx.insert("torrents", &torrents);
     ctx.insert("pagination", &pagination);
     ctx.insert("banners", &Banner::active(&mut conn).map_err(actix_web::error::ErrorInternalServerError)?);
     ctx.insert("search", &SearchState::new(&params.q, &params.c, &params.f, &params.s, &params.o));
 
-    let html = tmpl.render("home.html", &ctx)
-        .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+    let html = tmpl.render("home.html", &ctx).map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
 
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
