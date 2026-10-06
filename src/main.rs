@@ -83,6 +83,7 @@ async fn main() -> std::io::Result<()> {
             .route("/trusted/request", web::post().to(handlers::trusted::request_trusted))
             // Torrents
             .route("/view/{id}", web::get().to(handlers::torrents::view_torrent))
+            .route("/view/{id}", web::post().to(handlers::torrents::post_comment))
             .service(web::resource("/view/{id}/edit")
                 // Room for a full 10 KiB description of percent-encoded non-ASCII text
                 .app_data(web::FormConfig::default().limit(256 * 1024))
