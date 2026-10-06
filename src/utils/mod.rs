@@ -3,6 +3,7 @@ pub mod context;
 pub mod flash;
 pub mod pagination;
 pub mod tera_filters;
+pub mod throttle;
 
 use std::net::IpAddr;
 

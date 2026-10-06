@@ -118,10 +118,13 @@
 									</a>
 								</li>
 								<li>
-									<a href="/account/logout">
-										<i class="fa fa-times fa-fw"></i>
-										Logout
-									</a>
+									{# A POST, so other sites can't sign visitors out #}
+									<form action="/account/logout" method="post" class="logout-form">
+										<button type="submit" class="btn btn-link">
+											<i class="fa fa-times fa-fw"></i>
+											Logout
+										</button>
+									</form>
 								</li>
 							</ul>
 						</li>

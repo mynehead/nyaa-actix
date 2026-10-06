@@ -271,6 +271,7 @@ pub async fn manage_members_get(
     let mut ctx = base_context(&cfg, Some(&current_user));
     ctx.insert("group", &group);
     ctx.insert("members", &members);
+    ctx.insert("is_owner", &(current_user.id == group.owner_id));
     let html = tmpl.render("group_members.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
@@ -311,6 +312,14 @@ pub async fn manage_members_post(
         .optional()
         .map_err(actix_web::error::ErrorInternalServerError)?;
 
+    // Editors manage uploaders; only the owner grants or takes away edit rights, so one
+    // editor can't add accomplices or push the other editors out
+    let touches_editor =
+        perms & crate::models::PERM_EDIT != 0 || existing.is_some_and(|p| p & crate::models::PERM_EDIT != 0);
+    if touches_editor && current_user.id != group.owner_id {
+        return Err(actix_web::error::ErrorForbidden("Only the group owner can change editors"));
+    }
+
     if perms == 0 {
         if existing.is_some() {
             diesel::delete(
@@ -342,4 +351,95 @@ pub async fn manage_members_post(
     }
 
     Ok(HttpResponse::Found().insert_header(("Location", format!("/group/{}/members", group.slug))).finish())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{PERM_EDIT, PERM_UPLOAD};
+    use actix_session::{storage::CookieSessionStore, SessionMiddleware};
+    use actix_web::{
+        cookie::{Cookie, Key},
+        http::StatusCode,
+        test, App,
+    };
+    use diesel::r2d2::Pool;
+
+    /// Group 1 owned by user 1; user 2 is an editor, user 3 uploads, user 4 isn't a member.
+    fn pool() -> DbPool {
+        let pool = Pool::builder().max_size(1).build(crate::db::DbManager::new(":memory:")).unwrap();
+        let mut conn = pool.get().unwrap();
+        crate::db::run_migrations(&mut conn).unwrap();
+        for sql in [
+            "INSERT INTO users (id, username, password_hash, status, level) VALUES \
+             (1, 'owner', 'x', 1, 0), (2, 'editor', 'x', 1, 0), (3, 'uploader', 'x', 1, 0), (4, 'other', 'x', 1, 0)",
+            "INSERT INTO groups (id, name, tag, slug, owner_id) VALUES (1, 'Group', 'G', 'grp', 1)",
+            "INSERT INTO group_members (group_id, user_id, permissions) VALUES (1, 2, 3), (1, 3, 1)",
+        ] {
+            diesel::sql_query(sql).execute(&mut conn).unwrap();
+        }
+        pool
+    }
+
+    async fn login(session: Session, path: web::Path<i32>) -> HttpResponse {
+        crate::middleware::auth::login_user(&session, path.into_inner()).unwrap();
+        HttpResponse::Ok().finish()
+    }
+
+    fn perms(pool: &DbPool, user: i32) -> Option<i32> {
+        group_members::table
+            .filter(group_members::group_id.eq(1))
+            .filter(group_members::user_id.eq(user))
+            .select(group_members::permissions)
+            .first(&mut pool.get().unwrap())
+            .optional()
+            .unwrap()
+    }
+
+    #[actix_web::test]
+    async fn only_the_owner_changes_editors() {
+        let pool = pool();
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(pool.clone()))
+                .wrap(SessionMiddleware::new(CookieSessionStore::default(), Key::from(&[7u8; 64])))
+                .route("/login/{id}", web::get().to(login))
+                .route("/group/{slug}/members", web::post().to(manage_members_post)),
+        )
+        .await;
+        let cookie = |user: i32| {
+            let app = &app;
+            async move {
+                let req = test::TestRequest::get().uri(&format!("/login/{user}")).to_request();
+                let res = test::call_service(app, req).await;
+                res.response().cookies().next().unwrap().into_owned()
+            }
+        };
+        let post = |cookie: Cookie<'static>, form: &'static [(&'static str, &'static str)]| {
+            let app = &app;
+            async move {
+                let req =
+                    test::TestRequest::post().uri("/group/grp/members").cookie(cookie).set_form(form).to_request();
+                test::call_service(app, req).await.status()
+            }
+        };
+        let editor = cookie(2).await;
+
+        // An editor can still manage uploaders
+        assert_eq!(post(editor.clone(), &[("username", "other"), ("can_upload", "1")]).await, StatusCode::FOUND);
+        assert_eq!(perms(&pool, 4), Some(PERM_UPLOAD));
+        // ...but can't make editors, demote one, or remove one
+        assert_eq!(
+            post(editor.clone(), &[("username", "uploader"), ("can_upload", "1"), ("can_edit", "1")]).await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(post(editor.clone(), &[("username", "editor")]).await, StatusCode::FORBIDDEN);
+        assert_eq!(perms(&pool, 3), Some(PERM_UPLOAD));
+        assert_eq!(perms(&pool, 2), Some(PERM_UPLOAD | PERM_EDIT));
+
+        // The owner can
+        let owner = cookie(1).await;
+        assert_eq!(post(owner, &[("username", "editor"), ("can_upload", "1")]).await, StatusCode::FOUND);
+        assert_eq!(perms(&pool, 2), Some(PERM_UPLOAD));
+    }
 }

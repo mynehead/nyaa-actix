@@ -680,3 +680,37 @@ blockquote {
 		height: auto;
 	}
 }
+
+/* nyaa-actix: logout posts a form; make its button look like the menu links around it */
+.dropdown-menu .logout-form {
+	margin: 0;
+}
+
+.dropdown-menu .logout-form button {
+	display: block;
+	width: 100%;
+	padding: 3px 20px;
+	border: 0;
+	border-radius: 0;
+	text-align: left;
+	line-height: 1.42857143;
+	white-space: nowrap;
+	color: #333;
+}
+
+.dropdown-menu .logout-form button:hover,
+.dropdown-menu .logout-form button:focus {
+	color: #262626;
+	background-color: #f5f5f5;
+	text-decoration: none;
+}
+
+body.dark .dropdown-menu .logout-form button {
+	color: #e2e2e2;
+}
+
+body.dark .dropdown-menu .logout-form button:hover,
+body.dark .dropdown-menu .logout-form button:focus {
+	color: #cbcbcb;
+	background-color: #434343;
+}
