@@ -1,0 +1,60 @@
+{% extends "layout.html" %}
+{% block title %}Apply for Trusted :: {{ config.site_name }}{% endblock %}
+{% macro textarea_field(name, label, value, errors) -%}
+	<div class="form-group{% if errors[name] %} has-error{% endif %}">
+		<label class="control-label" for="{{ name }}">{{ label }}</label>
+		<textarea class="form-control" id="{{ name }}" name="{{ name }}">{{ value }}</textarea>
+		{% if errors[name] %}
+		<div class="help-block">
+			{% for error in errors[name] %}{{ error }}{% endfor %}
+		</div>
+		{% endif %}
+	</div>
+{%- endmacro textarea_field %}
+{% block body %}
+<div class="content">
+	{% if show_form %}
+	<div class="row">
+		<div class="col-md-12">
+			<h1>You are eligible to apply for trusted status</h1>
+		</div>
+	</div>
+	<form class="trusted-form" method="POST">
+		<div class="row">
+			<div class="col-md-6">
+				{{ self::textarea_field(name="why_give_trusted", label="Why do you think you should be given trusted status?", value=form.why_give_trusted, errors=errors) }}
+			</div>
+		</div>
+		<div class="row">
+			<div class="col-md-6">
+				{{ self::textarea_field(name="why_want_trusted", label="Why do you want to become a trusted user?", value=form.why_want_trusted, errors=errors) }}
+			</div>
+		</div>
+		<div class="row">
+			<div class="col-md-2">
+				<input type="submit" value="Submit" class="btn btn-success btn-sm">
+			</div>
+		</div>
+	</form>
+	{% else %}
+	<div class="row">
+		<div class="col-md-12">
+			<h1>You are currently not eligible to apply for trusted status</h1>
+		</div>
+	</div>
+	<div class="row">
+		<div class="col-md-12">
+			<p>
+				You currently are not eligible to apply for trusted status for the following
+				reason{% if deny_reasons | length > 1 %}s{% endif %}:
+			</p>
+			<ul>
+				{% for reason in deny_reasons %}
+				<li>{{ reason }}</li>
+				{% endfor %}
+			</ul>
+		</div>
+	</div>
+	{% endif %}
+</div>
+{% endblock %}

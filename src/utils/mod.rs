@@ -18,6 +18,17 @@ pub fn pack_ip(addr: IpAddr) -> Vec<u8> {
     }
 }
 
+/// Reverses `pack_ip`; also reads 4-byte IPv4 values. `None` for any other length.
+pub fn unpack_ip(bytes: &[u8]) -> Option<IpAddr> {
+    match bytes.len() {
+        4 => Some(IpAddr::from(<[u8; 4]>::try_from(bytes).ok()?)),
+        16 if bytes[..12].iter().all(|&b| b == 0) && bytes[12..] != [0, 0, 0, 0] && bytes[12..] != [0, 0, 0, 1] =>
+            Some(IpAddr::from(<[u8; 4]>::try_from(&bytes[12..]).ok()?)),
+        16 => Some(IpAddr::from(<[u8; 16]>::try_from(bytes).ok()?)),
+        _ => None,
+    }
+}
+
 pub fn sanitize_string(s: &str) -> String {
     s.chars().filter(|c| !c.is_control()).collect()
 }
@@ -47,6 +58,12 @@ mod tests {
     fn packs_ipv6_as_is() {
         let addr: std::net::Ipv6Addr = "2001:db8::1".parse().unwrap();
         assert_eq!(pack_ip(IpAddr::V6(addr)), addr.octets().to_vec());
+        for ip in ["192.168.1.2", "2001:db8::1", "::1", "::"] {
+            let ip: IpAddr = ip.parse().unwrap();
+            assert_eq!(unpack_ip(&pack_ip(ip)), Some(ip));
+        }
+        assert_eq!(unpack_ip(&[10, 0, 0, 1]), Some("10.0.0.1".parse().unwrap()));
+        assert_eq!(unpack_ip(&[1, 2]), None);
     }
 
     #[test]

@@ -1,0 +1,26 @@
+{# Pager for the admin lists: needs `pagination` and `page_url`, the list's fixed path (not escaped). #}
+<div class="center">
+	<nav>
+		<ul class="pagination">
+			{% if pagination.has_prev %}
+			<li><a rel="prev" href="{{ page_url | safe }}?p={{ pagination.current - 1 }}">&laquo;</a></li>
+			{% else %}
+			<li class="disabled"><a href="#">&laquo;</a></li>
+			{% endif %}
+			{% for page in pagination.pages %}
+			{% if page.is_ellipsis %}
+			<li class="disabled"><a href="#">…</a></li>
+			{% elif page.is_current %}
+			<li class="active"><a href="#">{{ page.num }} <span class="sr-only">(current)</span></a></li>
+			{% else %}
+			<li><a href="{{ page_url | safe }}?p={{ page.num }}">{{ page.num }}</a></li>
+			{% endif %}
+			{% endfor %}
+			{% if pagination.has_next %}
+			<li><a rel="next" href="{{ page_url | safe }}?p={{ pagination.current + 1 }}">&raquo;</a></li>
+			{% else %}
+			<li class="disabled"><a href="#">&raquo;</a></li>
+			{% endif %}
+		</ul>
+	</nav>
+</div>

@@ -69,6 +69,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(tmpl_data.clone())
             .wrap(ErrorHandlers::new().handler(StatusCode::NOT_FOUND, handlers::site::not_found))
             .wrap(Logger::default())
+            .wrap(actix_web::middleware::from_fn(middleware::ip_ban::reject_banned_ip))
             .wrap(SessionMiddleware::new(CookieSessionStore::default(), secret_key.clone()))
             // Static files
             .service(fs::Files::new("/static", "./static"))
@@ -77,8 +78,12 @@ async fn main() -> std::io::Result<()> {
             // Info pages
             .route("/rules", web::get().to(handlers::site::rules))
             .route("/help", web::get().to(handlers::site::help))
+            .route("/trusted", web::get().to(handlers::trusted::trusted_info))
+            .route("/trusted/request", web::get().to(handlers::trusted::request_trusted))
+            .route("/trusted/request", web::post().to(handlers::trusted::request_trusted))
             // Torrents
             .route("/view/{id}", web::get().to(handlers::torrents::view_torrent))
+            .route("/view/{id}", web::post().to(handlers::torrents::post_comment))
             .service(web::resource("/view/{id}/edit")
                 // Room for a full 10 KiB description of percent-encoded non-ASCII text
                 .app_data(web::FormConfig::default().limit(256 * 1024))
@@ -90,6 +95,7 @@ async fn main() -> std::io::Result<()> {
             .route("/upload", web::post().to(handlers::torrents::upload_post))
             // Users
             .route("/user/{username}", web::get().to(handlers::users::view_user))
+            .route("/user/{username}", web::post().to(handlers::users::ban_user_post))
             // Account
             .route("/account/login", web::get().to(handlers::account::login_get))
             .route("/account/login", web::post().to(handlers::account::login_post))
@@ -113,6 +119,11 @@ async fn main() -> std::io::Result<()> {
             .route("/admin/reports", web::get().to(handlers::admin::reports))
             .route("/admin/log", web::get().to(handlers::admin::log))
             .route("/admin/bans", web::get().to(handlers::admin::bans))
+            .route("/admin/bans", web::post().to(handlers::admin::bans_post))
+            .route("/admin/trusted", web::get().to(handlers::trusted::admin_trusted))
+            .route("/admin/trusted/{list_filter}", web::get().to(handlers::trusted::admin_trusted))
+            .route("/admin/trusted/application/{id}", web::get().to(handlers::trusted::admin_trusted_application))
+            .route("/admin/trusted/application/{id}", web::post().to(handlers::trusted::admin_trusted_application))
             .route("/admin/banners", web::get().to(handlers::banners::list))
             .route("/admin/banners", web::post().to(handlers::banners::create))
             .route("/admin/banners/{id}/toggle", web::post().to(handlers::banners::toggle))

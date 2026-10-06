@@ -2,13 +2,14 @@
 
 use actix_session::Session;
 use actix_web::{web, HttpResponse, Result};
+use diesel::Connection;
 use serde::Deserialize;
 use tera::Tera;
 
 use crate::config::Config;
 use crate::db::DbPool;
 use crate::middleware::auth::get_current_user;
-use crate::models::{Banner, User};
+use crate::models::{AdminLog, Banner, User};
 use crate::utils::context::base_context;
 use crate::utils::flash;
 
@@ -67,9 +68,10 @@ pub async fn create(
         return Ok(back_to_list());
     }
     let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
-    Banner::create(&mut conn, content, user.id)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
-    // TODO(admin log): record "Created banner" once the admin log helper is on master.
+    conn.transaction::<_, diesel::result::Error, _>(|conn| {
+        Banner::create(conn, content, user.id)?;
+        AdminLog::add(conn, user.id, "Created banner")
+    }).map_err(actix_web::error::ErrorInternalServerError)?;
     flash::push(&session, "success", "Banner created.", "");
     Ok(back_to_list())
 }
@@ -79,14 +81,16 @@ pub async fn toggle(
     pool: web::Data<DbPool>,
     path: web::Path<i32>,
 ) -> Result<HttpResponse> {
-    require_moderator(&session, &pool)?;
+    let user = require_moderator(&session, &pool)?;
     let id = path.into_inner();
     let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
-    let active = Banner::toggle(&mut conn, id)
-        .map_err(actix_web::error::ErrorInternalServerError)?
+    let state = conn.transaction::<_, diesel::result::Error, _>(|conn| {
+        let Some(active) = Banner::toggle(conn, id)? else { return Ok(None) };
+        let state = if active { "activated" } else { "deactivated" };
+        AdminLog::add(conn, user.id, &format!("Banner #{} {}", id, state))?;
+        Ok(Some(state))
+    }).map_err(actix_web::error::ErrorInternalServerError)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("No such banner"))?;
-    // TODO(admin log): record "Banner #{id} activated/deactivated" once the admin log helper is on master.
-    let state = if active { "activated" } else { "deactivated" };
     flash::push(&session, "success", &format!("Banner #{} {}.", id, state), "");
     Ok(back_to_list())
 }
@@ -96,13 +100,19 @@ pub async fn delete(
     pool: web::Data<DbPool>,
     path: web::Path<i32>,
 ) -> Result<HttpResponse> {
-    require_moderator(&session, &pool)?;
+    let user = require_moderator(&session, &pool)?;
     let id = path.into_inner();
     let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
-    if !Banner::delete(&mut conn, id).map_err(actix_web::error::ErrorInternalServerError)? {
+    let deleted = conn.transaction::<_, diesel::result::Error, _>(|conn| {
+        let deleted = Banner::delete(conn, id)?;
+        if deleted {
+            AdminLog::add(conn, user.id, &format!("Deleted banner #{}", id))?;
+        }
+        Ok(deleted)
+    }).map_err(actix_web::error::ErrorInternalServerError)?;
+    if !deleted {
         return Err(actix_web::error::ErrorNotFound("No such banner"));
     }
-    // TODO(admin log): record "Deleted banner #{id}" once the admin log helper is on master.
     flash::push(&session, "success", &format!("Deleted banner #{}.", id), "");
     Ok(back_to_list())
 }
@@ -133,6 +143,7 @@ mod tests {
             site_flavor: "nyaa".into(), results_per_page: 75, max_pages: 0,
             torrent_storage_path: String::new(), avatar_storage_path: String::new(), enable_gravatar: false,
             maintenance_mode: false, site_url: String::new(), tracker_urls: vec![], meili: None,
+            trusted: Default::default(),
         }
     }
 
@@ -231,6 +242,11 @@ mod tests {
         assert!(Banner::all_with_creator(&mut pool.get().unwrap()).unwrap().is_empty());
         let res = test::call_service(&app, post("/admin/banners/1/delete", &cookie, &[]).to_request()).await;
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+        let (log, _) = AdminLog::page(&mut pool.get().unwrap(), 1, 10).unwrap();
+        let log: Vec<&str> = log.iter().rev().map(|e| e.entry.log.as_str()).collect();
+        assert_eq!(log, ["Created banner", "Banner #1 deactivated", "Deleted banner #1"]);
+        assert!(AdminLog::page(&mut pool.get().unwrap(), 1, 10).unwrap().0.iter().all(|e| e.admin_name == "mod"));
     }
 
     #[actix_web::test]

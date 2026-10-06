@@ -1,17 +1,19 @@
+pub mod adminlog;
 pub mod ban;
 pub mod banner;
 pub mod category;
 pub mod comment;
 pub mod group;
 pub mod torrent;
+pub mod trusted;
 pub mod user;
 
-// Nothing reads bans yet; ban handlers and login/upload checks are roadmap step 3.
-#[allow(unused_imports)]
 pub use ban::*;
+pub use adminlog::*;
 pub use banner::*;
 pub use category::*;
 pub use comment::*;
 pub use group::*;
 pub use torrent::*;
+pub use trusted::*;
 pub use user::*;

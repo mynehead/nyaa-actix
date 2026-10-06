@@ -67,6 +67,7 @@
 							<ul class="dropdown-menu">
 								<li{% if active_page is defined and active_page == "rules" %} class="active"{% endif %}><a href="/rules">Rules</a></li>
 								<li{% if active_page is defined and active_page == "help" %} class="active"{% endif %}><a href="/help">Help</a></li>
+								<li{% if active_page is defined and active_page == "trusted" %} class="active"{% endif %}><a href="/trusted">Trusted</a></li>
 							</ul>
 						</li>
 						{% if current_user and current_user.level >= 2 %}
@@ -79,6 +80,7 @@
 								<li><a href="/admin/reports">Reports</a></li>
 								<li><a href="/admin/log">Log</a></li>
 								<li><a href="/admin/bans">Bans</a></li>
+								<li><a href="/admin/trusted">Trusted</a></li>
 								<li><a href="/admin/banners">Banners</a></li>
 							</ul>
 						</li>

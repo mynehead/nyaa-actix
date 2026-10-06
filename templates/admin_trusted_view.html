@@ -1,0 +1,122 @@
+{% extends "layout.html" %}
+{% block title %}{{ submitter }}'s Application :: {{ config.site_name }}{% endblock %}
+{% block body %}
+<div class="panel panel-primary">
+	<div class="panel-heading">
+		<h3 class="panel-title">{{ submitter }}'s Application</h3>
+	</div>
+	<div class="panel-body">
+		<div class="row">
+			<dl>
+				<div class="col-xs-4 col-sm-2 col-md-2">
+					<dt>Submitter</dt>
+					<dd>
+						<a href="/user/{{ submitter | urlencode }}">
+							{{ submitter }}
+						</a>
+					</dd>
+				</div>
+				<div class="col-xs-4 col-sm-2 col-md-2">
+					<dt>Submitted on</dt>
+					<dd data-timestamp="{{ app.created_time | date(format="%s") }}">
+						{{ app.created_time | date(format="%Y-%m-%d %H:%M") }}
+					</dd>
+				</div>
+				<div class="col-xs-4 col-sm-2 col-md-2">
+					<dt>Status</dt>
+					<dd>{{ status }}</dd>
+				</div>
+			</dl>
+		</div>
+		<hr>
+		<div class="row">
+			<div class="col-md-12">
+				<h4>Why do you think you should be given trusted status?</h4>
+				<div class="panel panel-default">
+					<div class="panel-body" markdown-text markdown-no-images>
+						{{- app.why_give -}}
+					</div>
+				</div>
+			</div>
+		</div>
+		<div class="row">
+			<div class="col-md-12">
+				<h4>Why do you want to become a trusted user?</h4>
+				<div class="panel panel-default">
+					<div class="panel-body" markdown-text markdown-no-images>
+						{{- app.why_want -}}
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+	{%- if can_decide -%}
+	<div class="panel-footer">
+		<form method="POST">
+			<div class="btn-group" role="group" aria-label="Decision">
+				<input class="btn btn-danger" id="reject" name="reject" type="submit" value="Reject">
+				<input class="btn btn-success" id="accept" name="accept" type="submit" value="Accept">
+			</div>
+		</form>
+	</div>
+	{%- endif -%}
+</div>
+<div class="panel panel-default">
+	<div class="panel-heading">
+		<h3 class="panel-title">Reviews - {{ reviews | length }}</h3>
+	</div>
+	<div class="panel-body">
+		{% for rev in reviews %}
+		<div class="panel {% if rev.recommendation == "accept" %}panel-success{% elif rev.recommendation == "reject" %}panel-danger{% else %}panel-default{% endif %}">
+			<div class="panel-heading">
+				<h3 class="panel-title">{{ rev.reviewer }}'s Review</h3>
+			</div>
+			<div class="panel-body">
+				<div markdown-text>
+					{{- rev.review.comment -}}
+				</div>
+			</div>
+			<div class="panel-footer">
+				{%- if rev.recommendation == "abstain" -%}
+				{{ rev.reviewer }} does not give an explicit recommendation.
+				{%- else -%}
+				{{ rev.reviewer }} recommends to <strong>{{ rev.recommendation }}</strong> this application.
+				{%- endif -%}
+			</div>
+		</div>
+		{% endfor %}
+		<form method="POST">
+			<div class="row">
+				<div class="col-xs-12 col-md-8 col-sm-10">
+					<div class="form-group{% if comment_errors %} has-error{% endif %}">
+						<label class="control-label" for="comment">Comment</label>
+						<textarea class="form-control" id="comment" name="comment">{{ comment }}</textarea>
+						{% if comment_errors %}
+						<div class="help-block">
+							{% for error in comment_errors %}{{ error }}{% endfor %}
+						</div>
+						{% endif %}
+					</div>
+				</div>
+			</div>
+			<div class="row">
+				<div class="col-xs-3">
+					<div class="form-group">
+						<label class="control-label" for="recommendation">Recommendation</label>
+						<div class="input-group input-group-sm">
+							<select class="form-control" id="recommendation" name="recommendation">
+								<option value="abstain"{% if recommendation == "abstain" %} selected{% endif %}>Abstain</option>
+								<option value="reject"{% if recommendation == "reject" %} selected{% endif %}>Reject</option>
+								<option value="accept"{% if recommendation == "accept" %} selected{% endif %}>Accept</option>
+							</select>
+							<div class="input-group-btn">
+								<button type="submit" class="btn btn-primary">Submit</button>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</form>
+	</div>
+</div>
+{% endblock %}
