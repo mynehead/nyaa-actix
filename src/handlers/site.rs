@@ -10,26 +10,29 @@ use crate::middleware::auth::get_current_user;
 use crate::utils::context::base_context;
 
 /// Renders one of the static info pages (rules, help).
-fn info_page(
-    page: &str,
-    session: &Session,
-    pool: &DbPool,
-    tmpl: &Tera,
-    cfg: &Config,
-) -> Result<HttpResponse> {
+fn info_page(page: &str, session: &Session, pool: &DbPool, tmpl: &Tera, cfg: &Config) -> Result<HttpResponse> {
     let current_user = get_current_user(session, pool);
     let mut ctx = base_context(cfg, current_user.as_ref());
     ctx.insert("active_page", page);
-    let html = tmpl.render(&format!("{}.html", page), &ctx)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render(&format!("{}.html", page), &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
-pub async fn rules(session: Session, pool: web::Data<DbPool>, tmpl: web::Data<Tera>, cfg: web::Data<Config>) -> Result<HttpResponse> {
+pub async fn rules(
+    session: Session,
+    pool: web::Data<DbPool>,
+    tmpl: web::Data<Tera>,
+    cfg: web::Data<Config>,
+) -> Result<HttpResponse> {
     info_page("rules", &session, &pool, &tmpl, &cfg)
 }
 
-pub async fn help(session: Session, pool: web::Data<DbPool>, tmpl: web::Data<Tera>, cfg: web::Data<Config>) -> Result<HttpResponse> {
+pub async fn help(
+    session: Session,
+    pool: web::Data<DbPool>,
+    tmpl: web::Data<Tera>,
+    cfg: web::Data<Config>,
+) -> Result<HttpResponse> {
     info_page("help", &session, &pool, &tmpl, &cfg)
 }
 

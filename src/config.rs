@@ -71,18 +71,12 @@ impl Config {
             secret_key,
             site_name: env::var("SITE_NAME").unwrap_or_else(|_| "Nyaa".into()),
             site_flavor: env::var("SITE_FLAVOR").unwrap_or_else(|_| "nyaa".into()),
-            results_per_page: env::var("RESULTS_PER_PAGE")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(75),
-            max_pages: env::var("MAX_PAGES")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(0),
-            torrent_storage_path: env::var("TORRENT_STORAGE_PATH")
-                .unwrap_or_else(|_| "./torrents".into()),
-            avatar_storage_path: env::var("AVATAR_STORAGE_PATH")
-                .unwrap_or_else(|_| "./avatars".into()),
-            enable_gravatar: env::var("ENABLE_GRAVATAR")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(false),
-            maintenance_mode: env::var("MAINTENANCE_MODE")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(false),
+            results_per_page: env::var("RESULTS_PER_PAGE").ok().and_then(|v| v.parse().ok()).unwrap_or(75),
+            max_pages: env::var("MAX_PAGES").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
+            torrent_storage_path: env::var("TORRENT_STORAGE_PATH").unwrap_or_else(|_| "./torrents".into()),
+            avatar_storage_path: env::var("AVATAR_STORAGE_PATH").unwrap_or_else(|_| "./avatars".into()),
+            enable_gravatar: env::var("ENABLE_GRAVATAR").ok().and_then(|v| v.parse().ok()).unwrap_or(false),
+            maintenance_mode: env::var("MAINTENANCE_MODE").ok().and_then(|v| v.parse().ok()).unwrap_or(false),
             site_url: env::var("SITE_URL")
                 .unwrap_or_else(|_| "http://localhost:8080".into())
                 .trim_end_matches('/')
@@ -103,11 +97,7 @@ impl Config {
 
 /// Splits a comma separated list, dropping blanks.
 fn split_list(value: &str) -> Vec<String> {
-    value.split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .collect()
+    value.split(',').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect()
 }
 
 #[cfg(test)]
@@ -116,7 +106,10 @@ mod tests {
 
     #[test]
     fn split_list_trims_and_drops_blanks() {
-        assert_eq!(split_list(" udp://a/announce , ,http://b/announce,"), vec!["udp://a/announce", "http://b/announce"]);
+        assert_eq!(
+            split_list(" udp://a/announce , ,http://b/announce,"),
+            vec!["udp://a/announce", "http://b/announce"]
+        );
         assert!(split_list("").is_empty());
     }
 }

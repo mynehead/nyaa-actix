@@ -109,7 +109,13 @@ pub fn check(conn: &mut DbConnection, meili: &Meili) -> anyhow::Result<()> {
         "Rebuilding Meilisearch index `{}` ({} of {torrents} torrents indexed{}); searching SQLite meanwhile",
         meili.index(),
         indexed.map_or("none".into(), |n| n.to_string()),
-        if stale { ", an update failed" } else if outdated { ", built by an older version" } else { "" },
+        if stale {
+            ", an update failed"
+        } else if outdated {
+            ", built by an older version"
+        } else {
+            ""
+        },
     );
     let start = Instant::now();
     let count = rebuild(conn, meili, |_| {})?;

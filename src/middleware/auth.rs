@@ -1,6 +1,6 @@
-use actix_session::Session;
 use crate::db::DbPool;
 use crate::models::User;
+use actix_session::Session;
 
 pub const SESSION_USER_KEY: &str = "user_id";
 

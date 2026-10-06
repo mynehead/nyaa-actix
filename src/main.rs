@@ -11,7 +11,12 @@ mod utils;
 
 use actix_files as fs;
 use actix_session::{storage::CookieSessionStore, SessionMiddleware};
-use actix_web::{cookie::Key, http::StatusCode, middleware::{ErrorHandlers, Logger}, web, App, HttpServer};
+use actix_web::{
+    cookie::Key,
+    http::StatusCode,
+    middleware::{ErrorHandlers, Logger},
+    web, App, HttpServer,
+};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
 use tera::Tera;
@@ -84,11 +89,13 @@ async fn main() -> std::io::Result<()> {
             // Torrents
             .route("/view/{id}", web::get().to(handlers::torrents::view_torrent))
             .route("/view/{id}", web::post().to(handlers::torrents::post_comment))
-            .service(web::resource("/view/{id}/edit")
-                // Room for a full 10 KiB description of percent-encoded non-ASCII text
-                .app_data(web::FormConfig::default().limit(256 * 1024))
-                .route(web::get().to(handlers::torrents::edit_torrent_get))
-                .route(web::post().to(handlers::torrents::edit_torrent_post)))
+            .service(
+                web::resource("/view/{id}/edit")
+                    // Room for a full 10 KiB description of percent-encoded non-ASCII text
+                    .app_data(web::FormConfig::default().limit(256 * 1024))
+                    .route(web::get().to(handlers::torrents::edit_torrent_get))
+                    .route(web::post().to(handlers::torrents::edit_torrent_post)),
+            )
             .route("/download/{id}", web::get().to(handlers::torrents::download_torrent))
             .route("/magnet/{id}", web::get().to(handlers::torrents::magnet_redirect))
             .route("/upload", web::get().to(handlers::torrents::upload_get))

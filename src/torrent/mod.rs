@@ -2,7 +2,7 @@ pub mod bencode;
 pub mod magnet;
 
 use bencode::BencodeValue;
-use sha1::{Sha1, Digest};
+use sha1::{Digest, Sha1};
 
 #[derive(Debug)]
 pub struct TorrentMeta {
@@ -25,12 +25,10 @@ pub fn parse_torrent(data: &[u8]) -> Result<TorrentMeta, bencode::BencodeError> 
     hasher.update(&bencoded_info);
     let info_hash = hasher.finalize().to_vec();
 
-    let encoding = dict.get(b"encoding".as_slice())
-        .and_then(|v| v.as_str())
-        .unwrap_or("utf-8")
-        .to_lowercase();
+    let encoding = dict.get(b"encoding".as_slice()).and_then(|v| v.as_str()).unwrap_or("utf-8").to_lowercase();
 
-    let name = info_dict.get(b"name".as_slice())
+    let name = info_dict
+        .get(b"name".as_slice())
         .and_then(|v| v.as_bytes())
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("Unknown")
@@ -39,20 +37,12 @@ pub fn parse_torrent(data: &[u8]) -> Result<TorrentMeta, bencode::BencodeError> 
     let filesize = if let Some(length) = info_dict.get(b"length".as_slice()).and_then(|v| v.as_int()) {
         length
     } else if let Some(files) = info_dict.get(b"files".as_slice()).and_then(|v| v.as_list()) {
-        files.iter()
-            .filter_map(|f| f.get(b"length".as_slice()).and_then(|l| l.as_int()))
-            .sum()
+        files.iter().filter_map(|f| f.get(b"length".as_slice()).and_then(|l| l.as_int())).sum()
     } else {
         0
     };
 
-    Ok(TorrentMeta {
-        info_hash,
-        display_name: name,
-        filesize,
-        encoding,
-        bencoded_info,
-    })
+    Ok(TorrentMeta { info_hash, display_name: name, filesize, encoding, bencoded_info })
 }
 
 /// A file or folder in a torrent's file list. Folders have `size: None`.
@@ -107,7 +97,8 @@ pub fn file_tree(bencoded_info: &[u8]) -> Option<(Vec<FileNode>, usize)> {
     let files = info.get(b"files")?.as_list()?;
     for file in files {
         let size = file.get(b"length").and_then(|v| v.as_int()).unwrap_or(0);
-        let path: Vec<String> = file.get(b"path")
+        let path: Vec<String> = file
+            .get(b"path")
             .and_then(|p| p.as_list())
             .map(|parts| parts.iter().filter_map(text).collect())
             .unwrap_or_default();
@@ -117,7 +108,12 @@ pub fn file_tree(bencoded_info: &[u8]) -> Option<(Vec<FileNode>, usize)> {
     Some((vec![root], files.len()))
 }
 
-pub fn rebuild_torrent(torrent: &crate::models::Torrent, bencoded_info: &[u8], trackers: &[&str], site_url: &str) -> Vec<u8> {
+pub fn rebuild_torrent(
+    torrent: &crate::models::Torrent,
+    bencoded_info: &[u8],
+    trackers: &[&str],
+    site_url: &str,
+) -> Vec<u8> {
     let mut dict = std::collections::BTreeMap::new();
 
     if let Ok(info_val) = bencode::decode(bencoded_info) {
@@ -127,17 +123,14 @@ pub fn rebuild_torrent(torrent: &crate::models::Torrent, bencoded_info: &[u8], t
     if !trackers.is_empty() {
         dict.insert(b"announce".to_vec(), BencodeValue::Bytes(trackers[0].as_bytes().to_vec()));
         if trackers.len() > 1 {
-            let list = trackers.iter()
-                .map(|t| BencodeValue::List(vec![BencodeValue::Bytes(t.as_bytes().to_vec())]))
-                .collect();
+            let list =
+                trackers.iter().map(|t| BencodeValue::List(vec![BencodeValue::Bytes(t.as_bytes().to_vec())])).collect();
             dict.insert(b"announce-list".to_vec(), BencodeValue::List(list));
         }
     }
 
     dict.insert(b"encoding".to_vec(), BencodeValue::Bytes(torrent.encoding.as_bytes().to_vec()));
-    dict.insert(b"comment".to_vec(), BencodeValue::Bytes(
-        format!("{}/view/{}", site_url, torrent.id).into_bytes()
-    ));
+    dict.insert(b"comment".to_vec(), BencodeValue::Bytes(format!("{}/view/{}", site_url, torrent.id).into_bytes()));
 
     bencode::encode(&BencodeValue::Dict(dict))
 }
@@ -158,11 +151,24 @@ pub(crate) mod tests {
     pub(crate) fn sample_torrent() -> crate::models::Torrent {
         let now = chrono::NaiveDateTime::default();
         crate::models::Torrent {
-            id: 7, info_hash: vec![0xab; 20], display_name: "Test & Co".into(),
-            torrent_name: "a.txt".into(), information: String::new(), description: String::new(),
-            filesize: 5, encoding: "utf-8".into(), flags: 0, uploader_id: None, uploader_ip: None,
-            has_torrent: 1, comment_count: 0, created_time: now, updated_time: now,
-            main_category_id: 1, sub_category_id: 1, group_id: None,
+            id: 7,
+            info_hash: vec![0xab; 20],
+            display_name: "Test & Co".into(),
+            torrent_name: "a.txt".into(),
+            information: String::new(),
+            description: String::new(),
+            filesize: 5,
+            encoding: "utf-8".into(),
+            flags: 0,
+            uploader_id: None,
+            uploader_ip: None,
+            has_torrent: 1,
+            comment_count: 0,
+            created_time: now,
+            updated_time: now,
+            main_category_id: 1,
+            sub_category_id: 1,
+            group_id: None,
         }
     }
 
@@ -206,7 +212,8 @@ pub(crate) mod tests {
         assert_eq!((root.name.as_str(), root.size), ("root", None));
         let names: Vec<&str> = root.children.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, vec!["sub", "z.txt"]);
-        let sub: Vec<(&str, Option<i64>)> = root.children[0].children.iter().map(|c| (c.name.as_str(), c.size)).collect();
+        let sub: Vec<(&str, Option<i64>)> =
+            root.children[0].children.iter().map(|c| (c.name.as_str(), c.size)).collect();
         assert_eq!(sub, vec![("a.txt", Some(2)), ("b.txt", Some(4))]);
     }
 
@@ -219,8 +226,13 @@ pub(crate) mod tests {
 
         let root = bencode::decode(&out).unwrap();
         assert_eq!(root.get(b"announce").and_then(|v| v.as_str()), Some("udp://t1/announce"));
-        let tiers: Vec<&str> = root.get(b"announce-list").and_then(|v| v.as_list()).unwrap()
-            .iter().map(|tier| tier.as_list().unwrap()[0].as_str().unwrap()).collect();
+        let tiers: Vec<&str> = root
+            .get(b"announce-list")
+            .and_then(|v| v.as_list())
+            .unwrap()
+            .iter()
+            .map(|tier| tier.as_list().unwrap()[0].as_str().unwrap())
+            .collect();
         assert_eq!(tiers, trackers);
         assert_eq!(root.get(b"comment").and_then(|v| v.as_str()), Some("https://site.test/view/7"));
     }
@@ -234,7 +246,9 @@ pub(crate) mod tests {
 
     #[test]
     fn rebuild_with_one_tracker_has_no_announce_list() {
-        let root = bencode::decode(&rebuild_torrent(&sample_torrent(), INFO, &["udp://t1/announce"], "https://site.test")).unwrap();
+        let root =
+            bencode::decode(&rebuild_torrent(&sample_torrent(), INFO, &["udp://t1/announce"], "https://site.test"))
+                .unwrap();
         assert_eq!(root.get(b"announce").and_then(|v| v.as_str()), Some("udp://t1/announce"));
         assert!(root.get(b"announce-list").is_none());
     }

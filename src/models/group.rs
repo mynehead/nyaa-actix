@@ -2,8 +2,8 @@ use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::db::schema::{group_members, groups};
 use crate::db::DbConnection;
-use crate::db::schema::{groups, group_members};
 
 pub const PERM_UPLOAD: i32 = 1;
 pub const PERM_EDIT: i32 = 2;
@@ -47,15 +47,11 @@ impl Group {
     }
 
     pub fn can_upload(&self, conn: &mut DbConnection, user_id: i32) -> bool {
-        self.member_permissions(conn, user_id)
-            .map(|p| p & PERM_UPLOAD != 0)
-            .unwrap_or(false)
+        self.member_permissions(conn, user_id).map(|p| p & PERM_UPLOAD != 0).unwrap_or(false)
     }
 
     pub fn can_edit(&self, conn: &mut DbConnection, user_id: i32) -> bool {
-        self.member_permissions(conn, user_id)
-            .map(|p| p & PERM_EDIT != 0)
-            .unwrap_or(false)
+        self.member_permissions(conn, user_id).map(|p| p & PERM_EDIT != 0).unwrap_or(false)
     }
 
     pub fn members_with_perms(&self, conn: &mut DbConnection) -> QueryResult<Vec<(i32, i32)>> {

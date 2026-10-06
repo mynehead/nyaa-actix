@@ -8,8 +8,8 @@ pub mod torrent;
 pub mod trusted;
 pub mod user;
 
-pub use ban::*;
 pub use adminlog::*;
+pub use ban::*;
 pub use banner::*;
 pub use category::*;
 pub use comment::*;

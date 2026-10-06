@@ -21,12 +21,13 @@
 
 use diesel::prelude::*;
 
-use crate::db::DbConnection;
 use crate::db::schema::users;
-use crate::storage::{S3Settings, Storage};
+use crate::db::DbConnection;
 use crate::models::user::{NewUser, User, UserLevel};
+use crate::storage::{S3Settings, Storage};
 
-const USAGE: &str = "usage: nyaa-actix create-user <username> <password> [--level regular|trusted|moderator|admin] [--email <addr>]
+const USAGE: &str =
+    "usage: nyaa-actix create-user <username> <password> [--level regular|trusted|moderator|admin] [--email <addr>]
        nyaa-actix migrate-storage [--dry-run]
        nyaa-actix reindex";
 
@@ -90,10 +91,8 @@ fn parse_level(v: &str) -> Option<UserLevel> {
 fn open_db() -> Result<(DbConnection, String), String> {
     dotenvy::dotenv().ok();
     let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "nyaa.db".into());
-    let mut conn = crate::db::connect(&database_url)
-        .map_err(|e| format!("cannot open {database_url}: {e}"))?;
-    crate::db::run_migrations(&mut conn)
-        .map_err(|e| format!("migrations failed: {e}"))?;
+    let mut conn = crate::db::connect(&database_url).map_err(|e| format!("cannot open {database_url}: {e}"))?;
+    crate::db::run_migrations(&mut conn).map_err(|e| format!("migrations failed: {e}"))?;
     Ok((conn, database_url))
 }
 
@@ -106,10 +105,7 @@ fn create_user(args: &[String]) -> Result<(), String> {
     }
     let mut new_user = NewUser::new(&opts.username, opts.email.as_deref(), &opts.password);
     new_user.level = opts.level as i32;
-    diesel::insert_into(users::table)
-        .values(&new_user)
-        .execute(&mut conn)
-        .map_err(|e| e.to_string())?;
+    diesel::insert_into(users::table).values(&new_user).execute(&mut conn).map_err(|e| e.to_string())?;
     println!("created {:?} user `{}` in {database_url}", opts.level, opts.username);
     Ok(())
 }
@@ -125,7 +121,12 @@ async fn migrate_storage(args: &[String]) -> Result<(), String> {
     // Same defaults as Config; read directly so this doesn't need SECRET_KEY
     let local = Storage::local(&path("TORRENT_STORAGE_PATH", "./torrents"), &path("AVATAR_STORAGE_PATH", "./avatars"))?;
     let s3 = Storage::s3(&S3Settings::from_vars(|k| std::env::var(k).ok())?)?;
-    println!("{} files from {} to {}", if dry_run { "Checking" } else { "Copying" }, local.description(), s3.description());
+    println!(
+        "{} files from {} to {}",
+        if dry_run { "Checking" } else { "Copying" },
+        local.description(),
+        s3.description()
+    );
     let (copied, skipped) = local.copy_all(&s3, dry_run).await?;
     println!("{} {copied}, already there {skipped}", if dry_run { "would copy" } else { "copied" });
     if !dry_run {

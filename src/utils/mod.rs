@@ -1,8 +1,8 @@
-pub mod pagination;
-pub mod context;
-pub mod tera_filters;
-pub mod flash;
 pub mod avatar;
+pub mod context;
+pub mod flash;
+pub mod pagination;
+pub mod tera_filters;
 
 use std::net::IpAddr;
 
@@ -22,8 +22,9 @@ pub fn pack_ip(addr: IpAddr) -> Vec<u8> {
 pub fn unpack_ip(bytes: &[u8]) -> Option<IpAddr> {
     match bytes.len() {
         4 => Some(IpAddr::from(<[u8; 4]>::try_from(bytes).ok()?)),
-        16 if bytes[..12].iter().all(|&b| b == 0) && bytes[12..] != [0, 0, 0, 0] && bytes[12..] != [0, 0, 0, 1] =>
-            Some(IpAddr::from(<[u8; 4]>::try_from(&bytes[12..]).ok()?)),
+        16 if bytes[..12].iter().all(|&b| b == 0) && bytes[12..] != [0, 0, 0, 0] && bytes[12..] != [0, 0, 0, 1] => {
+            Some(IpAddr::from(<[u8; 4]>::try_from(&bytes[12..]).ok()?))
+        }
         16 => Some(IpAddr::from(<[u8; 16]>::try_from(bytes).ok()?)),
         _ => None,
     }
@@ -36,10 +37,7 @@ pub fn sanitize_string(s: &str) -> String {
 /// Like `sanitize_string`, but keeps line breaks and tabs, for Markdown fields
 /// such as descriptions. Line endings are normalized to `\n`.
 pub fn sanitize_text(s: &str) -> String {
-    s.replace("\r\n", "\n")
-        .chars()
-        .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
-        .collect()
+    s.replace("\r\n", "\n").chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').collect()
 }
 
 #[cfg(test)]

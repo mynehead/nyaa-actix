@@ -2,8 +2,8 @@ use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::db::schema::{nyaa_statistics, nyaa_torrents};
 use crate::db::DbConnection;
-use crate::db::schema::{nyaa_torrents, nyaa_statistics};
 use crate::models::User;
 
 bitflags::bitflags! {
@@ -99,8 +99,9 @@ impl Torrent {
     /// escaped text (upstream `information_as_link`). Returns HTML.
     pub fn information_as_link(&self) -> String {
         let info = self.information.as_str();
-        let is_ident = |s: &str, extra: &str| !s.is_empty()
-            && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c) || extra.contains(c));
+        let is_ident = |s: &str, extra: &str| {
+            !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c) || extra.contains(c))
+        };
         if let Some((chan, server)) = info.strip_prefix('#').and_then(|rest| rest.split_once('@')) {
             if is_ident(chan, "") && is_ident(server, ".:") {
                 return format!("<a href=\"irc://{server}/{chan}\">#{chan}@{server}</a>");
@@ -111,8 +112,7 @@ impl Torrent {
             && !info.chars().any(|c| "<>\"".contains(c) || c.is_whitespace())
         {
             let text = percent_encoding::percent_decode_str(info).decode_utf8_lossy();
-            return format!("<a rel=\"noopener noreferrer nofollow\" href=\"{}\">{}</a>",
-                escape(info), escape(&text));
+            return format!("<a rel=\"noopener noreferrer nofollow\" href=\"{}\">{}</a>", escape(info), escape(&text));
         }
         escape(info)
     }
@@ -122,10 +122,7 @@ impl Torrent {
     }
 
     pub fn by_info_hash(conn: &mut DbConnection, hash: &[u8]) -> QueryResult<Option<Torrent>> {
-        nyaa_torrents::table
-            .filter(nyaa_torrents::info_hash.eq(hash))
-            .first(conn)
-            .optional()
+        nyaa_torrents::table.filter(nyaa_torrents::info_hash.eq(hash)).first(conn).optional()
     }
 
     pub fn filesize_human(&self) -> String {
@@ -198,11 +195,19 @@ pub fn danger_action(old: i32, action: DangerAction, editor: &User) -> Option<(i
         }
         DangerAction::Ban if !banned && editor.is_moderator() => {
             flags.insert(TorrentFlags::DELETED | TorrentFlags::BANNED);
-            if deleted { "banned" } else { "deleted and banned" }
+            if deleted {
+                "banned"
+            } else {
+                "deleted and banned"
+            }
         }
         DangerAction::Undelete if deleted && editor.is_moderator() => {
             flags.remove(TorrentFlags::DELETED | TorrentFlags::BANNED);
-            if banned { "undeleted and unbanned" } else { "undeleted" }
+            if banned {
+                "undeleted and unbanned"
+            } else {
+                "undeleted"
+            }
         }
         DangerAction::Unban if banned && editor.is_moderator() => {
             flags.remove(TorrentFlags::BANNED);
@@ -234,8 +239,7 @@ pub fn format_filesize(bytes: i64) -> String {
 }
 
 fn escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
-        .replace('"', "&quot;").replace('\'', "&#39;")
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
 }
 
 #[derive(Debug, Insertable)]
@@ -301,16 +305,23 @@ mod tests {
 
     #[test]
     fn information_links() {
-        let info = |s: &str| Torrent { information: s.into(), ..torrent(TorrentFlags::empty(), 0) }.information_as_link();
+        let info =
+            |s: &str| Torrent { information: s.into(), ..torrent(TorrentFlags::empty(), 0) }.information_as_link();
         assert_eq!(info("#chan@irc.rizon.net"), "<a href=\"irc://irc.rizon.net/chan\">#chan@irc.rizon.net</a>");
-        assert_eq!(info("https://a.b/x%20y"), "<a rel=\"noopener noreferrer nofollow\" href=\"https://a.b/x%20y\">https://a.b/x y</a>");
+        assert_eq!(
+            info("https://a.b/x%20y"),
+            "<a rel=\"noopener noreferrer nofollow\" href=\"https://a.b/x%20y\">https://a.b/x y</a>"
+        );
         assert_eq!(info("https://a.b/\"><script>"), "https://a.b/&quot;&gt;&lt;script&gt;");
         assert_eq!(info("<b>hi</b>"), "&lt;b&gt;hi&lt;/b&gt;");
     }
 
     #[test]
     fn row_class_priority() {
-        assert_eq!(torrent(TorrentFlags::TRUSTED | TorrentFlags::REMAKE | TorrentFlags::DELETED, 0).row_class(), "deleted");
+        assert_eq!(
+            torrent(TorrentFlags::TRUSTED | TorrentFlags::REMAKE | TorrentFlags::DELETED, 0).row_class(),
+            "deleted"
+        );
         assert_eq!(torrent(TorrentFlags::HIDDEN | TorrentFlags::REMAKE, 0).row_class(), "warning");
         assert_eq!(torrent(TorrentFlags::TRUSTED | TorrentFlags::REMAKE, 0).row_class(), "danger");
         assert_eq!(torrent(TorrentFlags::TRUSTED, 0).row_class(), "success");
@@ -319,8 +330,17 @@ mod tests {
 
     fn user(id: i32, level: i32) -> User {
         User {
-            id, username: format!("u{id}"), email: None, password_hash: String::new(), status: 1, level,
-            created_time: NaiveDateTime::default(), last_login_date: None, last_login_ip: None, registration_ip: None, avatar_time: None,
+            id,
+            username: format!("u{id}"),
+            email: None,
+            password_hash: String::new(),
+            status: 1,
+            level,
+            created_time: NaiveDateTime::default(),
+            last_login_date: None,
+            last_login_ip: None,
+            registration_ip: None,
+            avatar_time: None,
         }
     }
 
@@ -341,8 +361,10 @@ mod tests {
         let old = (TorrentFlags::TRUSTED | TorrentFlags::COMMENT_LOCKED | TorrentFlags::HIDDEN).bits();
         let edit = EditFlags { remake: true, ..Default::default() };
         // A regular owner can't drop trusted or the comment lock
-        assert_eq!(edited_flags(old, &edit, &user(1, 0)),
-            (TorrentFlags::TRUSTED | TorrentFlags::COMMENT_LOCKED | TorrentFlags::REMAKE).bits());
+        assert_eq!(
+            edited_flags(old, &edit, &user(1, 0)),
+            (TorrentFlags::TRUSTED | TorrentFlags::COMMENT_LOCKED | TorrentFlags::REMAKE).bits()
+        );
         // Trusted users set trusted; moderators also set the lock
         assert_eq!(edited_flags(old, &edit, &user(1, 1)), (TorrentFlags::COMMENT_LOCKED | TorrentFlags::REMAKE).bits());
         assert_eq!(edited_flags(old, &edit, &user(1, 2)), TorrentFlags::REMAKE.bits());

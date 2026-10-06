@@ -1,8 +1,8 @@
 use diesel::prelude::*;
 use serde::Serialize;
 
-use crate::db::DbConnection;
 use crate::db::schema::{nyaa_statistics, nyaa_torrents};
+use crate::db::DbConnection;
 use crate::models::{Statistic, Torrent};
 
 // Diesel has no built-in bitwise AND; define the SQL `&` operator for integer columns.
@@ -75,6 +75,7 @@ impl SearchQuery {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn from_params(
         term: Option<String>,
         user_id: Option<i32>,
@@ -121,12 +122,21 @@ impl SearchQuery {
 }
 
 fn parse_category(cat: Option<&str>) -> (Option<i32>, Option<i32>) {
-    let cat = match cat { Some(c) => c, None => return (None, None) };
+    let cat = match cat {
+        Some(c) => c,
+        None => return (None, None),
+    };
     let parts: Vec<&str> = cat.splitn(2, '_').collect();
-    if parts.len() != 2 { return (None, None); }
+    if parts.len() != 2 {
+        return (None, None);
+    }
     let main: i32 = parts[0].parse().unwrap_or(0);
     let sub: i32 = parts[1].parse().unwrap_or(0);
-    if main == 0 { (None, None) } else { (Some(main), if sub == 0 { None } else { Some(sub) }) }
+    if main == 0 {
+        (None, None)
+    } else {
+        (Some(main), if sub == 0 { None } else { Some(sub) })
+    }
 }
 
 #[derive(Debug)]
@@ -170,10 +180,17 @@ fn filtered(q: &SearchQuery) -> nyaa_torrents::BoxedQuery<'static, crate::db::Mu
     let trusted_bit = TorrentFlags::TRUSTED.bits();
     let complete_bit = TorrentFlags::COMPLETE.bits();
     match q.quality_filter {
-        1 => { query = query.filter(diesel::dsl::not(nyaa_torrents::flags.bitand(remake_bit).ne(0))); }
-        2 => { query = query.filter(nyaa_torrents::flags.bitand(trusted_bit).ne(0)); }
-        3 => { query = query.filter(nyaa_torrents::flags.bitand(trusted_bit).ne(0))
-                           .filter(nyaa_torrents::flags.bitand(complete_bit).ne(0)); }
+        1 => {
+            query = query.filter(diesel::dsl::not(nyaa_torrents::flags.bitand(remake_bit).ne(0)));
+        }
+        2 => {
+            query = query.filter(nyaa_torrents::flags.bitand(trusted_bit).ne(0));
+        }
+        3 => {
+            query = query
+                .filter(nyaa_torrents::flags.bitand(trusted_bit).ne(0))
+                .filter(nyaa_torrents::flags.bitand(complete_bit).ne(0));
+        }
         _ => {}
     }
 
@@ -206,10 +223,7 @@ pub fn search(conn: &mut DbConnection, q: &SearchQuery) -> QueryResult<SearchRes
     // without a stats row still list (NULL sorts as lowest).
     macro_rules! stat {
         ($col:expr) => {
-            nyaa_statistics::table
-                .filter(nyaa_statistics::torrent_id.eq(nyaa_torrents::id))
-                .select($col)
-                .single_value()
+            nyaa_statistics::table.filter(nyaa_statistics::torrent_id.eq(nyaa_torrents::id)).select($col).single_value()
         };
     }
     let query = match (q.sort, q.order) {
@@ -229,10 +243,8 @@ pub fn search(conn: &mut DbConnection, q: &SearchQuery) -> QueryResult<SearchRes
         (SearchSort::Downloads, SearchOrder::Asc) => query.order(stat!(nyaa_statistics::download_count).asc()),
     };
     // Newest first among ties
-    let torrents = query.then_order_by(nyaa_torrents::id.desc())
-    .limit(q.per_page)
-    .offset(offset)
-    .load::<Torrent>(conn)?;
+    let torrents =
+        query.then_order_by(nyaa_torrents::id.desc()).limit(q.per_page).offset(offset).load::<Torrent>(conn)?;
 
     Ok(SearchResult { torrents, total })
 }
@@ -257,15 +269,18 @@ pub fn with_stats(conn: &mut DbConnection, torrents: Vec<Torrent>) -> QueryResul
         .into_iter()
         .map(|s| (s.torrent_id, s))
         .collect();
-    Ok(torrents.into_iter().map(|torrent| {
-        let s = stats.get(&torrent.id);
-        ListedTorrent {
-            seed_count: s.map_or(0, |s| s.seed_count),
-            leech_count: s.map_or(0, |s| s.leech_count),
-            download_count: s.map_or(0, |s| s.download_count),
-            torrent,
-        }
-    }).collect())
+    Ok(torrents
+        .into_iter()
+        .map(|torrent| {
+            let s = stats.get(&torrent.id);
+            ListedTorrent {
+                seed_count: s.map_or(0, |s| s.seed_count),
+                leech_count: s.map_or(0, |s| s.leech_count),
+                download_count: s.map_or(0, |s| s.download_count),
+                torrent,
+            }
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -277,13 +292,16 @@ mod tests {
         let mut conn = crate::db::connect(":memory:").unwrap();
         crate::db::run_migrations(&mut conn).unwrap();
         diesel::sql_query("INSERT INTO users (id, username, password_hash) VALUES (1, 'u', 'x')")
-            .execute(&mut conn).unwrap();
+            .execute(&mut conn)
+            .unwrap();
         for (id, flags) in torrents {
             diesel::sql_query(format!(
                 "INSERT INTO nyaa_torrents (id, info_hash, display_name, torrent_name, flags, \
                  uploader_id, main_category_id, sub_category_id) VALUES ({id}, X'{id:040x}', 't', 't', {}, 1, 1, 0)",
                 flags.bits()
-            )).execute(&mut conn).unwrap();
+            ))
+            .execute(&mut conn)
+            .unwrap();
         }
         conn
     }
@@ -316,20 +334,19 @@ mod tests {
 
     #[test]
     fn main_listing_shows_anonymous_but_not_hidden() {
-        let mut conn = db_with(&[
-            (1, TorrentFlags::empty()),
-            (2, TorrentFlags::HIDDEN),
-            (3, TorrentFlags::ANONYMOUS),
-        ]);
+        let mut conn = db_with(&[(1, TorrentFlags::empty()), (2, TorrentFlags::HIDDEN), (3, TorrentFlags::ANONYMOUS)]);
         assert_eq!(ids(&mut conn, &SearchQuery::new()), (vec![3, 1], 2));
     }
 
     #[test]
     fn sorts_by_seeders_and_attaches_stats() {
         let mut conn = db_with(&[(1, TorrentFlags::empty()), (2, TorrentFlags::empty()), (3, TorrentFlags::empty())]);
-        diesel::sql_query("INSERT INTO nyaa_statistics (torrent_id, seed_count, leech_count, download_count) \
-                           VALUES (1, 5, 1, 9), (2, 7, 0, 0)")
-            .execute(&mut conn).unwrap();
+        diesel::sql_query(
+            "INSERT INTO nyaa_statistics (torrent_id, seed_count, leech_count, download_count) \
+                           VALUES (1, 5, 1, 9), (2, 7, 0, 0)",
+        )
+        .execute(&mut conn)
+        .unwrap();
         let mut q = SearchQuery::new();
         q.sort = SearchSort::Seeders;
         assert_eq!(ids(&mut conn, &q).0, vec![2, 1, 3]);
@@ -338,7 +355,8 @@ mod tests {
 
         let torrents = search(&mut conn, &q).unwrap().torrents;
         let rows = with_stats(&mut conn, torrents).unwrap();
-        let counts: Vec<(i32, i32, i32)> = rows.iter().map(|r| (r.seed_count, r.leech_count, r.download_count)).collect();
+        let counts: Vec<(i32, i32, i32)> =
+            rows.iter().map(|r| (r.seed_count, r.leech_count, r.download_count)).collect();
         assert_eq!(counts, vec![(0, 0, 0), (5, 1, 9), (7, 0, 0)]);
     }
 }
