@@ -37,16 +37,104 @@ pub async fn view_torrent(
 
     check_visible(&torrent, &current_user)?;
 
+    let html = render_view(&mut conn, &tmpl, &cfg, &storage, &torrent, current_user.as_ref(), "", None, &flash::take(&session)).await?;
+    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+}
+
+#[derive(Deserialize)]
+pub struct CommentForm {
+    #[serde(default)]
+    pub comment: String,
+}
+
+/// Upstream CommentForm limits.
+const COMMENT_MIN_LEN: usize = 3;
+const COMMENT_MAX_LEN: usize = 2048;
+
+/// Upstream shows the comment form to logged-in users, and on locked torrents only to moderators.
+fn can_comment(torrent: &Torrent, user: Option<&User>) -> bool {
+    user.is_some_and(|u| !torrent.is_comment_locked() || u.is_moderator())
+}
+
+/// Posts a comment from the form on the view page, as upstream's POST /view/<id>.
+pub async fn post_comment(
+    session: Session,
+    pool: web::Data<DbPool>,
+    tmpl: web::Data<Tera>,
+    cfg: web::Data<Config>,
+    storage: web::Data<Storage>,
+    path: web::Path<i32>,
+    form: web::Form<CommentForm>,
+) -> Result<HttpResponse> {
+    let torrent_id = path.into_inner();
+    let current_user = get_current_user(&session, &pool);
+    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+
+    let torrent = Torrent::by_id(&mut conn, torrent_id)
+        .map_err(actix_web::error::ErrorInternalServerError)?
+        .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))?;
+    check_visible(&torrent, &current_user)?;
+    if !can_comment(&torrent, current_user.as_ref()) {
+        return Err(actix_web::error::ErrorForbidden("You may not comment on this torrent"));
+    }
+    let user = current_user.expect("can_comment requires a user");
+
+    let text = sanitize_text(form.comment.trim());
+    let len = text.chars().count();
+    if !(COMMENT_MIN_LEN..=COMMENT_MAX_LEN).contains(&len) {
+        let error = format!("Comment must be at least {COMMENT_MIN_LEN} characters long and {COMMENT_MAX_LEN} at most.");
+        let html = render_view(&mut conn, &tmpl, &cfg, &storage, &torrent, Some(&user), &form.comment, Some(&error), &[]).await?;
+        return Ok(HttpResponse::BadRequest().content_type("text/html").body(html));
+    }
+
+    let count = conn.transaction::<_, diesel::result::Error, _>(|conn| {
+        diesel::insert_into(nyaa_comments::table)
+            .values(&crate::models::NewComment {
+                torrent_id,
+                user_id: Some(user.id),
+                created_time: chrono::Utc::now().naive_utc(),
+                text,
+            })
+            .execute(conn)?;
+        let count: i64 = nyaa_comments::table
+            .filter(nyaa_comments::torrent_id.eq(torrent_id))
+            .count()
+            .get_result(conn)?;
+        diesel::update(nyaa_torrents::table.find(torrent_id))
+            .set(nyaa_torrents::comment_count.eq(count as i32))
+            .execute(conn)?;
+        Ok(count)
+    }).map_err(actix_web::error::ErrorInternalServerError)?;
+    crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), torrent_id);
+
+    Ok(redirect(&format!("/view/{torrent_id}#com-{count}")))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn render_view(
+    conn: &mut DbConnection,
+    tmpl: &Tera,
+    cfg: &Config,
+    storage: &Storage,
+    torrent: &Torrent,
+    current_user: Option<&User>,
+    comment_text: &str,
+    comment_error: Option<&str>,
+    flashes: &[flash::Flash],
+) -> Result<String> {
+    let torrent_id = torrent.id;
+    let current_user = current_user.cloned();
+
     let stats = nyaa_statistics::table
         .find(torrent_id)
-        .first::<crate::models::Statistic>(&mut conn)
+        .first::<crate::models::Statistic>(conn)
         .optional()
         .map_err(actix_web::error::ErrorInternalServerError)?;
 
     let comments: Vec<crate::models::Comment> = nyaa_comments::table
         .filter(nyaa_comments::torrent_id.eq(torrent_id))
         .order(nyaa_comments::created_time.asc())
-        .load(&mut conn)
+        .load(conn)
         .map_err(actix_web::error::ErrorInternalServerError)?;
 
     // Anonymous uploads only name their uploader to that uploader and moderators
@@ -54,24 +142,24 @@ pub async fn view_torrent(
         .map(|u| u.is_moderator() || Some(u.id) == torrent.uploader_id)
         .unwrap_or(false);
     let uploader: Option<User> = match torrent.uploader_id {
-        Some(uid) if can_see_uploader => User::by_id(&mut conn, uid)
+        Some(uid) if can_see_uploader => User::by_id(conn, uid)
             .map_err(actix_web::error::ErrorInternalServerError)?,
         _ => None,
     };
 
     // Comment authors, for names, level colors and the "(uploader)" tag
     let comments: Vec<serde_json::Value> = comments.into_iter().map(|c| {
-        let user = c.user_id.and_then(|uid| User::by_id(&mut conn, uid).ok().flatten());
-        let avatar_url = user.as_ref().map_or_else(|| crate::models::DEFAULT_AVATAR.to_string(), |u| u.avatar_url(&cfg));
+        let user = c.user_id.and_then(|uid| User::by_id(conn, uid).ok().flatten());
+        let avatar_url = user.as_ref().map_or_else(|| crate::models::DEFAULT_AVATAR.to_string(), |u| u.avatar_url(cfg));
         serde_json::json!({ "comment": c, "user": user, "avatar_url": avatar_url })
     }).collect();
 
     let main_category = crate::db::schema::nyaa_main_categories::table
         .find(torrent.main_category_id)
-        .first::<crate::models::MainCategory>(&mut conn)
+        .first::<crate::models::MainCategory>(conn)
         .optional()
         .map_err(actix_web::error::ErrorInternalServerError)?;
-    let sub_category = crate::models::get_sub_category(&mut conn, torrent.main_category_id, torrent.sub_category_id)
+    let sub_category = crate::models::get_sub_category(conn, torrent.main_category_id, torrent.sub_category_id)
         .map_err(actix_web::error::ErrorInternalServerError)?;
 
     // File list from the stored info dict; missing or unreadable means "not available"
@@ -86,7 +174,20 @@ pub async fn view_torrent(
     let magnet = torrent.magnet_uri(&torrent.display_name, &cfg.trackers());
     let can_edit = torrent.can_edit(current_user.as_ref());
 
-    let mut ctx = base_context(&cfg, current_user.as_ref());
+    // The group the torrent was released under, shown below the submitter
+    let group = match torrent.group_id {
+        Some(gid) => crate::models::Group::by_id(conn, gid)
+            .map_err(actix_web::error::ErrorInternalServerError)?,
+        None => None,
+    };
+    // Upstream shows the uploader's IP next to the submitter to administrators only
+    let uploader_ip = current_user.as_ref()
+        .filter(|u| u.is_superadmin())
+        .and_then(|_| torrent.uploader_ip.as_deref())
+        .and_then(unpack_ip)
+        .map(|ip| ip.to_string());
+
+    let mut ctx = base_context(cfg, current_user.as_ref());
     ctx.insert("torrent", &torrent);
     ctx.insert("can_edit", &can_edit);
     ctx.insert("info_hash", &torrent.info_hash_hex());
@@ -99,17 +200,20 @@ pub async fn view_torrent(
     ctx.insert("comments", &comments);
     // Upstream's "Hide comments by default" preference collapses the comments panel
     let hide_comments = match &current_user {
-        Some(u) => User::hide_comments(&mut conn, u.id).map_err(actix_web::error::ErrorInternalServerError)?,
+        Some(u) => User::hide_comments(conn, u.id).map_err(actix_web::error::ErrorInternalServerError)?,
         None => false,
     };
     ctx.insert("hide_comments", &hide_comments);
     ctx.insert("uploader", &uploader);
+    ctx.insert("uploader_ip", &uploader_ip);
+    ctx.insert("group", &group);
     ctx.insert("magnet", &magnet);
-    ctx.insert("flash_messages", &flash::take(&session));
+    ctx.insert("can_comment", &can_comment(torrent, current_user.as_ref()));
+    ctx.insert("comment_text", comment_text);
+    ctx.insert("comment_error", &comment_error);
+    ctx.insert("flash_messages", flashes);
 
-    let html = tmpl.render("view.html", &ctx)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
-    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+    tmpl.render("view.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)
 }
 
 /// Upstream MAX_FILES_VIEW: longer file lists are not rendered.
@@ -955,6 +1059,7 @@ mod tests {
                     .wrap(SessionMiddleware::new(CookieSessionStore::default(), Key::from(&[7u8; 64])))
                     .route("/login/{id}", web::get().to(login))
                     .route("/view/{id}", web::get().to(view_torrent))
+                    .route("/view/{id}", web::post().to(post_comment))
                     .route("/view/{id}/edit", web::get().to(edit_torrent_get))
                     .route("/view/{id}/edit", web::post().to(edit_torrent_post))
                     .route("/upload", web::post().to(upload_post))).await;
@@ -1010,6 +1115,33 @@ mod tests {
             assert!(page.contains("(by <a href=\"/user/owner\">owner</a>)"), "{page}");
             assert!(page.contains("name=\"is_comment_locked\""), "moderators see the lock");
             assert!(page.contains("name=\"ban\""));
+        }
+
+        #[actix_web::test]
+        async fn group_row_and_admin_only_uploader_ip() {
+            let pool = pool();
+            {
+                let mut conn = pool.get().unwrap();
+                diesel::sql_query("INSERT INTO users (id, username, password_hash, status, level) VALUES (4, 'admin', 'x', 1, 3)")
+                    .execute(&mut conn).unwrap();
+                diesel::sql_query("INSERT INTO groups (id, name, tag, slug, created_time, owner_id) \
+                                   VALUES (1, 'Cyan', 'Cyan', 'cyan', CURRENT_TIMESTAMP, 1)")
+                    .execute(&mut conn).unwrap();
+            }
+            let (app, cookie) = app!(pool, Some(4));
+            let view = String::from_utf8(test::call_and_read_body(&app, get("/view/5", &cookie).to_request()).await.to_vec()).unwrap();
+            assert!(!view.contains("Group:"), "no group row without a group");
+
+            diesel::sql_query(format!("UPDATE nyaa_torrents SET group_id = 1, uploader_ip = X'{}' WHERE id = 5",
+                                      hex::encode(pack_ip("127.0.0.1".parse().unwrap()))))
+                .execute(&mut pool.get().unwrap()).unwrap();
+            for (user, sees_ip) in [(None, false), (Some(1), false), (Some(3), false), (Some(4), true)] {
+                let (app, cookie) = app!(pool, user);
+                let view = String::from_utf8(test::call_and_read_body(&app, get("/view/5", &cookie).to_request()).await.to_vec()).unwrap();
+                assert!(view.contains("<div class=\"col-md-1\">Group:</div>"), "{user:?}");
+                assert!(view.contains("<a href=\"/group/cyan\">[Cyan] Cyan</a>"), "{view}");
+                assert_eq!(view.contains("(127.0.0.1)"), sees_ip, "{user:?}");
+            }
         }
 
         #[actix_web::test]
@@ -1161,6 +1293,54 @@ mod tests {
             test::call_service(&app, post("/view/5/edit", &cookie, &[("delete", "Delete")]).to_request()).await;
             assert!(torrent(&pool).is_deleted());
             assert_eq!(admin_logs(&pool).len(), 2, "owners deleting their own torrent leave no log");
+        }
+
+        #[actix_web::test]
+        async fn locked_comments_only_take_moderator_posts() {
+            let pool = pool();
+            let comments = |pool: &DbPool| -> Vec<(Option<i32>, String)> {
+                nyaa_comments::table.order(nyaa_comments::id).select((nyaa_comments::user_id, nyaa_comments::text))
+                    .load(&mut pool.get().unwrap()).unwrap()
+            };
+
+            // Unlocked: any logged-in user gets the form and can post
+            let (app, cookie) = app!(pool, Some(2));
+            let page = String::from_utf8(test::call_and_read_body(&app, get("/view/5", &cookie).to_request()).await.to_vec()).unwrap();
+            assert!(page.contains("name=\"comment\""), "{page}");
+            let res = test::call_service(&app, post("/view/5", &cookie, &[("comment", "  first!  ")]).to_request()).await;
+            assert_eq!(res.status(), StatusCode::FOUND);
+            assert_eq!(location(&res), "/view/5#com-1");
+            let res = test::call_service(&app, post("/view/5", &cookie, &[("comment", "ab")]).to_request()).await;
+            assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+            let page = String::from_utf8(test::read_body(res).await.to_vec()).unwrap();
+            assert!(page.contains("Comment must be at least 3 characters"), "{page}");
+
+            let (app, cookie) = app!(pool, None::<i32>);
+            let res = test::call_service(&app, post("/view/5", &cookie, &[("comment", "anonymous")]).to_request()).await;
+            assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+            diesel::update(nyaa_torrents::table.find(5))
+                .set(nyaa_torrents::flags.eq((TorrentFlags::TRUSTED | TorrentFlags::COMMENT_LOCKED).bits()))
+                .execute(&mut pool.get().unwrap()).unwrap();
+
+            // Locked: the uploader and other users see the notice but no form, and posts are refused
+            for user in [1, 2] {
+                let (app, cookie) = app!(pool, Some(user));
+                let page = String::from_utf8(test::call_and_read_body(&app, get("/view/5", &cookie).to_request()).await.to_vec()).unwrap();
+                assert!(page.contains("Comments have been locked.") && !page.contains("name=\"comment\""), "{user}");
+                let res = test::call_service(&app, post("/view/5", &cookie, &[("comment", "let me in")]).to_request()).await;
+                assert_eq!(res.status(), StatusCode::FORBIDDEN, "{user}");
+            }
+
+            // Moderators and above still comment, as upstream
+            let (app, cookie) = app!(pool, Some(3));
+            let page = String::from_utf8(test::call_and_read_body(&app, get("/view/5", &cookie).to_request()).await.to_vec()).unwrap();
+            assert!(page.contains("Comments have been locked.") && page.contains("name=\"comment\""), "{page}");
+            let res = test::call_service(&app, post("/view/5", &cookie, &[("comment", "Locked, see rules")]).to_request()).await;
+            assert_eq!(location(&res), "/view/5#com-2");
+
+            assert_eq!(comments(&pool), [(Some(2), "first!".to_string()), (Some(3), "Locked, see rules".to_string())]);
+            assert_eq!(torrent(&pool).comment_count, 2);
         }
     
         /// The test row is given the hash of a real .torrent, so uploading that file collides with it.

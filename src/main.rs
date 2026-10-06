@@ -83,6 +83,7 @@ async fn main() -> std::io::Result<()> {
             .route("/trusted/request", web::post().to(handlers::trusted::request_trusted))
             // Torrents
             .route("/view/{id}", web::get().to(handlers::torrents::view_torrent))
+            .route("/view/{id}", web::post().to(handlers::torrents::post_comment))
             .service(web::resource("/view/{id}/edit")
                 // Room for a full 10 KiB description of percent-encoded non-ASCII text
                 .app_data(web::FormConfig::default().limit(256 * 1024))
@@ -125,6 +126,10 @@ async fn main() -> std::io::Result<()> {
             .route("/admin/trusted/{list_filter}", web::get().to(handlers::trusted::admin_trusted))
             .route("/admin/trusted/application/{id}", web::get().to(handlers::trusted::admin_trusted_application))
             .route("/admin/trusted/application/{id}", web::post().to(handlers::trusted::admin_trusted_application))
+            .route("/admin/banners", web::get().to(handlers::banners::list))
+            .route("/admin/banners", web::post().to(handlers::banners::create))
+            .route("/admin/banners/{id}/toggle", web::post().to(handlers::banners::toggle))
+            .route("/admin/banners/{id}/delete", web::post().to(handlers::banners::delete))
     })
     .listen(tcp_listener(SocketAddr::from((Ipv4Addr::UNSPECIFIED, PORT)))?)?;
     // Windows resolves `localhost` to ::1 first and retries a refused connection, so with

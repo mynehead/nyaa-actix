@@ -1,5 +1,6 @@
 pub mod adminlog;
 pub mod ban;
+pub mod banner;
 pub mod category;
 pub mod comment;
 pub mod group;
@@ -9,6 +10,7 @@ pub mod user;
 
 pub use ban::*;
 pub use adminlog::*;
+pub use banner::*;
 pub use category::*;
 pub use comment::*;
 pub use group::*;
