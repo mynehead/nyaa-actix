@@ -81,7 +81,8 @@ impl User {
         self.level >= UserLevel::Moderator as i32
     }
 
-    /// Admin-only actions upstream, such as seeing IPs or changing a user's level.
+    /// Admin-only actions upstream, such as seeing IPs, deciding trusted applications or
+    /// changing a user's level.
     pub fn is_superadmin(&self) -> bool {
         self.level == UserLevel::SuperAdmin as i32
     }

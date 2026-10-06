@@ -1,0 +1,17 @@
+{% extends "layout.html" %}
+{% block title %}Trusted :: {{ config.site_name }}{% endblock %}
+{% block body %}
+
+<div class="content">
+	<div class="row">
+		<div class="col-md-12">
+			{% include "trusted_rules.html" %}
+		</div>
+	</div>
+	<div class="row">
+		<div class="col-md-12">
+			<a href="/trusted/request" class="btn btn-success btn-lg">Request Trusted Status</a>
+		</div>
+	</div>
+</div>
+{% endblock %}
