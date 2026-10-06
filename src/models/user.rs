@@ -241,6 +241,7 @@ pub struct NewUser {
     pub status: i32,
     pub level: i32,
     pub created_time: NaiveDateTime,
+    pub registration_ip: Option<Vec<u8>>,
 }
 
 impl NewUser {
@@ -253,6 +254,7 @@ impl NewUser {
             status: UserStatus::Active as i32,
             level: UserLevel::Regular as i32,
             created_time: chrono::Utc::now().naive_utc(),
+            registration_ip: None,
         }
     }
 }

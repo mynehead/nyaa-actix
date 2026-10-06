@@ -13,7 +13,7 @@ use tera::Tera;
 use crate::config::Config;
 use crate::db::schema::users;
 use crate::db::{DbConnection, DbPool};
-use crate::middleware::auth::{get_current_user, login_user, logout_user};
+use crate::middleware::auth::{get_current_user, login_user, logout_everywhere, logout_user};
 use crate::models::{password_matches, Ban, NewUser, User};
 use crate::storage::{Kind, Storage};
 use crate::utils::context::base_context;
@@ -86,15 +86,8 @@ pub async fn login_post(
     let error = match user {
         Some(ref u) if password_ok && u.is_active() => {
             LOGIN_FAILURES_BY_ACCOUNT.clear(&account);
-            // Upstream records these on login; IP bans from the user page use last_login_ip
-            diesel::update(users::table.find(u.id))
-                .set((
-                    users::last_login_date.eq(chrono::Utc::now().naive_utc()),
-                    users::last_login_ip.eq(client_ip(&req)),
-                ))
-                .execute(&mut conn)
-                .map_err(internal_error)?;
-            login_user(&session, u.id).ok();
+            // Also records last_login_date and last_login_ip, which IP bans from the user page use
+            login_user(&session, &mut conn, u.id, client_ip(&req)).map_err(internal_error)?;
             return Ok(HttpResponse::Found().insert_header(("Location", "/")).finish());
         }
         // Like upstream, the ban (and its reason) only shows after the right password
@@ -178,7 +171,8 @@ pub async fn register_post(
     }
 
     let (name, mail, password) = (username.to_string(), email.to_string(), form.password.clone());
-    let new_user = web::block(move || NewUser::new(&name, Some(&mail), &password)).await?;
+    let mut new_user = web::block(move || NewUser::new(&name, Some(&mail), &password)).await?;
+    new_user.registration_ip = client_ip(&req);
     // Two sign-ups for the same name or email at once: the second hits the UNIQUE index
     match diesel::insert_into(users::table).values(&new_user).execute(&mut conn) {
         Err(diesel::result::Error::DatabaseError(diesel::result::DatabaseErrorKind::UniqueViolation, _)) => {
@@ -191,7 +185,7 @@ pub async fn register_post(
         .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorInternalServerError("Failed to fetch user"))?;
 
-    login_user(&session, user.id).ok();
+    login_user(&session, &mut conn, user.id, client_ip(&req)).map_err(internal_error)?;
     Ok(HttpResponse::Found().insert_header(("Location", "/")).finish())
 }
 
@@ -229,12 +223,26 @@ fn client_key(req: &HttpRequest) -> String {
     format!("ip:{}", client_addr(req).map(|a| a.to_string()).unwrap_or_default())
 }
 
-pub async fn logout(session: Session) -> HttpResponse {
-    logout_user(&session);
+pub async fn logout(session: Session, pool: web::Data<DbPool>) -> HttpResponse {
+    logout_user(&session, &pool);
     HttpResponse::Found().insert_header(("Location", "/")).finish()
 }
 
-const PROFILE_URL: &str = "/account/profile";
+/// The account pages used to live under `/account/`; they now sit at the root like upstream.
+/// 308 keeps the method, so an old login form still posts to the right place.
+pub async fn legacy_redirect(req: HttpRequest, path: web::Path<String>) -> HttpResponse {
+    let page = path.into_inner();
+    if !matches!(page.as_str(), "login" | "register" | "logout" | "profile" | "profile/avatar") {
+        return HttpResponse::NotFound().finish();
+    }
+    let mut location = format!("/{}", page);
+    if !req.query_string().is_empty() {
+        location = format!("{}?{}", location, req.query_string());
+    }
+    HttpResponse::PermanentRedirect().insert_header(("Location", location)).finish()
+}
+
+const PROFILE_URL: &str = "/profile";
 
 fn redirect(location: &str) -> HttpResponse {
     HttpResponse::Found().insert_header(("Location", location)).finish()
@@ -336,7 +344,7 @@ pub async fn profile(
     cfg: web::Data<Config>,
 ) -> Result<HttpResponse> {
     let Some(current_user) = get_current_user(&session, &pool) else {
-        return Ok(redirect("/account/login"));
+        return Ok(redirect("/login"));
     };
     let mut conn = pool.get().map_err(internal_error)?;
     render_profile(&session, &mut conn, &tmpl, &cfg, &current_user, "password", FieldErrors::new(), "")
@@ -345,6 +353,7 @@ pub async fn profile(
 /// Upstream `profile()` POST: email and password changes need the current password;
 /// preferences don't. Every outcome but a validation error redirects back with a flash.
 pub async fn profile_post(
+    req: HttpRequest,
     session: Session,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
@@ -352,7 +361,7 @@ pub async fn profile_post(
     form: web::Form<ProfileForm>,
 ) -> Result<HttpResponse> {
     let Some(user) = get_current_user(&session, &pool) else {
-        return Ok(redirect("/account/login"));
+        return Ok(redirect("/login"));
     };
     let mut conn = pool.get().map_err(internal_error)?;
     let internal = internal_error;
@@ -378,6 +387,9 @@ pub async fn profile_post(
                 return Ok(redirect(PROFILE_URL));
             }
             User::set_password(&mut conn, user.id, &form.new_password).map_err(internal)?;
+            // A new password ends every other session; this one starts over
+            logout_everywhere(&mut conn, user.id).map_err(internal)?;
+            login_user(&session, &mut conn, user.id, client_ip(&req)).map_err(internal_error)?;
             flash::push(&session, "success", "Password successfully changed!", "");
         }
     } else if form.submit_settings.is_some() {
@@ -395,7 +407,7 @@ pub async fn avatar_post(
     mut payload: Multipart,
 ) -> Result<HttpResponse> {
     let Some(user) = get_current_user(&session, &pool) else {
-        return Ok(redirect("/account/login"));
+        return Ok(redirect("/login"));
     };
     let fail = |text: &str| {
         flash::push(&session, "danger", "Avatar change failed!", text);
@@ -478,10 +490,7 @@ mod tests {
         }
     }
 
-    async fn login_as(session: Session, path: web::Path<i32>) -> HttpResponse {
-        login_user(&session, path.into_inner()).unwrap();
-        HttpResponse::Ok().finish()
-    }
+    use crate::middleware::auth::test_support::login as login_as;
 
     /// The profile routes plus a login shortcut; returns the app and alice's session cookie.
     macro_rules! app {
@@ -498,11 +507,13 @@ mod tests {
                     .app_data(web::Data::new(tera))
                     .wrap(SessionMiddleware::new(CookieSessionStore::default(), Key::from(&[7u8; 64])))
                     .route("/login/{id}", web::get().to(login_as))
-                    .route("/account/login", web::post().to(login_post))
-                    .route("/account/register", web::post().to(register_post))
-                    .route("/account/profile", web::get().to(profile))
-                    .route("/account/profile", web::post().to(profile_post))
-                    .route("/account/profile/avatar", web::post().to(avatar_post))
+                    .route("/login", web::post().to(login_post))
+                    .route("/register", web::post().to(register_post))
+                    .route("/logout", web::post().to(logout))
+                    .route("/account/{page:.+}", web::route().to(legacy_redirect))
+                    .route("/profile", web::get().to(profile))
+                    .route("/profile", web::post().to(profile_post))
+                    .route("/profile/avatar", web::post().to(avatar_post))
                     .route("/avatar/{id}", web::get().to(crate::handlers::users::avatar)),
             )
             .await;
@@ -542,7 +553,7 @@ mod tests {
     macro_rules! try_login {
         ($app:expr, $username:expr, $password:expr) => {{
             let req = test::TestRequest::post()
-                .uri("/account/login")
+                .uri("/login")
                 .set_form([("username", $username), ("password", $password)])
                 .to_request();
             let res = test::call_service(&$app, req).await;
@@ -573,7 +584,7 @@ mod tests {
             let app = &app;
             async move {
                 let req = test::TestRequest::post()
-                    .uri("/account/register")
+                    .uri("/register")
                     .set_form([
                         ("username", username),
                         ("email", email),
@@ -669,7 +680,7 @@ mod tests {
                 .to_request(),
         )
         .await;
-        assert_eq!(res.headers().get("Location").unwrap(), "/account/login");
+        assert_eq!(res.headers().get("Location").unwrap(), "/login");
         assert!(!User::hide_comments(&mut pool.get().unwrap(), 1).unwrap());
     }
 
@@ -717,6 +728,72 @@ mod tests {
         assert!(alice(&pool).verify_password("newpass1"));
         assert!(!alice(&pool).verify_password(PASSWORD));
         assert!(alice(&pool).password_hash.starts_with("$argon2"));
+    }
+
+    /// Whether `cookie` still gets alice's profile, rather than a redirect to the login page.
+    macro_rules! signed_in {
+        ($app:expr, $cookie:expr) => {{
+            let req = test::TestRequest::get().uri(PROFILE_URL).cookie($cookie.clone()).to_request();
+            test::call_service(&$app, req).await.status() == StatusCode::OK
+        }};
+    }
+
+    #[actix_web::test]
+    async fn a_copied_cookie_stops_working_after_logout() {
+        let (pool, cfg) = (pool(), config("logout"));
+        let (app, cookie) = app!(pool, cfg);
+        assert!(signed_in!(app, cookie));
+        let res =
+            test::call_service(&app, test::TestRequest::post().uri("/logout").cookie(cookie.clone()).to_request())
+                .await;
+        assert_eq!(res.status(), StatusCode::FOUND);
+        // The old cookie is still validly signed, but its session row is gone
+        assert!(!signed_in!(app, cookie));
+    }
+
+    #[actix_web::test]
+    async fn a_new_password_ends_other_sessions() {
+        let (pool, cfg) = (pool(), config("password-sessions"));
+        let (app, mut cookie) = app!(pool, cfg);
+        let res = test::call_service(&app, test::TestRequest::get().uri("/login/1").to_request()).await;
+        let other: Cookie<'static> = res.response().cookies().next().unwrap().into_owned();
+        assert!(signed_in!(app, other));
+
+        let form = [
+            ("tab", "password"),
+            ("current_password", PASSWORD),
+            ("new_password", "newpass1"),
+            ("password_confirm", "newpass1"),
+            ("authorized_submit", "Update"),
+        ];
+        let html = follow!(&app, test::call_service(&app, post(&cookie, &form).to_request()).await, &mut cookie);
+        assert!(html.contains("Password successfully changed!"), "{}", html);
+        // The browser that changed it stays signed in with its new cookie; the other doesn't
+        assert!(signed_in!(app, cookie));
+        assert!(!signed_in!(app, other));
+    }
+
+    #[actix_web::test]
+    async fn login_records_ip_and_old_account_urls_redirect() {
+        let (pool, cfg) = (pool(), config("login-ip"));
+        let (app, _) = app!(pool, cfg);
+        let req = test::TestRequest::post()
+            .uri("/login")
+            .peer_addr("10.1.2.3:4000".parse().unwrap())
+            .set_form([("username", "bob"), ("password", PASSWORD)])
+            .to_request();
+        assert_eq!(test::call_service(&app, req).await.status(), StatusCode::FOUND);
+        let bob = User::by_id(&mut pool.get().unwrap(), 2).unwrap().unwrap();
+        assert_eq!(bob.last_login_ip, Some(crate::utils::pack_ip("10.1.2.3".parse().unwrap())));
+        assert!(bob.last_login_date.is_some());
+
+        for (old, new) in [("/account/login?next=x", "/login?next=x"), ("/account/profile/avatar", "/profile/avatar")] {
+            let res = test::call_service(&app, test::TestRequest::post().uri(old).to_request()).await;
+            assert_eq!(res.status(), StatusCode::PERMANENT_REDIRECT);
+            assert_eq!(res.headers().get("Location").unwrap(), new);
+        }
+        let res = test::call_service(&app, test::TestRequest::get().uri("/account/nope").to_request()).await;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
     }
 
     #[actix_web::test]
@@ -870,7 +947,7 @@ mod tests {
         body.extend_from_slice(data);
         body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
         test::TestRequest::post()
-            .uri("/account/profile/avatar")
+            .uri("/profile/avatar")
             .cookie(cookie.clone())
             .insert_header(("Content-Type", format!("multipart/form-data; boundary={boundary}")))
             .set_payload(body)

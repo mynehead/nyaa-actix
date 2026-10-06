@@ -293,6 +293,15 @@ fn torrent_filename(name: &str) -> String {
     format!("{}.torrent", cleaned.trim())
 }
 
+/// Old download URLs, from before they matched upstream's.
+pub async fn legacy_download_redirect(path: web::Path<i32>) -> HttpResponse {
+    HttpResponse::MovedPermanently().insert_header(("Location", format!("/download/{}.torrent", path))).finish()
+}
+
+pub async fn legacy_magnet_redirect(path: web::Path<i32>) -> HttpResponse {
+    HttpResponse::MovedPermanently().insert_header(("Location", format!("/view/{}/magnet", path))).finish()
+}
+
 pub async fn magnet_redirect(
     session: Session,
     pool: web::Data<DbPool>,
@@ -317,7 +326,7 @@ pub async fn upload_get(
     cfg: web::Data<Config>,
 ) -> Result<HttpResponse> {
     let Some(user) = get_current_user(&session, &pool) else {
-        return Ok(HttpResponse::Found().insert_header(("Location", "/account/login")).finish());
+        return Ok(HttpResponse::Found().insert_header(("Location", "/login")).finish());
     };
     let mut conn = pool.get().map_err(internal_error)?;
     // Trusted users' uploads start out marked trusted, as upstream
@@ -935,10 +944,7 @@ mod tests {
             Storage::local(&dir, &dir).unwrap()
         }
 
-        async fn login(session: Session, path: web::Path<i32>) -> HttpResponse {
-            crate::middleware::auth::login_user(&session, path.into_inner()).unwrap();
-            HttpResponse::Ok().finish()
-        }
+        use crate::middleware::auth::test_support::login;
 
         /// The edit routes plus a login shortcut; returns the app and a session cookie for `user`.
         macro_rules! app {

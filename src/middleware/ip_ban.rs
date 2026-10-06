@@ -8,7 +8,7 @@ use actix_web::middleware::Next;
 use actix_web::{http::Method, web, Error, HttpResponse};
 
 use crate::db::DbPool;
-use crate::middleware::auth::{logout_user, SESSION_USER_KEY};
+use crate::middleware::auth::{logout_user, SESSION_ID_KEY};
 use crate::models::Ban;
 use crate::utils::{client_ip, internal_error};
 
@@ -24,9 +24,9 @@ pub async fn reject_banned_ip(
             let banned = Ban::ip_banned(&mut conn, &ip).map_err(internal_error)?;
             if banned {
                 let session = req.get_session();
-                let response = if session.get::<i32>(SESSION_USER_KEY).ok().flatten().is_some() {
+                let response = if session.get::<String>(SESSION_ID_KEY).ok().flatten().is_some() {
                     // Upstream's logout(): sign out and go home
-                    logout_user(&session);
+                    logout_user(&session, &pool);
                     HttpResponse::Found().insert_header(("Location", "/")).finish()
                 } else {
                     HttpResponse::Forbidden().body("You are banned.")

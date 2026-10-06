@@ -34,7 +34,7 @@ pub async fn home(
     let current_user = get_current_user(&session, &pool);
     let is_admin = current_user.as_ref().map(|u| u.is_moderator()).unwrap_or(false);
 
-    let q = SearchQuery::from_params(
+    let mut q = SearchQuery::from_params(
         params.q.clone(),
         None,
         None,
@@ -46,6 +46,7 @@ pub async fn home(
         cfg.results_per_page,
         is_admin,
     );
+    q.viewer_id = current_user.as_ref().map(|u| u.id);
 
     let mut conn = pool.get().map_err(internal_error)?;
 

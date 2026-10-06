@@ -67,7 +67,7 @@ pub async fn request_trusted(
     form: Option<web::Form<TrustedForm>>,
 ) -> Result<HttpResponse> {
     let Some(user) = get_current_user(&session, &pool) else {
-        return Ok(redirect("/account/login"));
+        return Ok(redirect("/login"));
     };
     let mut conn = pool.get().map_err(internal_error)?;
     let deny_reasons = trusted_deny_reasons(&mut conn, &user, &cfg.trusted).map_err(internal_error)?;
@@ -303,10 +303,7 @@ mod tests {
         }
     }
 
-    async fn login(session: Session, path: web::Path<i32>) -> HttpResponse {
-        crate::middleware::auth::login_user(&session, path.into_inner()).unwrap();
-        HttpResponse::Ok().finish()
-    }
+    use crate::middleware::auth::test_support::login;
 
     /// The trusted routes plus a login shortcut; returns the app and a session cookie for `user`.
     macro_rules! app {
@@ -439,7 +436,7 @@ mod tests {
         let pool = pool();
         let (app, _) = app!(pool, 1);
         let res = test::call_service(&app, get("/trusted/request").to_request()).await;
-        assert_eq!(res.headers().get("Location").unwrap(), "/account/login");
+        assert_eq!(res.headers().get("Location").unwrap(), "/login");
         let res = test::call_service(&app, get("/admin/trusted").to_request()).await;
         assert_eq!(res.status(), StatusCode::FORBIDDEN);
     }

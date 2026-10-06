@@ -450,10 +450,7 @@ mod tests {
         pool
     }
 
-    async fn login(session: Session, path: web::Path<i32>) -> HttpResponse {
-        crate::middleware::auth::login_user(&session, path.into_inner()).unwrap();
-        HttpResponse::Ok().finish()
-    }
+    use crate::middleware::auth::test_support::login;
 
     fn perms(pool: &DbPool, user: i32) -> Option<i32> {
         group_members::table

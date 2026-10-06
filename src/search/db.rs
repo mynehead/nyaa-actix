@@ -35,6 +35,8 @@ pub struct SearchQuery {
     pub include_hidden: bool,
     /// Leave out anonymous uploads (set on profile pages for other viewers).
     pub hide_anonymous: bool,
+    /// The logged-in visitor. In the general listing they also see their own hidden uploads.
+    pub viewer_id: Option<i32>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -72,6 +74,7 @@ impl SearchQuery {
             include_deleted: false,
             include_hidden: false,
             hide_anonymous: false,
+            viewer_id: None,
         }
     }
 
@@ -117,6 +120,18 @@ impl SearchQuery {
             include_deleted: is_admin,
             include_hidden: is_admin,
             hide_anonymous: false,
+            viewer_id: None,
+        }
+    }
+}
+
+impl SearchQuery {
+    /// Whose hidden uploads this listing also shows: the visitor's, in the general listing.
+    pub fn own_hidden_viewer(&self) -> Option<i32> {
+        if self.user_id.is_none() {
+            self.viewer_id
+        } else {
+            None
         }
     }
 }
@@ -213,9 +228,14 @@ fn filtered(q: &SearchQuery) -> nyaa_torrents::BoxedQuery<'static, crate::db::Mu
         query = query.filter(nyaa_torrents::flags.bitand(deleted_banned).eq(0));
     }
 
-    // Hidden torrents are reachable by link only, including on the uploader's profile
+    // Hidden torrents are reachable by link only, except that uploaders see their own in
+    // the general listing (upstream does the same)
     if !q.include_hidden {
-        query = query.filter(nyaa_torrents::flags.bitand(TorrentFlags::HIDDEN.bits()).eq(0));
+        let not_hidden = nyaa_torrents::flags.bitand(TorrentFlags::HIDDEN.bits()).eq(0);
+        query = match q.own_hidden_viewer() {
+            Some(viewer) => query.filter(not_hidden.or(nyaa_torrents::uploader_id.eq(viewer))),
+            None => query.filter(not_hidden),
+        };
     }
 
     // Anonymous torrents must not be tied to their uploader in listings
@@ -350,6 +370,20 @@ mod tests {
     fn main_listing_shows_anonymous_but_not_hidden() {
         let mut conn = db_with(&[(1, TorrentFlags::empty()), (2, TorrentFlags::HIDDEN), (3, TorrentFlags::ANONYMOUS)]);
         assert_eq!(ids(&mut conn, &SearchQuery::new()), (vec![3, 1], 2));
+    }
+
+    #[test]
+    fn uploaders_see_their_own_hidden_torrents_in_the_main_listing() {
+        let mut conn = db_with(&[(1, TorrentFlags::empty()), (2, TorrentFlags::HIDDEN)]);
+        let mut q = SearchQuery::new();
+        q.viewer_id = Some(1);
+        assert_eq!(ids(&mut conn, &q), (vec![2, 1], 2));
+        q.viewer_id = Some(2);
+        assert_eq!(ids(&mut conn, &q), (vec![1], 1));
+        // Profiles keep their own rules
+        q.viewer_id = Some(1);
+        q.user_id = Some(1);
+        assert_eq!(ids(&mut conn, &q), (vec![1], 1));
     }
 
     #[test]
