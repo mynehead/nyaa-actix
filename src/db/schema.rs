@@ -113,6 +113,39 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    trusted_applications (id) {
+        id -> Integer,
+        submitter_id -> Integer,
+        created_time -> Timestamp,
+        closed_time -> Nullable<Timestamp>,
+        why_want -> Text,
+        why_give -> Text,
+        status -> Integer,
+    }
+}
+
+diesel::table! {
+    trusted_reviews (id) {
+        id -> Integer,
+        reviewer_id -> Integer,
+        app_id -> Integer,
+        created_time -> Timestamp,
+        comment -> Text,
+        recommendation -> Integer,
+    }
+}
+
+diesel::table! {
+    adminlog (id) {
+        id -> Integer,
+        created_time -> Timestamp,
+        log -> Text,
+        admin_id -> Integer,
+    }
+}
+
+diesel::joinable!(adminlog -> users (admin_id));
 diesel::joinable!(groups -> users (owner_id));
 diesel::joinable!(nyaa_torrents -> users (uploader_id));
 diesel::joinable!(nyaa_torrents -> groups (group_id));
@@ -122,8 +155,10 @@ diesel::joinable!(nyaa_comments -> users (user_id));
 diesel::joinable!(user_preferences -> users (user_id));
 diesel::joinable!(group_members -> groups (group_id));
 diesel::joinable!(group_members -> users (user_id));
+diesel::joinable!(trusted_reviews -> trusted_applications (app_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
+    adminlog,
     users,
     groups,
     group_members,
@@ -134,4 +169,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     nyaa_comments,
     bans,
     user_preferences,
+    trusted_applications,
+    trusted_reviews,
 );

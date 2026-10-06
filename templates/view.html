@@ -172,6 +172,26 @@
 		</p>
 	</div>
 	{% endif %}
+	{% if can_comment %}
+	<form class="comment-box" method="POST" action="/view/{{ torrent.id }}">
+		<div class="row">
+			<div class="col-md-12">
+				<div class="form-group{% if comment_error %} has-error{% endif %}">
+					<label class="control-label" for="comment">Make a comment</label>
+					<textarea class="form-control" id="comment" name="comment" required>{{ comment_text }}</textarea>
+					{% if comment_error %}
+					<div class="help-block">{{ comment_error }}</div>
+					{% endif %}
+				</div>
+			</div>
+		</div>
+		<div class="row">
+			<div class="col-md-12">
+				<input type="submit" value="Submit" class="btn btn-success btn-sm">
+			</div>
+		</div>
+	</form>
+	{% endif %}
 	</div>
 </div>
 
