@@ -1,0 +1,14 @@
+# Keep the build context small and secrets out of the image
+target/
+.git/
+.github/
+.env
+*.db
+*.db-shm
+*.db-wal
+torrents/
+avatars/
+docker/
+docs/
+*.md
+!static/**/*.md
