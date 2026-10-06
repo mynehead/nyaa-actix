@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::sync::LazyLock;
+use std::time::Duration;
 
 use actix_multipart::Multipart;
 use actix_session::Session;
@@ -12,9 +14,10 @@ use crate::config::Config;
 use crate::db::schema::users;
 use crate::db::{DbConnection, DbPool};
 use crate::middleware::auth::{get_current_user, login_user, logout_user};
-use crate::models::{Ban, NewUser, User};
+use crate::models::{password_matches, Ban, NewUser, User};
 use crate::storage::{Kind, Storage};
 use crate::utils::context::base_context;
+use crate::utils::throttle::Throttle;
 use crate::utils::{avatar, flash, pack_ip};
 
 #[derive(Debug, Deserialize)]
@@ -59,8 +62,31 @@ pub async fn login_post(
     let user =
         User::by_username_or_email(&mut conn, &form.username).map_err(actix_web::error::ErrorInternalServerError)?;
 
+    // Count by account, so trying the username and then the email address shares one limit
+    let ip = client_key(&req);
+    let account = match &user {
+        Some(u) => format!("user:{}", u.id),
+        None => format!("name:{}", form.username.trim().to_lowercase()),
+    };
+    if LOGIN_FAILURES_BY_IP.is_blocked(&ip) || LOGIN_FAILURES_BY_ACCOUNT.is_blocked(&account) {
+        let mut ctx = base_context(&cfg, None);
+        ctx.insert("error", "Too many failed login attempts. Try again in 15 minutes.");
+        ctx.insert("username", &form.username);
+        let html = tmpl.render("login.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+        return Ok(HttpResponse::TooManyRequests().content_type("text/html").body(html));
+    }
+
+    // Argon2 takes tens of milliseconds of CPU; keep it off the async workers
+    let (checked_user, password) = (user.clone(), form.password.clone());
+    let password_ok = web::block(move || password_matches(checked_user.as_ref(), &password)).await?;
+    if !password_ok {
+        LOGIN_FAILURES_BY_IP.hit(&ip);
+        LOGIN_FAILURES_BY_ACCOUNT.hit(&account);
+    }
+
     let error = match user {
-        Some(ref u) if u.verify_password(&form.password) && u.is_active() => {
+        Some(ref u) if password_ok && u.is_active() => {
+            LOGIN_FAILURES_BY_ACCOUNT.clear(&account);
             // Upstream records these on login; IP bans from the user page use last_login_ip
             diesel::update(users::table.find(u.id))
                 .set((
@@ -72,7 +98,8 @@ pub async fn login_post(
             login_user(&session, u.id).ok();
             return Ok(HttpResponse::Found().insert_header(("Location", "/")).finish());
         }
-        Some(ref u) if u.is_banned() => {
+        // Like upstream, the ban (and its reason) only shows after the right password
+        Some(ref u) if password_ok && u.is_banned() => {
             let reason = Ban::banned(&mut conn, Some(u.id), None)
                 .map_err(actix_web::error::ErrorInternalServerError)?
                 .into_iter()
@@ -87,8 +114,7 @@ pub async fn login_post(
                 None => "Your account has been banned.".to_string(),
             })
         }
-        Some(_) => Some("Invalid username or password.".to_string()),
-        None => Some("Invalid username or password.".to_string()),
+        _ => Some("Invalid username or password.".to_string()),
     };
 
     let mut ctx = base_context(&cfg, None);
@@ -115,12 +141,24 @@ pub async fn register_get(
 }
 
 pub async fn register_post(
+    req: HttpRequest,
     session: Session,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
     form: web::Form<RegisterForm>,
 ) -> Result<HttpResponse> {
+    let ip = client_key(&req);
+    if REGISTRATIONS_BY_IP.is_blocked(&ip) {
+        let mut ctx = base_context(&cfg, None);
+        ctx.insert("errors", &["Too many registrations from your address. Try again later."]);
+        ctx.insert("username", &form.username);
+        ctx.insert("email", &form.email);
+        let html = tmpl.render("register.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+        return Ok(HttpResponse::TooManyRequests().content_type("text/html").body(html));
+    }
+    REGISTRATIONS_BY_IP.hit(&ip);
+
     let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
     let mut errors: Vec<String> = Vec::new();
 
@@ -155,7 +193,8 @@ pub async fn register_post(
             .body(html));
     }
 
-    let new_user = NewUser::new(&form.username, Some(&form.email), &form.password);
+    let (username, email, password) = (form.username.clone(), form.email.clone(), form.password.clone());
+    let new_user = web::block(move || NewUser::new(&username, Some(&email), &password)).await?;
     diesel::insert_into(users::table)
         .values(&new_user)
         .execute(&mut conn)
@@ -167,6 +206,18 @@ pub async fn register_post(
 
     login_user(&session, user.id).ok();
     Ok(HttpResponse::Found().insert_header(("Location", "/")).finish())
+}
+
+/// Failed logins allowed per address and per account name before a 15-minute pause.
+/// The per-address limit is high because users behind one NAT or proxy share it.
+static LOGIN_FAILURES_BY_IP: LazyLock<Throttle> = LazyLock::new(|| Throttle::new(50, Duration::from_secs(15 * 60)));
+static LOGIN_FAILURES_BY_ACCOUNT: LazyLock<Throttle> =
+    LazyLock::new(|| Throttle::new(10, Duration::from_secs(15 * 60)));
+/// Registration attempts per address per hour.
+static REGISTRATIONS_BY_IP: LazyLock<Throttle> = LazyLock::new(|| Throttle::new(20, Duration::from_secs(60 * 60)));
+
+fn client_key(req: &HttpRequest) -> String {
+    format!("ip:{}", req.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default())
 }
 
 pub async fn logout(session: Session) -> HttpResponse {
@@ -438,6 +489,7 @@ mod tests {
                     .app_data(web::Data::new(tera))
                     .wrap(SessionMiddleware::new(CookieSessionStore::default(), Key::from(&[7u8; 64])))
                     .route("/login/{id}", web::get().to(login_as))
+                    .route("/account/login", web::post().to(login_post))
                     .route("/account/profile", web::get().to(profile))
                     .route("/account/profile", web::post().to(profile_post))
                     .route("/account/profile/avatar", web::post().to(avatar_post))
@@ -474,6 +526,54 @@ mod tests {
 
     fn alice(pool: &DbPool) -> User {
         User::by_id(&mut pool.get().unwrap(), 1).unwrap().unwrap()
+    }
+
+    /// Posts the login form; gives the status and page.
+    macro_rules! try_login {
+        ($app:expr, $username:expr, $password:expr) => {{
+            let req = test::TestRequest::post()
+                .uri("/account/login")
+                .set_form([("username", $username), ("password", $password)])
+                .to_request();
+            let res = test::call_service(&$app, req).await;
+            let status = res.status();
+            (status, String::from_utf8(test::read_body(res).await.to_vec()).unwrap())
+        }};
+    }
+
+    #[actix_web::test]
+    async fn ban_reason_needs_the_right_password() {
+        let (pool, cfg) = (pool(), config("ban-reason"));
+        let (app, _) = app!(pool, cfg);
+        diesel::update(users::table.find(2)).set(users::status.eq(2)).execute(&mut pool.get().unwrap()).unwrap();
+
+        let (status, body) = try_login!(app, "bob", "wrong");
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert!(body.contains("Invalid username or password.") && !body.contains("banned"));
+
+        let (status, body) = try_login!(app, "bob", PASSWORD);
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert!(body.contains("banned"));
+    }
+
+    #[actix_web::test]
+    async fn repeated_failed_logins_lock_the_account_for_a_while() {
+        let (pool, cfg) = (pool(), config("throttle"));
+        let (app, _) = app!(pool, cfg);
+        // A user no other test logs in as: the counters are process-wide. Username and
+        // email count against the same account.
+        diesel::insert_into(users::table)
+            .values(&NewUser::new("carol", Some("carol@example.com"), PASSWORD))
+            .execute(&mut pool.get().unwrap())
+            .unwrap();
+        for i in 0..10 {
+            let name = if i % 2 == 0 { "carol" } else { "carol@example.com" };
+            assert_eq!(try_login!(app, name, "wrong").0, StatusCode::UNAUTHORIZED);
+        }
+        // Locked, even with the right password
+        let (status, body) = try_login!(app, "carol", PASSWORD);
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert!(body.contains("Too many failed login attempts"));
     }
 
     #[actix_web::test]

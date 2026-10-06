@@ -35,8 +35,9 @@ pub fn connect(url: &str) -> ConnectionResult<DbConnection> {
     }
     let mut conn = SqliteConnection::establish(url)?;
     // The server and `create-user` may write at once; wait for the lock instead of failing.
-    diesel::sql_query("PRAGMA busy_timeout = 5000")
-        .execute(&mut conn)
+    // SQLite ignores the schema's foreign keys unless each connection turns them on;
+    // PostgreSQL always enforces them, so this keeps both backends alike.
+    conn.batch_execute("PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;")
         .map_err(ConnectionError::CouldntSetupConfiguration)?;
     Ok(DbConnection::Sqlite(conn))
 }

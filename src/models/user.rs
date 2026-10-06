@@ -42,12 +42,17 @@ pub struct User {
     pub id: i32,
     pub username: String,
     pub email: Option<String>,
+    // The hash and IPs never go into template context (users are serialized for Tera);
+    // pages that show the IPs pass them on their own.
+    #[serde(skip_serializing, default)]
     pub password_hash: String,
     pub status: i32,
     pub level: i32,
     pub created_time: NaiveDateTime,
     pub last_login_date: Option<NaiveDateTime>,
+    #[serde(skip_serializing, default)]
     pub last_login_ip: Option<Vec<u8>>,
+    #[serde(skip_serializing, default)]
     pub registration_ip: Option<Vec<u8>>,
     /// When the current uploaded avatar was set; None when there is none.
     pub avatar_time: Option<NaiveDateTime>,
@@ -57,6 +62,23 @@ pub struct User {
 pub fn hash_password(password: &str) -> String {
     let salt = SaltString::generate(&mut OsRng);
     Argon2::default().hash_password(password.as_bytes(), &salt).expect("failed to hash password").to_string()
+}
+
+/// Checks `password` against `user`'s hash. Without a user it checks a throwaway hash
+/// anyway, so an unknown username takes as long to reject as a wrong password.
+pub fn password_matches(user: Option<&User>, password: &str) -> bool {
+    static DUMMY_HASH: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| hash_password("no such user"));
+    match user {
+        Some(u) => u.verify_password(password),
+        None => {
+            let _ = verify_hash(&DUMMY_HASH, password);
+            false
+        }
+    }
+}
+
+fn verify_hash(hash: &str, password: &str) -> bool {
+    PasswordHash::new(hash).is_ok_and(|hash| Argon2::default().verify_password(password.as_bytes(), &hash).is_ok())
 }
 
 pub const DEFAULT_AVATAR: &str = "/static/img/avatar/default.png";
@@ -121,11 +143,7 @@ impl User {
     }
 
     pub fn verify_password(&self, password: &str) -> bool {
-        if let Ok(hash) = PasswordHash::new(&self.password_hash) {
-            Argon2::default().verify_password(password.as_bytes(), &hash).is_ok()
-        } else {
-            false
-        }
+        verify_hash(&self.password_hash, password)
     }
 
     /// The uploaded avatar, else Gravatar when enabled (upstream `gravatar_url`), else the default.
@@ -228,5 +246,47 @@ impl NewUser {
             level: UserLevel::Regular as i32,
             created_time: chrono::Utc::now().naive_utc(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn template_json_leaves_out_hash_and_ips() {
+        let user = User {
+            id: 1,
+            username: "alice".into(),
+            email: Some("a@example.com".into()),
+            password_hash: hash_password("secret123"),
+            status: UserStatus::Active as i32,
+            level: UserLevel::Regular as i32,
+            created_time: chrono::Utc::now().naive_utc(),
+            last_login_date: None,
+            last_login_ip: Some(vec![127, 0, 0, 1]),
+            registration_ip: Some(vec![127, 0, 0, 1]),
+            avatar_time: None,
+        };
+        let json = serde_json::to_value(&user).unwrap();
+        for hidden in ["password_hash", "last_login_ip", "registration_ip"] {
+            assert!(json.get(hidden).is_none(), "{hidden} serialized");
+        }
+        // Tera filters read users back from that JSON
+        let back: User = serde_json::from_value(json).unwrap();
+        assert_eq!(back.username, "alice");
+    }
+
+    #[test]
+    fn password_matches_checks_the_hash_and_rejects_missing_users() {
+        let mut user: User = serde_json::from_value(serde_json::json!({
+            "id": 1, "username": "alice", "email": null, "status": 1, "level": 0,
+            "created_time": "2026-10-06T00:00:00", "last_login_date": null, "avatar_time": null
+        }))
+        .unwrap();
+        user.password_hash = hash_password("secret123");
+        assert!(password_matches(Some(&user), "secret123"));
+        assert!(!password_matches(Some(&user), "wrong"));
+        assert!(!password_matches(None, "secret123"));
     }
 }

@@ -33,6 +33,8 @@ pub struct Torrent {
     pub encoding: String,
     pub flags: i32,
     pub uploader_id: Option<i32>,
+    /// Never goes into template context; pages that may show it pass it on its own.
+    #[serde(skip_serializing, default)]
     pub uploader_ip: Option<Vec<u8>>,
     pub has_torrent: i32,
     pub comment_count: i32,

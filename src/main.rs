@@ -14,7 +14,7 @@ use actix_session::{storage::CookieSessionStore, SessionMiddleware};
 use actix_web::{
     cookie::Key,
     http::StatusCode,
-    middleware::{ErrorHandlers, Logger},
+    middleware::{DefaultHeaders, ErrorHandlers, Logger},
     web, App, HttpServer,
 };
 use socket2::{Domain, Protocol, Socket, Type};
@@ -75,6 +75,8 @@ async fn main() -> std::io::Result<()> {
             .wrap(ErrorHandlers::new().handler(StatusCode::NOT_FOUND, handlers::site::not_found))
             .wrap(Logger::default())
             .wrap(actix_web::middleware::from_fn(middleware::ip_ban::reject_banned_ip))
+            .wrap(actix_web::middleware::from_fn(middleware::csrf::reject_cross_site))
+            .wrap(security_headers())
             .wrap(SessionMiddleware::new(CookieSessionStore::default(), secret_key.clone()))
             // Static files
             .service(fs::Files::new("/static", "./static"))
@@ -108,7 +110,7 @@ async fn main() -> std::io::Result<()> {
             .route("/account/login", web::post().to(handlers::account::login_post))
             .route("/account/register", web::get().to(handlers::account::register_get))
             .route("/account/register", web::post().to(handlers::account::register_post))
-            .route("/account/logout", web::get().to(handlers::account::logout))
+            .route("/account/logout", web::post().to(handlers::account::logout))
             .route("/account/profile", web::get().to(handlers::account::profile))
             .route("/account/profile", web::post().to(handlers::account::profile_post))
             .route("/account/profile/avatar", web::post().to(handlers::account::avatar_post))
@@ -151,6 +153,25 @@ async fn main() -> std::io::Result<()> {
 }
 
 const PORT: u16 = 8080;
+
+/// Headers every response gets. The CSP allows inline scripts and styles because the
+/// templates (from upstream) use them; it still blocks scripts from other hosts, plugins,
+/// framing and form posts to other sites.
+fn security_headers() -> DefaultHeaders {
+    DefaultHeaders::new()
+        .add((
+            "Content-Security-Policy",
+            "default-src 'self'; \
+             script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; \
+             style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; \
+             font-src 'self' data: https://cdnjs.cloudflare.com; \
+             img-src * data:; \
+             object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        ))
+        .add(("X-Frame-Options", "DENY"))
+        .add(("X-Content-Type-Options", "nosniff"))
+        .add(("Referrer-Policy", "same-origin"))
+}
 
 /// A listening socket like the one `HttpServer::bind` makes, except that an IPv6 one
 /// takes IPv6 only, so it can sit next to the IPv4 one on the same port on every OS.

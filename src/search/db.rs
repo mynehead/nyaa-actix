@@ -147,6 +147,17 @@ pub struct SearchResult {
 
 use crate::models::TorrentFlags;
 
+fn escape_like(term: &str) -> String {
+    let mut out = String::with_capacity(term.len());
+    for c in term.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// Builds the filtered (unsorted, unpaged) query. Used for both the count
 /// and the page so the two can't disagree on what is visible.
 fn filtered(q: &SearchQuery) -> nyaa_torrents::BoxedQuery<'static, crate::db::MultiBackend> {
@@ -154,7 +165,9 @@ fn filtered(q: &SearchQuery) -> nyaa_torrents::BoxedQuery<'static, crate::db::Mu
 
     // Term search (case-insensitive LIKE on display_name)
     if let Some(ref term) = q.term {
-        query = query.filter(lower(nyaa_torrents::display_name).like(lower(format!("%{}%", term))));
+        // `%` and `_` in the term are literal characters, not wildcards
+        let pattern = format!("%{}%", escape_like(term));
+        query = query.filter(lower(nyaa_torrents::display_name).like(lower(pattern)).escape('\\'));
     }
 
     // User filter
@@ -218,7 +231,8 @@ pub fn search(conn: &mut DbConnection, q: &SearchQuery) -> QueryResult<SearchRes
     let query = filtered(q);
 
     // Sort
-    let offset = (q.page - 1) * q.per_page;
+    // `p` comes from the URL; a huge one must not overflow
+    let offset = (q.page - 1).saturating_mul(q.per_page);
     // Stats live in their own table; sort on a correlated subquery so torrents
     // without a stats row still list (NULL sorts as lowest).
     macro_rules! stat {
@@ -336,6 +350,30 @@ mod tests {
     fn main_listing_shows_anonymous_but_not_hidden() {
         let mut conn = db_with(&[(1, TorrentFlags::empty()), (2, TorrentFlags::HIDDEN), (3, TorrentFlags::ANONYMOUS)]);
         assert_eq!(ids(&mut conn, &SearchQuery::new()), (vec![3, 1], 2));
+    }
+
+    #[test]
+    fn percent_and_underscore_in_terms_are_literal() {
+        let mut conn = db_with(&[(1, TorrentFlags::empty()), (2, TorrentFlags::empty()), (3, TorrentFlags::empty())]);
+        diesel::sql_query(
+            "UPDATE nyaa_torrents SET display_name = CASE id \
+             WHEN 1 THEN '100% done' WHEN 2 THEN '100 done' ELSE 'a_b' END",
+        )
+        .execute(&mut conn)
+        .unwrap();
+        let mut q = SearchQuery::new();
+        q.term = Some("100%".into());
+        assert_eq!(ids(&mut conn, &q), (vec![1], 1));
+        q.term = Some("_".into());
+        assert_eq!(ids(&mut conn, &q), (vec![3], 1));
+    }
+
+    #[test]
+    fn huge_page_numbers_do_not_overflow() {
+        let mut conn = db_with(&[(1, TorrentFlags::empty())]);
+        let mut q = SearchQuery::new();
+        q.page = i64::MAX;
+        assert_eq!(ids(&mut conn, &q), (vec![], 1));
     }
 
     #[test]
