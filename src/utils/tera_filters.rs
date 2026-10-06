@@ -224,6 +224,9 @@ mod render_tests {
         let mut ctx = base_context(&cfg, Some(&user(1)));
         ctx.insert("categories", &Vec::<(crate::models::MainCategory, Vec<crate::models::SubCategory>)>::new());
         ctx.insert("groups", &Vec::<crate::models::Group>::new());
+        ctx.insert("form", &crate::handlers::torrents::EditForm::default());
+        ctx.insert("group_id", &None::<i32>);
+        ctx.insert("errors", &std::collections::HashMap::<&str, String>::new());
         assert!(render("upload.html", &ctx).contains("name=\"is_trusted\""));
     }
 }

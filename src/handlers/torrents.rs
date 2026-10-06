@@ -316,30 +316,41 @@ pub async fn upload_get(
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
 ) -> Result<HttpResponse> {
-    let current_user = get_current_user(&session, &pool);
-    if current_user.is_none() {
+    let Some(user) = get_current_user(&session, &pool) else {
         return Ok(HttpResponse::Found().insert_header(("Location", "/account/login")).finish());
-    }
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
-    let categories =
-        crate::models::get_all_categories(&mut conn).map_err(actix_web::error::ErrorInternalServerError)?;
-
-    let groups: Vec<crate::models::Group> = if let Some(ref user) = current_user {
-        crate::models::Group::all(&mut conn)
-            .map_err(actix_web::error::ErrorInternalServerError)?
-            .into_iter()
-            .filter(|g| g.can_upload(&mut conn, user.id))
-            .collect()
-    } else {
-        vec![]
     };
+    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    // Trusted users' uploads start out marked trusted, as upstream
+    let form = EditForm { is_trusted: user.is_trusted(), ..Default::default() };
+    let html = render_upload(&mut conn, &tmpl, &cfg, &user, &form, None, &HashMap::new())?;
+    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+}
 
-    let mut ctx = base_context(&cfg, current_user.as_ref());
+/// The upload page, refilled with `form` and showing `errors` by field
+/// (`torrent_file` for problems with the file itself).
+fn render_upload(
+    conn: &mut DbConnection,
+    tmpl: &Tera,
+    cfg: &Config,
+    user: &User,
+    form: &EditForm,
+    group_id: Option<i32>,
+    errors: &HashMap<&'static str, String>,
+) -> Result<String> {
+    let categories = crate::models::get_all_categories(conn).map_err(actix_web::error::ErrorInternalServerError)?;
+    let groups: Vec<crate::models::Group> = crate::models::Group::all(conn)
+        .map_err(actix_web::error::ErrorInternalServerError)?
+        .into_iter()
+        .filter(|g| g.can_upload(conn, user.id))
+        .collect();
+    let mut ctx = base_context(cfg, Some(user));
     ctx.insert("active_page", "upload");
     ctx.insert("categories", &categories);
     ctx.insert("groups", &groups);
-    let html = tmpl.render("upload.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
-    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+    ctx.insert("form", form);
+    ctx.insert("group_id", &group_id);
+    ctx.insert("errors", errors);
+    tmpl.render("upload.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)
 }
 
 /// nyaa's limit for .torrent files.
@@ -367,23 +378,19 @@ pub async fn upload_post(
     req: HttpRequest,
     session: Session,
     pool: web::Data<DbPool>,
+    tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
     storage: web::Data<Storage>,
     mut payload: Multipart,
 ) -> Result<HttpResponse> {
-    let current_user = get_current_user(&session, &pool);
-    if current_user.is_none() {
+    let Some(user) = get_current_user(&session, &pool) else {
         return Err(actix_web::error::ErrorUnauthorized("Login required"));
-    }
+    };
     let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
 
     let mut torrent_bytes: Option<Vec<u8>> = None;
-    let mut display_name = String::new();
-    let mut information = String::new();
-    let mut description = String::new();
-    let mut category = String::new();
+    let mut form = EditForm::default();
     let mut group_id: Option<i32> = None;
-    let mut flags: i32 = 0;
 
     let mut field_count = 0;
     while let Some(item) = payload.next().await {
@@ -395,86 +402,87 @@ pub async fn upload_post(
         let name = field.name().unwrap_or_default().to_string();
         let limit = if name == "torrent_file" { MAX_TORRENT_SIZE } else { MAX_TEXT_FIELD_SIZE };
         let data = read_field(&mut field, limit).await?;
+        let text = || String::from_utf8_lossy(&data).into_owned();
         match name.as_str() {
             "torrent_file" => torrent_bytes = Some(data),
-            "display_name" => display_name = String::from_utf8_lossy(&data).into_owned(),
-            "information" => information = String::from_utf8_lossy(&data).into_owned(),
-            "description" => description = String::from_utf8_lossy(&data).into_owned(),
-            "category" => category = String::from_utf8_lossy(&data).into_owned(),
-            "group_id" => group_id = String::from_utf8_lossy(&data).parse().ok(),
-            "is_hidden" => {
-                if !data.is_empty() {
-                    flags |= crate::models::TorrentFlags::HIDDEN.bits();
-                }
-            }
-            "is_remake" => {
-                if !data.is_empty() {
-                    flags |= crate::models::TorrentFlags::REMAKE.bits();
-                }
-            }
-            "is_anonymous" => {
-                if !data.is_empty() {
-                    flags |= crate::models::TorrentFlags::ANONYMOUS.bits();
-                }
-            }
-            "is_complete" => {
-                if !data.is_empty() {
-                    flags |= crate::models::TorrentFlags::COMPLETE.bits();
-                }
-            }
-            "is_trusted" if !data.is_empty() && current_user.as_ref().map(|u| u.is_trusted()).unwrap_or(false) => {
-                flags |= crate::models::TorrentFlags::TRUSTED.bits();
-            }
+            "display_name" => form.display_name = text(),
+            "information" => form.information = text(),
+            "description" => form.description = text(),
+            "category" => form.category = text(),
+            "group_id" => group_id = text().parse().ok().filter(|&id| id != 0),
+            "is_hidden" => form.is_hidden = !data.is_empty(),
+            "is_remake" => form.is_remake = !data.is_empty(),
+            "is_anonymous" => form.is_anonymous = !data.is_empty(),
+            "is_complete" => form.is_complete = !data.is_empty(),
+            "is_trusted" => form.is_trusted = !data.is_empty(),
             _ => {}
         }
     }
 
-    let torrent_bytes = torrent_bytes.ok_or_else(|| actix_web::error::ErrorBadRequest("No torrent file uploaded"))?;
-
-    let meta = parse_torrent(&torrent_bytes)
-        .map_err(|e| actix_web::error::ErrorBadRequest(format!("Invalid torrent: {}", e)))?;
+    // The same checks as the edit form, plus the file's own; all are shown at once
+    let mut errors = HashMap::new();
+    let meta = match torrent_bytes.as_deref().map(parse_torrent) {
+        None => {
+            errors.insert("torrent_file", "Please select a torrent file.".to_string());
+            None
+        }
+        Some(Err(e)) => {
+            errors.insert("torrent_file", format!("Invalid torrent: {e}"));
+            None
+        }
+        Some(Ok(meta)) => Some(meta),
+    };
 
     // A deleted (but not banned) torrent may be uploaded again; the new upload
     // replaces it and keeps its id, as upstream.
-    let replaced_id =
+    let mut replaced_id = None;
+    if let Some(meta) = &meta {
         match Torrent::by_info_hash(&mut conn, &meta.info_hash).map_err(actix_web::error::ErrorInternalServerError)? {
             Some(t) if !t.is_deleted() => {
-                return Err(actix_web::error::ErrorBadRequest(format!("This torrent already exists (#{})", t.id)))
+                errors.insert("torrent_file", format!("This torrent already exists (#{})", t.id));
             }
-            Some(t) if t.is_banned() => return Err(actix_web::error::ErrorBadRequest("This torrent is banned")),
-            Some(t) => Some(t.id),
-            None => None,
-        };
+            Some(t) if t.is_banned() => {
+                errors.insert("torrent_file", "This torrent is banned".to_string());
+            }
+            Some(t) => replaced_id = Some(t.id),
+            None => {}
+        }
+    }
 
-    // Parse category
-    let parts: Vec<&str> = category.splitn(2, '_').collect();
-    let (main_cat, sub_cat) = if parts.len() == 2 {
-        (parts[0].parse::<i32>().unwrap_or(1), parts[1].parse::<i32>().unwrap_or(0))
-    } else {
-        (1, 0)
+    // A blank display name means the torrent's own name, which must fit the same limits
+    let final_name = match (form.display_name.trim(), &meta) {
+        ("", Some(meta)) => sanitize_string(&meta.display_name),
+        (name, _) => sanitize_string(name),
     };
-
-    // Validate group permission
-    let resolved_group: Option<i32> = if let (Some(gid), Some(ref user)) = (group_id, &current_user) {
-        let grp = crate::models::Group::by_id(&mut conn, gid).map_err(actix_web::error::ErrorInternalServerError)?;
-        if let Some(g) = grp {
-            if g.can_upload(&mut conn, user.id) {
-                Some(gid)
-            } else {
-                None
-            }
-        } else {
+    let checked = EditForm { display_name: final_name.clone(), ..form.clone() };
+    let categories = match checked.validate(&mut conn) {
+        Ok(ids) => Some(ids),
+        Err(field_errors) => {
+            errors.extend(field_errors);
             None
         }
-    } else {
-        None
+    };
+    let (Some(meta), Some((main_cat, sub_cat)), true) = (meta, categories, errors.is_empty()) else {
+        let html = render_upload(&mut conn, &tmpl, &cfg, &user, &form, group_id, &errors)?;
+        return Ok(HttpResponse::BadRequest().content_type("text/html").body(html));
     };
 
-    let final_name = if display_name.trim().is_empty() {
-        sanitize_string(&meta.display_name)
-    } else {
-        sanitize_string(display_name.trim())
+    // Only groups the user may upload for; anything else is a personal upload
+    let resolved_group = match group_id {
+        Some(gid) => crate::models::Group::by_id(&mut conn, gid)
+            .map_err(actix_web::error::ErrorInternalServerError)?
+            .filter(|g| g.can_upload(&mut conn, user.id))
+            .map(|g| g.id),
+        None => None,
     };
+
+    let mut flags = TorrentFlags::empty();
+    flags.set(TorrentFlags::HIDDEN, form.is_hidden);
+    flags.set(TorrentFlags::REMAKE, form.is_remake);
+    flags.set(TorrentFlags::ANONYMOUS, form.is_anonymous);
+    flags.set(TorrentFlags::COMPLETE, form.is_complete);
+    flags.set(TorrentFlags::TRUSTED, form.is_trusted && user.is_trusted());
+    let flags = flags.bits();
 
     let now = chrono::Utc::now().naive_utc();
 
@@ -483,12 +491,12 @@ pub async fn upload_post(
         info_hash: meta.info_hash.clone(),
         display_name: final_name,
         torrent_name: torrent_filename(&meta.display_name),
-        information: sanitize_string(information.trim()),
-        description: sanitize_text(description.trim()),
+        information: sanitize_string(form.information.trim()),
+        description: sanitize_text(form.description.trim()),
         filesize: meta.filesize,
         encoding: meta.encoding.clone(),
         flags,
-        uploader_id: current_user.as_ref().map(|u| u.id),
+        uploader_id: Some(user.id),
         uploader_ip: client_ip(&req),
         has_torrent: 1,
         comment_count: 0,
@@ -553,7 +561,7 @@ pub async fn upload_post(
 
 /// The edit page's two forms post here: "Save Changes" with the fields, or one
 /// Danger Zone button (upstream `EditForm` and `DeleteForm`).
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct EditForm {
     #[serde(default)]
     pub display_name: String,
@@ -1305,11 +1313,13 @@ mod tests {
 
             let res = test::call_service(&app, upload(&file)).await;
             assert_eq!(res.status(), StatusCode::BAD_REQUEST);
-            assert_eq!(test::read_body(res).await, "This torrent already exists (#5)");
+            let page = String::from_utf8(test::read_body(res).await.to_vec()).unwrap();
+            assert!(page.contains("This torrent already exists (#5)"), "{page}");
 
             set_flags(TorrentFlags::DELETED | TorrentFlags::BANNED);
             let res = test::call_service(&app, upload(&file)).await;
-            assert_eq!(test::read_body(res).await, "This torrent is banned");
+            let page = String::from_utf8(test::read_body(res).await.to_vec()).unwrap();
+            assert!(page.contains("This torrent is banned"), "{page}");
 
             set_flags(TorrentFlags::DELETED);
             diesel::sql_query("INSERT INTO nyaa_comments (torrent_id, user_id, text) VALUES (5, 1, 'old')")
@@ -1321,6 +1331,84 @@ mod tests {
             assert_eq!((t.uploader_id, t.flags, t.display_name.as_str()), (Some(2), 0, "a.txt"));
             let comments: i64 = nyaa_comments::table.count().get_result(&mut pool.get().unwrap()).unwrap();
             assert_eq!(comments, 0);
+            std::fs::remove_dir_all(config().torrent_storage_path).ok();
+        }
+
+        /// Multipart upload body with `fields` and, when given, a .torrent file.
+        fn upload_body(fields: &[(&str, &str)], file: Option<&[u8]>) -> Vec<u8> {
+            let mut body = Vec::new();
+            for (name, value) in fields {
+                body.extend_from_slice(
+                    format!("--XX\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n").as_bytes(),
+                );
+            }
+            if let Some(file) = file {
+                body.extend_from_slice(
+                    b"--XX\r\nContent-Disposition: form-data; name=\"torrent_file\"; filename=\"c.torrent\"\r\n\r\n",
+                );
+                body.extend_from_slice(file);
+                body.extend_from_slice(b"\r\n");
+            }
+            body.extend_from_slice(b"--XX--\r\n");
+            body
+        }
+
+        /// Upload runs the edit form's checks and shows every problem on the refilled form.
+        #[actix_web::test]
+        async fn invalid_uploads_rerender_the_form_with_errors() {
+            let info: &[u8] = b"d6:lengthi5e4:name5:c.txt12:piece lengthi16384e6:pieces20:CCCCCCCCCCCCCCCCCCCCe";
+            let mut file = b"d4:info".to_vec();
+            file.extend_from_slice(info);
+            file.push(b'e');
+            let pool = pool();
+            let (app, cookie) = app!(pool, Some(2));
+            let post = |body: Vec<u8>| {
+                test::TestRequest::post()
+                    .uri("/upload")
+                    .cookie(cookie.clone().unwrap())
+                    .insert_header(("Content-Type", "multipart/form-data; boundary=XX"))
+                    .set_payload(body)
+                    .to_request()
+            };
+            let long_info = "i".repeat(256);
+            type Case<'a> = (Vec<(&'a str, &'a str)>, Option<&'a [u8]>, &'a [&'a str]);
+            let cases: [Case; 4] = [
+                // A main category, which used to be stored as is
+                (
+                    vec![("category", "1_0"), ("display_name", "Kept name")],
+                    Some(&file),
+                    &["Please select a proper category", "value=\"Kept name\""],
+                ),
+                // Garbage used to fall back to Anime
+                (vec![("category", "x")], Some(&file), &["Please select a category"]),
+                (
+                    vec![("category", "1_2"), ("information", &long_info)],
+                    Some(&file),
+                    &["Information must be at most 255"],
+                ),
+                (
+                    vec![("category", "1_2"), ("display_name", "ab")],
+                    None,
+                    &["Please select a torrent file.", "at least 3 characters"],
+                ),
+            ];
+            for (fields, file, expected) in cases {
+                let res = test::call_service(&app, post(upload_body(&fields, file))).await;
+                assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{fields:?}");
+                let page = String::from_utf8(test::read_body(res).await.to_vec()).unwrap();
+                for text in expected {
+                    assert!(page.contains(text), "{fields:?}: {text}");
+                }
+            }
+            let count: i64 = nyaa_torrents::table.count().get_result(&mut pool.get().unwrap()).unwrap();
+            assert_eq!(count, 1, "nothing was stored");
+
+            // The torrent's own name stands in for a blank display name
+            let res = test::call_service(&app, post(upload_body(&[("category", "1_2")], Some(&file)))).await;
+            assert_eq!(res.status(), StatusCode::FOUND);
+            let t: Torrent =
+                nyaa_torrents::table.order(nyaa_torrents::id.desc()).first(&mut pool.get().unwrap()).unwrap();
+            assert_eq!((t.display_name.as_str(), t.main_category_id, t.sub_category_id), ("c.txt", 1, 2));
             std::fs::remove_dir_all(config().torrent_storage_path).ok();
         }
 
