@@ -35,9 +35,9 @@
 				</td>
 				<td class="text-center">
 					{% if torrent.has_torrent %}
-					<a href="/download/{{ torrent.id }}"><i class="fa fa-fw fa-download"></i></a>
+					<a href="/download/{{ torrent.id }}.torrent"><i class="fa fa-fw fa-download"></i></a>
 					{% endif %}
-					<a href="/magnet/{{ torrent.id }}"><i class="fa fa-fw fa-magnet"></i></a>
+					<a href="/view/{{ torrent.id }}/magnet"><i class="fa fa-fw fa-magnet"></i></a>
 				</td>
 				<td class="text-center">{{ torrent | filesize_human }}</td>
 				<td class="text-center" data-timestamp="{{ torrent.created_time | date(format="%s") }}">{{ torrent.created_time | date(format="%Y-%m-%d %H:%M") }}</td>

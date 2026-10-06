@@ -189,7 +189,10 @@ pub fn filter(q: &SearchQuery) -> Vec<String> {
         f.push("deleted = false".into());
     }
     if !q.include_hidden {
-        f.push("hidden = false".into());
+        match q.own_hidden_viewer() {
+            Some(viewer) => f.push(format!("(hidden = false OR uploader_id = {viewer})")),
+            None => f.push("hidden = false".into()),
+        }
     }
     if q.hide_anonymous {
         f.push("anonymous = false".into());
@@ -502,6 +505,10 @@ mod tests {
                 "anonymous = false"
             ]
         );
+        // The general listing adds the visitor's own hidden uploads
+        let mut q = SearchQuery::new();
+        q.viewer_id = Some(7);
+        assert_eq!(filter(&q), ["deleted = false", "(hidden = false OR uploader_id = 7)"]);
         // Moderators: nothing hidden
         let mut q = SearchQuery::new();
         q.include_deleted = true;

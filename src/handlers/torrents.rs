@@ -20,7 +20,7 @@ use crate::models::{
 };
 use crate::torrent::{parse_torrent, rebuild_torrent};
 use crate::utils::context::base_context;
-use crate::utils::{pack_ip, sanitize_string, sanitize_text, unpack_ip};
+use crate::utils::{client_ip, sanitize_string, sanitize_text, unpack_ip};
 
 pub async fn view_torrent(
     session: Session,
@@ -293,6 +293,15 @@ fn torrent_filename(name: &str) -> String {
     format!("{}.torrent", cleaned.trim())
 }
 
+/// Old download URLs, from before they matched upstream's.
+pub async fn legacy_download_redirect(path: web::Path<i32>) -> HttpResponse {
+    HttpResponse::MovedPermanently().insert_header(("Location", format!("/download/{}.torrent", path))).finish()
+}
+
+pub async fn legacy_magnet_redirect(path: web::Path<i32>) -> HttpResponse {
+    HttpResponse::MovedPermanently().insert_header(("Location", format!("/view/{}/magnet", path))).finish()
+}
+
 pub async fn magnet_redirect(
     session: Session,
     pool: web::Data<DbPool>,
@@ -318,7 +327,7 @@ pub async fn upload_get(
 ) -> Result<HttpResponse> {
     let current_user = get_current_user(&session, &pool);
     if current_user.is_none() {
-        return Ok(HttpResponse::Found().insert_header(("Location", "/account/login")).finish());
+        return Ok(HttpResponse::Found().insert_header(("Location", "/login")).finish());
     }
     let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
     let categories =
@@ -489,7 +498,7 @@ pub async fn upload_post(
         encoding: meta.encoding.clone(),
         flags,
         uploader_id: current_user.as_ref().map(|u| u.id),
-        uploader_ip: req.peer_addr().map(|a| pack_ip(a.ip())),
+        uploader_ip: client_ip(&req),
         has_torrent: 1,
         comment_count: 0,
         created_time: now,
@@ -926,10 +935,7 @@ mod tests {
             Storage::local(&dir, &dir).unwrap()
         }
 
-        async fn login(session: Session, path: web::Path<i32>) -> HttpResponse {
-            crate::middleware::auth::login_user(&session, path.into_inner()).unwrap();
-            HttpResponse::Ok().finish()
-        }
+        use crate::middleware::auth::test_support::login;
 
         /// The edit routes plus a login shortcut; returns the app and a session cookie for `user`.
         macro_rules! app {
@@ -1045,7 +1051,7 @@ mod tests {
 
             diesel::sql_query(format!(
                 "UPDATE nyaa_torrents SET group_id = 1, uploader_ip = X'{}' WHERE id = 5",
-                hex::encode(pack_ip("127.0.0.1".parse().unwrap()))
+                hex::encode(crate::utils::pack_ip("127.0.0.1".parse().unwrap()))
             ))
             .execute(&mut pool.get().unwrap())
             .unwrap();
