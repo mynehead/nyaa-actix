@@ -1,0 +1,20 @@
+{% if banners | default(value=[]) | length > 0 %}
+{% for banner in banners %}
+<div class="alert alert-info alert-dismissable site-banner" role="alert" data-banner-id="{{ banner.id }}"><button type="button" class="close" data-dismiss="alert" aria-label="Close">&times;</button><span style="white-space: pre-wrap;">{{ banner.content }}</span></div>
+{% endfor %}
+<script>
+// A dismissed banner stays hidden in this browser until an admin posts a new one.
+(function () {
+	var key = 'banners_dismissed', dismissed = [];
+	try { dismissed = JSON.parse(localStorage.getItem(key)) || []; } catch (e) {}
+	document.querySelectorAll('.site-banner').forEach(function (el) {
+		var id = Number(el.dataset.bannerId);
+		if (dismissed.indexOf(id) !== -1) { el.parentNode.removeChild(el); return; }
+		el.querySelector('.close').addEventListener('click', function () {
+			dismissed.push(id);
+			try { localStorage.setItem(key, JSON.stringify(dismissed.slice(-50))); } catch (e) {}
+		});
+	});
+})();
+</script>
+{% endif %}

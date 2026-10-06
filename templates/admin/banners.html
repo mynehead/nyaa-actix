@@ -1,0 +1,57 @@
+{% extends "layout.html" %}
+{% block title %}Banners :: {{ config.site_name }}{% endblock %}
+{% block body %}
+<h3>Create New Banner</h3>
+<form method="POST" action="/admin/banners">
+	<div class="form-group">
+		<label for="content">Content</label>
+		<textarea id="content" name="content" class="form-control" rows="4" maxlength="1024" placeholder="Enter banner text..." required></textarea>
+	</div>
+	<button type="submit" class="btn btn-primary">Save Banner</button>
+</form>
+
+<hr>
+
+<h3>Existing Banners</h3>
+<div class="table-responsive">
+	<table class="table table-bordered table-hover table-striped">
+		<thead>
+			<tr>
+				<th style="width: 50px;">#</th>
+				<th>Content</th>
+				<th class="text-center" style="width: 120px;">Status</th>
+				<th class="text-center" style="width: 170px;">Created</th>
+				<th class="text-center" style="width: 100px;">By</th>
+				<th class="text-center" style="width: 160px;">Actions</th>
+			</tr>
+		</thead>
+		<tbody>
+			{% for banner in banners %}
+			<tr>
+				<td>{{ banner.id }}</td>
+				<td style="white-space: pre-wrap;">{{ banner.content }}</td>
+				<td class="text-center">
+					{% if banner.active %}<span class="label label-success">Active</span>{% else %}<span class="label label-default">Inactive</span>{% endif %}
+				</td>
+				<td class="text-center" data-timestamp="{{ banner.created_time | date(format="%s") }}">{{ banner.created_time | date(format="%Y-%m-%d %H:%M") }}</td>
+				<td class="text-center"><a href="/user/{{ banner.creator }}">{{ banner.creator }}</a></td>
+				<td class="text-center">
+					<form method="POST" action="/admin/banners/{{ banner.id }}/toggle" style="display: inline;">
+						{% if banner.active %}
+						<button type="submit" class="btn btn-xs btn-warning">Deactivate</button>
+						{% else %}
+						<button type="submit" class="btn btn-xs btn-success">Activate</button>
+						{% endif %}
+					</form>
+					<form method="POST" action="/admin/banners/{{ banner.id }}/delete" style="display: inline;" onsubmit="return confirm('Delete banner #{{ banner.id }}?');">
+						<button type="submit" class="btn btn-xs btn-danger">Delete</button>
+					</form>
+				</td>
+			</tr>
+			{% else %}
+			<tr><td colspan="6" class="text-center">No banners.</td></tr>
+			{% endfor %}
+		</tbody>
+	</table>
+</div>
+{% endblock %}
