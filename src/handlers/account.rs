@@ -18,7 +18,7 @@ use crate::models::{password_matches, Ban, NewUser, User};
 use crate::storage::{Kind, Storage};
 use crate::utils::context::base_context;
 use crate::utils::throttle::Throttle;
-use crate::utils::{avatar, client_addr, client_ip, flash};
+use crate::utils::{avatar, client_addr, client_ip, flash, internal_error};
 
 #[derive(Debug, Deserialize)]
 pub struct LoginForm {
@@ -46,7 +46,7 @@ pub async fn login_get(
     }
     let mut ctx = base_context(&cfg, None);
     ctx.insert("error", &Option::<String>::None);
-    let html = tmpl.render("login.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("login.html", &ctx).map_err(internal_error)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
@@ -58,9 +58,8 @@ pub async fn login_post(
     cfg: web::Data<Config>,
     form: web::Form<LoginForm>,
 ) -> Result<HttpResponse> {
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
-    let user =
-        User::by_username_or_email(&mut conn, &form.username).map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
+    let user = User::by_username_or_email(&mut conn, &form.username).map_err(internal_error)?;
 
     // Count by account, so trying the username and then the email address shares one limit
     let ip = client_key(&req);
@@ -72,7 +71,7 @@ pub async fn login_post(
         let mut ctx = base_context(&cfg, None);
         ctx.insert("error", "Too many failed login attempts. Try again in 15 minutes.");
         ctx.insert("username", &form.username);
-        let html = tmpl.render("login.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+        let html = tmpl.render("login.html", &ctx).map_err(internal_error)?;
         return Ok(HttpResponse::TooManyRequests().content_type("text/html").body(html));
     }
 
@@ -94,17 +93,14 @@ pub async fn login_post(
                     users::last_login_ip.eq(client_ip(&req)),
                 ))
                 .execute(&mut conn)
-                .map_err(actix_web::error::ErrorInternalServerError)?;
+                .map_err(internal_error)?;
             login_user(&session, u.id).ok();
             return Ok(HttpResponse::Found().insert_header(("Location", "/")).finish());
         }
         // Like upstream, the ban (and its reason) only shows after the right password
         Some(ref u) if password_ok && u.is_banned() => {
-            let reason = Ban::banned(&mut conn, Some(u.id), None)
-                .map_err(actix_web::error::ErrorInternalServerError)?
-                .into_iter()
-                .next()
-                .map(|b| b.reason);
+            let reason =
+                Ban::banned(&mut conn, Some(u.id), None).map_err(internal_error)?.into_iter().next().map(|b| b.reason);
             Some(match reason {
                 Some(reason) => format!(
                     "You are banned with the reason \"{}\" If you believe that this \
@@ -120,7 +116,7 @@ pub async fn login_post(
     let mut ctx = base_context(&cfg, None);
     ctx.insert("error", &error);
     ctx.insert("username", &form.username);
-    let html = tmpl.render("login.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("login.html", &ctx).map_err(internal_error)?;
     Ok(HttpResponse::Ok().status(actix_web::http::StatusCode::UNAUTHORIZED).content_type("text/html").body(html))
 }
 
@@ -136,7 +132,7 @@ pub async fn register_get(
     }
     let mut ctx = base_context(&cfg, None);
     ctx.insert("errors", &Vec::<String>::new());
-    let html = tmpl.render("register.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("register.html", &ctx).map_err(internal_error)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
@@ -154,18 +150,18 @@ pub async fn register_post(
         ctx.insert("errors", &["Too many registrations from your address. Try again later."]);
         ctx.insert("username", &form.username);
         ctx.insert("email", &form.email);
-        let html = tmpl.render("register.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+        let html = tmpl.render("register.html", &ctx).map_err(internal_error)?;
         return Ok(HttpResponse::TooManyRequests().content_type("text/html").body(html));
     }
     REGISTRATIONS_BY_IP.hit(&ip);
 
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
     let (username, email) = (form.username.trim(), form.email.trim());
     let mut errors = register_errors(username, email, &form.password, &form.password_confirm);
-    if User::username_taken(&mut conn, username).map_err(actix_web::error::ErrorInternalServerError)? {
+    if User::username_taken(&mut conn, username).map_err(internal_error)? {
         errors.push("Username is already taken.".into());
     }
-    if User::by_email(&mut conn, email).map_err(actix_web::error::ErrorInternalServerError)?.is_some() {
+    if User::by_email(&mut conn, email).map_err(internal_error)?.is_some() {
         errors.push("Email is already in use.".into());
     }
 
@@ -174,7 +170,7 @@ pub async fn register_post(
         ctx.insert("errors", errors);
         ctx.insert("username", username);
         ctx.insert("email", email);
-        let html = tmpl.render("register.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+        let html = tmpl.render("register.html", &ctx).map_err(internal_error)?;
         Ok(HttpResponse::BadRequest().content_type("text/html").body(html))
     };
     if !errors.is_empty() {
@@ -188,11 +184,11 @@ pub async fn register_post(
         Err(diesel::result::Error::DatabaseError(diesel::result::DatabaseErrorKind::UniqueViolation, _)) => {
             return render_errors(&["Username or email is already taken.".to_string()]);
         }
-        result => result.map_err(actix_web::error::ErrorInternalServerError)?,
+        result => result.map_err(internal_error)?,
     };
 
     let user = User::by_username(&mut conn, username)
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorInternalServerError("Failed to fetch user"))?;
 
     login_user(&session, user.id).ok();
@@ -319,7 +315,7 @@ fn render_profile(
     errors: FieldErrors,
     email_value: &str,
 ) -> Result<HttpResponse> {
-    let hide_comments = User::hide_comments(conn, user.id).map_err(actix_web::error::ErrorInternalServerError)?;
+    let hide_comments = User::hide_comments(conn, user.id).map_err(internal_error)?;
     let no_errors = FieldErrors::new();
     let mut ctx = base_context(cfg, Some(user));
     ctx.insert("flash_messages", &flash::take(session));
@@ -329,7 +325,7 @@ fn render_profile(
     ctx.insert("password_errors", if active_tab == "password" { &errors } else { &no_errors });
     ctx.insert("email_errors", if active_tab == "email" { &errors } else { &no_errors });
     ctx.insert("email_value", email_value);
-    let html = tmpl.render("profile.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("profile.html", &ctx).map_err(internal_error)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
@@ -342,7 +338,7 @@ pub async fn profile(
     let Some(current_user) = get_current_user(&session, &pool) else {
         return Ok(redirect("/account/login"));
     };
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
     render_profile(&session, &mut conn, &tmpl, &cfg, &current_user, "password", FieldErrors::new(), "")
 }
 
@@ -358,8 +354,8 @@ pub async fn profile_post(
     let Some(user) = get_current_user(&session, &pool) else {
         return Ok(redirect("/account/login"));
     };
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
-    let internal = actix_web::error::ErrorInternalServerError;
+    let mut conn = pool.get().map_err(internal_error)?;
+    let internal = internal_error;
 
     if form.authorized_submit.is_some() {
         let errors = form.validate(&mut conn).map_err(internal)?;
@@ -427,10 +423,9 @@ pub async fn avatar_post(
         Ok(png) => png,
         Err(msg) => return fail(msg),
     };
-    storage.put(Kind::Avatar, user.id, png).await.map_err(actix_web::error::ErrorInternalServerError)?;
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
-    User::set_avatar_time(&mut conn, user.id, chrono::Utc::now().naive_utc())
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    storage.put(Kind::Avatar, user.id, png).await.map_err(internal_error)?;
+    let mut conn = pool.get().map_err(internal_error)?;
+    User::set_avatar_time(&mut conn, user.id, chrono::Utc::now().naive_utc()).map_err(internal_error)?;
     flash::push(&session, "success", "Avatar successfully changed!", "");
     Ok(redirect(PROFILE_URL))
 }

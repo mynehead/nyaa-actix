@@ -20,7 +20,7 @@ use crate::models::{
 };
 use crate::torrent::{parse_torrent, rebuild_torrent};
 use crate::utils::context::base_context;
-use crate::utils::{client_ip, sanitize_string, sanitize_text, unpack_ip};
+use crate::utils::{client_ip, internal_error, sanitize_string, sanitize_text, unpack_ip};
 
 pub async fn view_torrent(
     session: Session,
@@ -32,10 +32,10 @@ pub async fn view_torrent(
 ) -> Result<HttpResponse> {
     let torrent_id = path.into_inner();
     let current_user = get_current_user(&session, &pool);
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
 
     let torrent = Torrent::by_id(&mut conn, torrent_id)
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))?;
 
     check_visible(&torrent, &current_user)?;
@@ -71,10 +71,10 @@ pub async fn post_comment(
 ) -> Result<HttpResponse> {
     let torrent_id = path.into_inner();
     let current_user = get_current_user(&session, &pool);
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
 
     let torrent = Torrent::by_id(&mut conn, torrent_id)
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))?;
     check_visible(&torrent, &current_user)?;
     if !can_comment(&torrent, current_user.as_ref()) {
@@ -109,7 +109,7 @@ pub async fn post_comment(
                 .execute(conn)?;
             Ok(count)
         })
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+        .map_err(internal_error)?;
     crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), torrent_id);
 
     Ok(redirect(&format!("/view/{torrent_id}#com-{count}")))
@@ -133,19 +133,19 @@ async fn render_view(
         .find(torrent_id)
         .first::<crate::models::Statistic>(conn)
         .optional()
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+        .map_err(internal_error)?;
 
     let comments: Vec<crate::models::Comment> = nyaa_comments::table
         .filter(nyaa_comments::torrent_id.eq(torrent_id))
         .order(nyaa_comments::created_time.asc())
         .load(conn)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+        .map_err(internal_error)?;
 
     // Anonymous uploads only name their uploader to that uploader and moderators
     let can_see_uploader = !torrent.is_anonymous()
         || current_user.as_ref().map(|u| u.is_moderator() || Some(u.id) == torrent.uploader_id).unwrap_or(false);
     let uploader: Option<User> = match torrent.uploader_id {
-        Some(uid) if can_see_uploader => User::by_id(conn, uid).map_err(actix_web::error::ErrorInternalServerError)?,
+        Some(uid) if can_see_uploader => User::by_id(conn, uid).map_err(internal_error)?,
         _ => None,
     };
 
@@ -164,9 +164,9 @@ async fn render_view(
         .find(torrent.main_category_id)
         .first::<crate::models::MainCategory>(conn)
         .optional()
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+        .map_err(internal_error)?;
     let sub_category = crate::models::get_sub_category(conn, torrent.main_category_id, torrent.sub_category_id)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+        .map_err(internal_error)?;
 
     // File list from the stored info dict; missing or unreadable means "not available"
     let info = storage.get(Kind::TorrentInfo, torrent_id).await.unwrap_or_else(|e| {
@@ -181,7 +181,7 @@ async fn render_view(
 
     // The group the torrent was released under, shown below the submitter
     let group = match torrent.group_id {
-        Some(gid) => crate::models::Group::by_id(conn, gid).map_err(actix_web::error::ErrorInternalServerError)?,
+        Some(gid) => crate::models::Group::by_id(conn, gid).map_err(internal_error)?,
         None => None,
     };
     // Upstream shows the uploader's IP next to the submitter to administrators only
@@ -205,7 +205,7 @@ async fn render_view(
     ctx.insert("comments", &comments);
     // Upstream's "Hide comments by default" preference collapses the comments panel
     let hide_comments = match &current_user {
-        Some(u) => User::hide_comments(conn, u.id).map_err(actix_web::error::ErrorInternalServerError)?,
+        Some(u) => User::hide_comments(conn, u.id).map_err(internal_error)?,
         None => false,
     };
     ctx.insert("hide_comments", &hide_comments);
@@ -217,7 +217,7 @@ async fn render_view(
     ctx.insert("comment_text", comment_text);
     ctx.insert("comment_error", &comment_error);
 
-    tmpl.render("view.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)
+    tmpl.render("view.html", &ctx).map_err(internal_error)
 }
 
 /// Upstream MAX_FILES_VIEW: longer file lists are not rendered.
@@ -241,10 +241,10 @@ pub async fn download_torrent(
 ) -> Result<HttpResponse> {
     let torrent_id = path.into_inner();
     let current_user = get_current_user(&session, &pool);
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
 
     let torrent = Torrent::by_id(&mut conn, torrent_id)
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))?;
     check_visible(&torrent, &current_user)?;
 
@@ -301,9 +301,9 @@ pub async fn magnet_redirect(
 ) -> Result<HttpResponse> {
     let torrent_id = path.into_inner();
     let current_user = get_current_user(&session, &pool);
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
     let torrent = Torrent::by_id(&mut conn, torrent_id)
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))?;
     check_visible(&torrent, &current_user)?;
     let magnet = torrent.magnet_uri(&torrent.display_name, &cfg.trackers());
@@ -319,7 +319,7 @@ pub async fn upload_get(
     let Some(user) = get_current_user(&session, &pool) else {
         return Ok(HttpResponse::Found().insert_header(("Location", "/account/login")).finish());
     };
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
     // Trusted users' uploads start out marked trusted, as upstream
     let form = EditForm { is_trusted: user.is_trusted(), ..Default::default() };
     let html = render_upload(&mut conn, &tmpl, &cfg, &user, &form, None, &HashMap::new())?;
@@ -337,9 +337,9 @@ fn render_upload(
     group_id: Option<i32>,
     errors: &HashMap<&'static str, String>,
 ) -> Result<String> {
-    let categories = crate::models::get_all_categories(conn).map_err(actix_web::error::ErrorInternalServerError)?;
+    let categories = crate::models::get_all_categories(conn).map_err(internal_error)?;
     let groups: Vec<crate::models::Group> = crate::models::Group::all(conn)
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .into_iter()
         .filter(|g| g.can_upload(conn, user.id))
         .collect();
@@ -350,7 +350,7 @@ fn render_upload(
     ctx.insert("form", form);
     ctx.insert("group_id", &group_id);
     ctx.insert("errors", errors);
-    tmpl.render("upload.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)
+    tmpl.render("upload.html", &ctx).map_err(internal_error)
 }
 
 /// nyaa's limit for .torrent files.
@@ -386,7 +386,7 @@ pub async fn upload_post(
     let Some(user) = get_current_user(&session, &pool) else {
         return Err(actix_web::error::ErrorUnauthorized("Login required"));
     };
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
 
     let mut torrent_bytes: Option<Vec<u8>> = None;
     let mut form = EditForm::default();
@@ -437,7 +437,7 @@ pub async fn upload_post(
     // replaces it and keeps its id, as upstream.
     let mut replaced_id = None;
     if let Some(meta) = &meta {
-        match Torrent::by_info_hash(&mut conn, &meta.info_hash).map_err(actix_web::error::ErrorInternalServerError)? {
+        match Torrent::by_info_hash(&mut conn, &meta.info_hash).map_err(internal_error)? {
             Some(t) if !t.is_deleted() => {
                 errors.insert("torrent_file", format!("This torrent already exists (#{})", t.id));
             }
@@ -470,7 +470,7 @@ pub async fn upload_post(
     // Only groups the user may upload for; anything else is a personal upload
     let resolved_group = match group_id {
         Some(gid) => crate::models::Group::by_id(&mut conn, gid)
-            .map_err(actix_web::error::ErrorInternalServerError)?
+            .map_err(internal_error)?
             .filter(|g| g.can_upload(&mut conn, user.id))
             .map(|g| g.id),
         None => None,
@@ -543,7 +543,7 @@ pub async fn upload_post(
     // Don't hold a pooled connection while waiting on the store
     drop(conn);
     let stored = storage.put(Kind::TorrentInfo, inserted.id, meta.bencoded_info).await;
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
     if let Err(e) = stored {
         log::error!("Failed to store info dict of torrent {}: {}", inserted.id, e);
         conn.transaction::<_, diesel::result::Error, _>(|conn| {
@@ -698,7 +698,7 @@ fn parse_category(value: &str) -> Option<(i32, i32)> {
 /// exist for moderators, and only owners and moderators may edit.
 fn editable_torrent(conn: &mut DbConnection, torrent_id: i32, editor: Option<&User>) -> Result<Torrent> {
     let torrent = Torrent::by_id(conn, torrent_id)
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))?;
     let is_moderator = editor.map(|u| u.is_moderator()).unwrap_or(false);
     if (torrent.is_deleted() || torrent.is_banned()) && !is_moderator {
@@ -719,10 +719,10 @@ fn render_edit(
     form: &EditForm,
     errors: &HashMap<&'static str, String>,
 ) -> Result<String> {
-    let categories = crate::models::get_all_categories(conn).map_err(actix_web::error::ErrorInternalServerError)?;
+    let categories = crate::models::get_all_categories(conn).map_err(internal_error)?;
     // The "(by user)" note when someone else's torrent is edited
     let uploader = match torrent.uploader_id {
-        Some(uid) if uid != editor.id => User::by_id(conn, uid).map_err(actix_web::error::ErrorInternalServerError)?,
+        Some(uid) if uid != editor.id => User::by_id(conn, uid).map_err(internal_error)?,
         _ => None,
     };
     let mut ctx = base_context(cfg, Some(editor));
@@ -733,7 +733,7 @@ fn render_edit(
     ctx.insert("uploader", &uploader);
     ctx.insert("is_deleted", &torrent.is_deleted());
     ctx.insert("is_banned", &torrent.is_banned());
-    tmpl.render("edit.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)
+    tmpl.render("edit.html", &ctx).map_err(internal_error)
 }
 
 pub async fn edit_torrent_get(
@@ -744,7 +744,7 @@ pub async fn edit_torrent_get(
     path: web::Path<i32>,
 ) -> Result<HttpResponse> {
     let editor = get_current_user(&session, &pool);
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
     let torrent = editable_torrent(&mut conn, path.into_inner(), editor.as_ref())?;
     let editor = editor.expect("editable_torrent requires a user");
     let html =
@@ -761,7 +761,7 @@ pub async fn edit_torrent_post(
     form: web::Form<EditForm>,
 ) -> Result<HttpResponse> {
     let editor = get_current_user(&session, &pool);
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
     let torrent = editable_torrent(&mut conn, path.into_inner(), editor.as_ref())?;
     let editor = editor.expect("editable_torrent requires a user");
     let form = form.into_inner();
@@ -807,7 +807,7 @@ pub async fn edit_torrent_post(
             }
             Ok(())
         })
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+        .map_err(internal_error)?;
         crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), torrent.id);
         return Ok(redirect(&view_url));
     }
@@ -831,7 +831,7 @@ pub async fn edit_torrent_post(
         }
         Ok(())
     })
-    .map_err(actix_web::error::ErrorInternalServerError)?;
+    .map_err(internal_error)?;
     crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), torrent.id);
 
     // Moderators go back to the torrent; owners deleting their own go home

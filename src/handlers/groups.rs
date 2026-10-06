@@ -15,7 +15,7 @@ use crate::search::search;
 use crate::utils::context::base_context;
 use crate::utils::context::SearchState;
 use crate::utils::pagination::Pagination;
-use crate::utils::{sanitize_string, sanitize_text};
+use crate::utils::{internal_error, sanitize_string, sanitize_text};
 
 pub async fn group_list(
     session: Session,
@@ -24,8 +24,8 @@ pub async fn group_list(
     cfg: web::Data<Config>,
 ) -> Result<HttpResponse> {
     let current_user = get_current_user(&session, &pool);
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
-    let all_groups = Group::all(&mut conn).map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
+    let all_groups = Group::all(&mut conn).map_err(internal_error)?;
 
     let groups: Vec<serde_json::Value> = all_groups
         .into_iter()
@@ -38,7 +38,7 @@ pub async fn group_list(
     let mut ctx = base_context(&cfg, current_user.as_ref());
     ctx.insert("active_page", "groups");
     ctx.insert("groups", &groups);
-    let html = tmpl.render("groups.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("groups.html", &ctx).map_err(internal_error)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
@@ -139,7 +139,7 @@ fn render_group_form(
     ctx.insert("group", &group);
     ctx.insert("form", form);
     ctx.insert("errors", errors);
-    tmpl.render(template, &ctx).map_err(actix_web::error::ErrorInternalServerError)
+    tmpl.render(template, &ctx).map_err(internal_error)
 }
 
 pub async fn create_group_get(
@@ -163,10 +163,10 @@ pub async fn create_group_post(
 ) -> Result<HttpResponse> {
     let current_user =
         get_current_user(&session, &pool).ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
 
     let form = form.cleaned();
-    let errors = form.validate(&mut conn, None).map_err(actix_web::error::ErrorInternalServerError)?;
+    let errors = form.validate(&mut conn, None).map_err(internal_error)?;
     if !errors.is_empty() {
         let html = render_group_form(&tmpl, &cfg, &current_user, "group_create.html", None, &form, &errors)?;
         return Ok(HttpResponse::BadRequest().content_type("text/html").body(html));
@@ -180,10 +180,7 @@ pub async fn create_group_post(
         created_time: chrono::Utc::now().naive_utc(),
         owner_id: current_user.id,
     };
-    diesel::insert_into(groups::table)
-        .values(&new_group)
-        .execute(&mut conn)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    diesel::insert_into(groups::table).values(&new_group).execute(&mut conn).map_err(internal_error)?;
 
     Ok(HttpResponse::Found().insert_header(("Location", format!("/group/{}", form.slug))).finish())
 }
@@ -209,10 +206,10 @@ pub async fn view_group(
     let slug = path.into_inner();
     let current_user = get_current_user(&session, &pool);
     let is_admin = current_user.as_ref().map(|u| u.is_moderator()).unwrap_or(false);
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
 
     let group = Group::by_slug(&mut conn, &slug)
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Group not found"))?;
 
     let q = SearchQuery::from_params(
@@ -228,10 +225,10 @@ pub async fn view_group(
         is_admin,
     );
 
-    let result = search(&mut conn, cfg.meili.as_ref(), &q).map_err(actix_web::error::ErrorInternalServerError)?;
+    let result = search(&mut conn, cfg.meili.as_ref(), &q).map_err(internal_error)?;
     let pagination = Pagination::new(q.page, result.total, q.per_page);
 
-    let owner = User::by_id(&mut conn, group.owner_id).map_err(actix_web::error::ErrorInternalServerError)?;
+    let owner = User::by_id(&mut conn, group.owner_id).map_err(internal_error)?;
 
     let can_edit = current_user.as_ref().map(|u| group.can_edit(&mut conn, u.id)).unwrap_or(false);
 
@@ -239,11 +236,11 @@ pub async fn view_group(
     ctx.insert("group", &group);
     ctx.insert("owner", &owner);
     ctx.insert("can_edit", &can_edit);
-    let torrents = with_stats(&mut conn, result.torrents).map_err(actix_web::error::ErrorInternalServerError)?;
+    let torrents = with_stats(&mut conn, result.torrents).map_err(internal_error)?;
     ctx.insert("torrents", &torrents);
     ctx.insert("pagination", &pagination);
     ctx.insert("search", &SearchState::new(&params.q, &params.c, &params.f, &params.s, &params.o));
-    let html = tmpl.render("group.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("group.html", &ctx).map_err(internal_error)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
@@ -256,9 +253,9 @@ pub async fn edit_group_get(
 ) -> Result<HttpResponse> {
     let current_user =
         get_current_user(&session, &pool).ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
     let group = Group::by_slug(&mut conn, &path.into_inner())
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Group not found"))?;
     if !group.can_edit(&mut conn, current_user.id) {
         return Err(actix_web::error::ErrorForbidden("Not allowed"));
@@ -278,15 +275,15 @@ pub async fn edit_group_post(
 ) -> Result<HttpResponse> {
     let current_user =
         get_current_user(&session, &pool).ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
     let group = Group::by_slug(&mut conn, &path.into_inner())
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Group not found"))?;
     if !group.can_edit(&mut conn, current_user.id) {
         return Err(actix_web::error::ErrorForbidden("Not allowed"));
     }
     let form = form.cleaned();
-    let errors = form.validate(&mut conn, Some(&group)).map_err(actix_web::error::ErrorInternalServerError)?;
+    let errors = form.validate(&mut conn, Some(&group)).map_err(internal_error)?;
     if !errors.is_empty() {
         let html = render_group_form(&tmpl, &cfg, &current_user, "group_edit.html", Some(&group), &form, &errors)?;
         return Ok(HttpResponse::BadRequest().content_type("text/html").body(html));
@@ -299,7 +296,7 @@ pub async fn edit_group_post(
             groups::description.eq(form.description()),
         ))
         .execute(&mut conn)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+        .map_err(internal_error)?;
     Ok(HttpResponse::Found().insert_header(("Location", format!("/group/{}", form.slug))).finish())
 }
 
@@ -319,14 +316,14 @@ pub async fn manage_members_get(
 ) -> Result<HttpResponse> {
     let current_user =
         get_current_user(&session, &pool).ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
     let group = Group::by_slug(&mut conn, &path.into_inner())
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Group not found"))?;
     if !group.can_edit(&mut conn, current_user.id) {
         return Err(actix_web::error::ErrorForbidden("Not allowed"));
     }
-    let members_raw = group.members_with_perms(&mut conn).map_err(actix_web::error::ErrorInternalServerError)?;
+    let members_raw = group.members_with_perms(&mut conn).map_err(internal_error)?;
     let members: Vec<serde_json::Value> = members_raw
         .into_iter()
         .filter_map(|(uid, perms)| {
@@ -344,7 +341,7 @@ pub async fn manage_members_get(
     ctx.insert("group", &group);
     ctx.insert("members", &members);
     ctx.insert("is_owner", &(current_user.id == group.owner_id));
-    let html = tmpl.render("group_members.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("group_members.html", &ctx).map_err(internal_error)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
@@ -356,16 +353,16 @@ pub async fn manage_members_post(
 ) -> Result<HttpResponse> {
     let current_user =
         get_current_user(&session, &pool).ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
     let group = Group::by_slug(&mut conn, &path.into_inner())
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Group not found"))?;
     if !group.can_edit(&mut conn, current_user.id) {
         return Err(actix_web::error::ErrorForbidden("Not allowed"));
     }
 
     let target = User::by_username(&mut conn, &form.username)
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorBadRequest("User not found"))?;
 
     let mut perms = 0i32;
@@ -382,7 +379,7 @@ pub async fn manage_members_post(
         .select(group_members::permissions)
         .first(&mut conn)
         .optional()
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+        .map_err(internal_error)?;
 
     // Editors manage uploaders; only the owner grants or takes away edit rights, so one
     // editor can't add accomplices or push the other editors out
@@ -400,7 +397,7 @@ pub async fn manage_members_post(
                     .filter(group_members::user_id.eq(target.id)),
             )
             .execute(&mut conn)
-            .map_err(actix_web::error::ErrorInternalServerError)?;
+            .map_err(internal_error)?;
         }
     } else if existing.is_some() {
         diesel::update(
@@ -410,7 +407,7 @@ pub async fn manage_members_post(
         )
         .set(group_members::permissions.eq(perms))
         .execute(&mut conn)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+        .map_err(internal_error)?;
     } else {
         diesel::insert_into(group_members::table)
             .values((
@@ -419,7 +416,7 @@ pub async fn manage_members_post(
                 group_members::permissions.eq(perms),
             ))
             .execute(&mut conn)
-            .map_err(actix_web::error::ErrorInternalServerError)?;
+            .map_err(internal_error)?;
     }
 
     Ok(HttpResponse::Found().insert_header(("Location", format!("/group/{}/members", group.slug))).finish())

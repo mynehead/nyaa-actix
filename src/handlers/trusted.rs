@@ -14,13 +14,13 @@ use crate::models::{
     trusted_deny_reasons, TrustedApplication, TrustedApplicationStatus, TrustedListFilter, TrustedRecommendation, User,
 };
 use crate::utils::context::base_context;
-use crate::utils::flash;
 use crate::utils::pagination::Pagination;
+use crate::utils::{flash, internal_error};
 
 const APPS_PER_PAGE: i64 = 20;
 
 fn render(tmpl: &Tera, name: &str, ctx: &tera::Context) -> Result<String> {
-    tmpl.render(name, ctx).map_err(actix_web::error::ErrorInternalServerError)
+    tmpl.render(name, ctx).map_err(internal_error)
 }
 
 fn html(body: String) -> HttpResponse {
@@ -69,9 +69,8 @@ pub async fn request_trusted(
     let Some(user) = get_current_user(&session, &pool) else {
         return Ok(redirect("/account/login"));
     };
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
-    let deny_reasons =
-        trusted_deny_reasons(&mut conn, &user, &cfg.trusted).map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
+    let deny_reasons = trusted_deny_reasons(&mut conn, &user, &cfg.trusted).map_err(internal_error)?;
 
     let mut errors = serde_json::Map::new();
     let posted = form.map(|f| f.into_inner());
@@ -101,8 +100,7 @@ pub async fn request_trusted(
                32 but less than 4000 characters.",
         );
         if errors.is_empty() && deny_reasons.is_empty() {
-            TrustedApplication::submit(&mut conn, user.id, why_give, why_want)
-                .map_err(actix_web::error::ErrorInternalServerError)?;
+            TrustedApplication::submit(&mut conn, user.id, why_give, why_want).map_err(internal_error)?;
             flash::push(
                 &session,
                 "success",
@@ -155,10 +153,9 @@ pub async fn admin_trusted(
     let filter =
         TrustedListFilter::parse(list_filter.as_deref()).ok_or_else(|| actix_web::error::ErrorNotFound("Not found"))?;
 
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
     let page = params.p.unwrap_or(1).max(1);
-    let (rows, total) = TrustedApplication::list(&mut conn, filter, page, APPS_PER_PAGE)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let (rows, total) = TrustedApplication::list(&mut conn, filter, page, APPS_PER_PAGE).map_err(internal_error)?;
     let pagination = Pagination::new(page, total, APPS_PER_PAGE);
     let apps: Vec<_> = rows
         .iter()
@@ -200,9 +197,9 @@ pub async fn admin_trusted_application(
 ) -> Result<HttpResponse> {
     let user = require_moderator(&session, &pool)?;
     let app_id = path.into_inner();
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
     let app = TrustedApplication::by_id(&mut conn, app_id)
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Not found"))?;
     let can_decide = user.is_superadmin() && !app.is_closed();
     let here = format!("/admin/trusted/application/{app_id}");
@@ -211,7 +208,7 @@ pub async fn admin_trusted_application(
     let posted = form.map(|f| f.into_inner()).unwrap_or_default();
     if can_decide && (posted.accept.is_some() || posted.reject.is_some()) {
         let accept = posted.accept.is_some();
-        if app.decide(&mut conn, user.id, accept).map_err(actix_web::error::ErrorInternalServerError)? {
+        if app.decide(&mut conn, user.id, accept).map_err(internal_error)? {
             // Upstream also emails the submitter; there is no mail yet.
             let verdict = if accept { "accepted" } else { "rejected" };
             flash::push(&session, "success", "", &format!("Application has been {verdict}."));
@@ -224,18 +221,18 @@ pub async fn admin_trusted_application(
             comment_errors.push("Please provide a comment");
         }
         if let (Some(rec), true) = (recommendation, comment_errors.is_empty()) {
-            app.add_review(&mut conn, user.id, comment, rec).map_err(actix_web::error::ErrorInternalServerError)?;
+            app.add_review(&mut conn, user.id, comment, rec).map_err(internal_error)?;
             flash::push(&session, "success", "", "Review successfully posted.");
             return Ok(redirect(&here));
         }
     }
 
     let submitter = User::by_id(&mut conn, app.submitter_id)
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorInternalServerError("Submitter missing"))?;
     let reviews: Vec<_> = app
         .reviews(&mut conn)
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .into_iter()
         .map(|(rev, reviewer)| {
             serde_json::json!({

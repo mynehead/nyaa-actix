@@ -11,6 +11,7 @@ use crate::search::db::{with_stats, SearchQuery};
 use crate::search::search;
 use crate::utils::context::base_context;
 use crate::utils::context::SearchState;
+use crate::utils::internal_error;
 use crate::utils::pagination::Pagination;
 
 #[derive(Debug, Deserialize)]
@@ -46,20 +47,20 @@ pub async fn home(
         is_admin,
     );
 
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
 
-    let result = search(&mut conn, cfg.meili.as_ref(), &q).map_err(actix_web::error::ErrorInternalServerError)?;
+    let result = search(&mut conn, cfg.meili.as_ref(), &q).map_err(internal_error)?;
 
     let pagination = Pagination::new(q.page, result.total, q.per_page);
 
     let mut ctx = base_context(&cfg, current_user.as_ref());
-    let torrents = with_stats(&mut conn, result.torrents).map_err(actix_web::error::ErrorInternalServerError)?;
+    let torrents = with_stats(&mut conn, result.torrents).map_err(internal_error)?;
     ctx.insert("torrents", &torrents);
     ctx.insert("pagination", &pagination);
-    ctx.insert("banners", &Banner::active(&mut conn).map_err(actix_web::error::ErrorInternalServerError)?);
+    ctx.insert("banners", &Banner::active(&mut conn).map_err(internal_error)?);
     ctx.insert("search", &SearchState::new(&params.q, &params.c, &params.f, &params.s, &params.o));
 
-    let html = tmpl.render("home.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("home.html", &ctx).map_err(internal_error)?;
 
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }

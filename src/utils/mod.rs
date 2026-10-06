@@ -8,6 +8,13 @@ pub mod throttle;
 
 use std::net::IpAddr;
 
+/// For `map_err` on database, pool, storage and template errors: logs the error and
+/// answers a plain 500, so its text (SQL, file paths) never reaches the visitor.
+pub fn internal_error<E: std::fmt::Display>(e: E) -> actix_web::Error {
+    log::error!("Internal error: {e}");
+    actix_web::error::ErrorInternalServerError("Internal server error")
+}
+
 /// The visitor's address: the connection's peer, or behind a proxy listed in
 /// `TRUSTED_PROXIES`, the address it forwarded (see `proxy`).
 pub fn client_addr(req: &actix_web::HttpRequest) -> Option<IpAddr> {
@@ -76,6 +83,15 @@ mod tests {
         }
         assert_eq!(unpack_ip(&[10, 0, 0, 1]), Some("10.0.0.1".parse().unwrap()));
         assert_eq!(unpack_ip(&[1, 2]), None);
+    }
+
+    #[test]
+    fn internal_errors_hide_their_text() {
+        let response = internal_error("no such table: users").error_response();
+        assert_eq!(response.status(), actix_web::http::StatusCode::INTERNAL_SERVER_ERROR);
+        let body = actix_web::body::to_bytes(response.into_body());
+        let body = futures_util::FutureExt::now_or_never(body).unwrap().unwrap();
+        assert_eq!(body, "Internal server error");
     }
 
     #[test]

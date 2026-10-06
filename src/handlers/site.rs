@@ -8,13 +8,14 @@ use crate::config::Config;
 use crate::db::DbPool;
 use crate::middleware::auth::get_current_user;
 use crate::utils::context::base_context;
+use crate::utils::internal_error;
 
 /// Renders one of the static info pages (rules, help).
 fn info_page(page: &str, session: &Session, pool: &DbPool, tmpl: &Tera, cfg: &Config) -> Result<HttpResponse> {
     let current_user = get_current_user(session, pool);
     let mut ctx = base_context(cfg, current_user.as_ref());
     ctx.insert("active_page", page);
-    let html = tmpl.render(&format!("{}.html", page), &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render(&format!("{}.html", page), &ctx).map_err(internal_error)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
