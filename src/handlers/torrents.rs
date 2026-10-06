@@ -17,7 +17,7 @@ use crate::utils::context::base_context;
 use crate::middleware::auth::get_current_user;
 use crate::models::{danger_action, edited_flags, torrent_link, AdminLog, DangerAction, EditFlags, NewTorrent, NewStatistic, Torrent, TorrentFlags, User};
 use crate::torrent::{parse_torrent, rebuild_torrent};
-use crate::utils::{pack_ip, sanitize_string, sanitize_text};
+use crate::utils::{pack_ip, sanitize_string, sanitize_text, unpack_ip};
 
 pub async fn view_torrent(
     session: Session,
@@ -173,6 +173,19 @@ async fn render_view(
     let magnet = torrent.magnet_uri(&torrent.display_name, &cfg.trackers());
     let can_edit = torrent.can_edit(current_user.as_ref());
 
+    // The group the torrent was released under, shown below the submitter
+    let group = match torrent.group_id {
+        Some(gid) => crate::models::Group::by_id(conn, gid)
+            .map_err(actix_web::error::ErrorInternalServerError)?,
+        None => None,
+    };
+    // Upstream shows the uploader's IP next to the submitter to administrators only
+    let uploader_ip = current_user.as_ref()
+        .filter(|u| u.is_superadmin())
+        .and_then(|_| torrent.uploader_ip.as_deref())
+        .and_then(unpack_ip)
+        .map(|ip| ip.to_string());
+
     let mut ctx = base_context(cfg, current_user.as_ref());
     ctx.insert("torrent", &torrent);
     ctx.insert("can_edit", &can_edit);
@@ -191,6 +204,8 @@ async fn render_view(
     };
     ctx.insert("hide_comments", &hide_comments);
     ctx.insert("uploader", &uploader);
+    ctx.insert("uploader_ip", &uploader_ip);
+    ctx.insert("group", &group);
     ctx.insert("magnet", &magnet);
     ctx.insert("can_comment", &can_comment(torrent, current_user.as_ref()));
     ctx.insert("comment_text", comment_text);
@@ -933,6 +948,33 @@ mod tests {
             assert!(page.contains("(by <a href=\"/user/owner\">owner</a>)"), "{page}");
             assert!(page.contains("name=\"is_comment_locked\""), "moderators see the lock");
             assert!(page.contains("name=\"ban\""));
+        }
+
+        #[actix_web::test]
+        async fn group_row_and_admin_only_uploader_ip() {
+            let pool = pool();
+            {
+                let mut conn = pool.get().unwrap();
+                diesel::sql_query("INSERT INTO users (id, username, password_hash, status, level) VALUES (4, 'admin', 'x', 1, 3)")
+                    .execute(&mut conn).unwrap();
+                diesel::sql_query("INSERT INTO groups (id, name, tag, slug, created_time, owner_id) \
+                                   VALUES (1, 'Cyan', 'Cyan', 'cyan', CURRENT_TIMESTAMP, 1)")
+                    .execute(&mut conn).unwrap();
+            }
+            let (app, cookie) = app!(pool, Some(4));
+            let view = String::from_utf8(test::call_and_read_body(&app, get("/view/5", &cookie).to_request()).await.to_vec()).unwrap();
+            assert!(!view.contains("Group:"), "no group row without a group");
+
+            diesel::sql_query(format!("UPDATE nyaa_torrents SET group_id = 1, uploader_ip = X'{}' WHERE id = 5",
+                                      hex::encode(pack_ip("127.0.0.1".parse().unwrap()))))
+                .execute(&mut pool.get().unwrap()).unwrap();
+            for (user, sees_ip) in [(None, false), (Some(1), false), (Some(3), false), (Some(4), true)] {
+                let (app, cookie) = app!(pool, user);
+                let view = String::from_utf8(test::call_and_read_body(&app, get("/view/5", &cookie).to_request()).await.to_vec()).unwrap();
+                assert!(view.contains("<div class=\"col-md-1\">Group:</div>"), "{user:?}");
+                assert!(view.contains("<a href=\"/group/cyan\">[Cyan] Cyan</a>"), "{view}");
+                assert_eq!(view.contains("(127.0.0.1)"), sees_ip, "{user:?}");
+            }
         }
 
         #[actix_web::test]
