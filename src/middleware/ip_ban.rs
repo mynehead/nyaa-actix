@@ -10,14 +10,14 @@ use actix_web::{http::Method, web, Error, HttpResponse};
 use crate::db::DbPool;
 use crate::middleware::auth::{logout_user, SESSION_USER_KEY};
 use crate::models::Ban;
-use crate::utils::pack_ip;
+use crate::utils::client_ip;
 
 pub async fn reject_banned_ip(
     req: ServiceRequest,
     next: Next<impl MessageBody + 'static>,
 ) -> Result<ServiceResponse<BoxBody>, Error> {
     if req.method() == Method::POST {
-        let ip = req.peer_addr().map(|a| pack_ip(a.ip()));
+        let ip = client_ip(req.request());
         let pool = req.app_data::<web::Data<DbPool>>().cloned();
         if let (Some(ip), Some(pool)) = (ip, pool) {
             let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;

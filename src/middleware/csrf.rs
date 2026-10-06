@@ -83,6 +83,7 @@ mod tests {
             maintenance_mode: false,
             site_url: site_url.into(),
             tracker_urls: vec![],
+            trusted_proxies: vec![],
             meili: None,
             trusted: Default::default(),
         };

@@ -18,7 +18,7 @@ use crate::models::{password_matches, Ban, NewUser, User};
 use crate::storage::{Kind, Storage};
 use crate::utils::context::base_context;
 use crate::utils::throttle::Throttle;
-use crate::utils::{avatar, flash, pack_ip};
+use crate::utils::{avatar, client_addr, client_ip, flash};
 
 #[derive(Debug, Deserialize)]
 pub struct LoginForm {
@@ -91,7 +91,7 @@ pub async fn login_post(
             diesel::update(users::table.find(u.id))
                 .set((
                     users::last_login_date.eq(chrono::Utc::now().naive_utc()),
-                    users::last_login_ip.eq(req.peer_addr().map(|a| pack_ip(a.ip()))),
+                    users::last_login_ip.eq(client_ip(&req)),
                 ))
                 .execute(&mut conn)
                 .map_err(actix_web::error::ErrorInternalServerError)?;
@@ -217,7 +217,7 @@ static LOGIN_FAILURES_BY_ACCOUNT: LazyLock<Throttle> =
 static REGISTRATIONS_BY_IP: LazyLock<Throttle> = LazyLock::new(|| Throttle::new(20, Duration::from_secs(60 * 60)));
 
 fn client_key(req: &HttpRequest) -> String {
-    format!("ip:{}", req.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default())
+    format!("ip:{}", client_addr(req).map(|a| a.to_string()).unwrap_or_default())
 }
 
 pub async fn logout(session: Session) -> HttpResponse {
@@ -464,6 +464,7 @@ mod tests {
             maintenance_mode: false,
             site_url: "http://localhost:8080".into(),
             tracker_urls: vec![],
+            trusted_proxies: vec![],
             meili: None,
             trusted: Default::default(),
         }

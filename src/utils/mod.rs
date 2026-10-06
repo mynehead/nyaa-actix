@@ -2,10 +2,23 @@ pub mod avatar;
 pub mod context;
 pub mod flash;
 pub mod pagination;
+pub mod proxy;
 pub mod tera_filters;
 pub mod throttle;
 
 use std::net::IpAddr;
+
+/// The visitor's address: the connection's peer, or behind a proxy listed in
+/// `TRUSTED_PROXIES`, the address it forwarded (see `proxy`).
+pub fn client_addr(req: &actix_web::HttpRequest) -> Option<IpAddr> {
+    let trusted = req.app_data::<actix_web::web::Data<crate::config::Config>>().map(|c| c.trusted_proxies.as_slice());
+    proxy::resolve(req.peer_addr(), req.headers(), trusted.unwrap_or(&[]))
+}
+
+/// `client_addr` packed for the IP columns (see `pack_ip`).
+pub fn client_ip(req: &actix_web::HttpRequest) -> Option<Vec<u8>> {
+    client_addr(req).map(pack_ip)
+}
 
 pub fn pack_ip(addr: IpAddr) -> Vec<u8> {
     match addr {

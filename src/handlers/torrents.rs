@@ -20,7 +20,7 @@ use crate::models::{
 };
 use crate::torrent::{parse_torrent, rebuild_torrent};
 use crate::utils::context::base_context;
-use crate::utils::{pack_ip, sanitize_string, sanitize_text, unpack_ip};
+use crate::utils::{client_ip, sanitize_string, sanitize_text, unpack_ip};
 
 pub async fn view_torrent(
     session: Session,
@@ -489,7 +489,7 @@ pub async fn upload_post(
         encoding: meta.encoding.clone(),
         flags,
         uploader_id: current_user.as_ref().map(|u| u.id),
-        uploader_ip: req.peer_addr().map(|a| pack_ip(a.ip())),
+        uploader_ip: client_ip(&req),
         has_torrent: 1,
         comment_count: 0,
         created_time: now,
@@ -916,6 +916,7 @@ mod tests {
                 maintenance_mode: false,
                 site_url: String::new(),
                 tracker_urls: vec![],
+                trusted_proxies: vec![],
                 meili: None,
                 trusted: Default::default(),
             }
@@ -1045,7 +1046,7 @@ mod tests {
 
             diesel::sql_query(format!(
                 "UPDATE nyaa_torrents SET group_id = 1, uploader_ip = X'{}' WHERE id = 5",
-                hex::encode(pack_ip("127.0.0.1".parse().unwrap()))
+                hex::encode(crate::utils::pack_ip("127.0.0.1".parse().unwrap()))
             ))
             .execute(&mut pool.get().unwrap())
             .unwrap();

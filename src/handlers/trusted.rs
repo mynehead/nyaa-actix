@@ -300,6 +300,7 @@ mod tests {
             maintenance_mode: false,
             site_url: String::new(),
             tracker_urls: vec![],
+            trusted_proxies: vec![],
             meili: None,
             trusted: TrustedConfig { min_uploads: 0, min_downloads: 0, reapply_cooldown_days: 90 },
         }

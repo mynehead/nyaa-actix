@@ -22,6 +22,8 @@ pub struct Config {
     pub site_url: String,
     /// Announce URLs written into magnets and .torrent files, own tracker first.
     pub tracker_urls: Vec<String>,
+    /// TRUSTED_PROXIES: reverse proxies whose `X-Forwarded-For` names the visitor.
+    pub trusted_proxies: Vec<crate::utils::proxy::IpNet>,
     /// Meilisearch for text search and stats sorts (MEILI_URL and friends); None keeps search on SQLite.
     pub meili: Option<crate::search::meili::Meili>,
     /// Who may apply for trusted status (upstream's "Trusted Requirements").
@@ -85,6 +87,10 @@ impl Config {
                 .iter()
                 .flat_map(|key| split_list(&env::var(key).unwrap_or_default()))
                 .collect(),
+            trusted_proxies: crate::utils::proxy::parse_trusted_proxies(
+                &env::var("TRUSTED_PROXIES").unwrap_or_default(),
+            )
+            .unwrap_or_else(|e| panic!("{e}")),
             meili: crate::search::meili::Meili::from_env(),
             trusted: TrustedConfig::from_env(),
         }

@@ -89,6 +89,7 @@ mod render_tests {
             maintenance_mode: false,
             site_url: String::new(),
             tracker_urls: vec![],
+            trusted_proxies: vec![],
             meili: None,
             trusted: Default::default(),
         }
