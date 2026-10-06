@@ -12,3 +12,13 @@ pull request, commented out, with a one-line explanation and its default:
 ```
 
 Settings a fresh checkout needs to start (such as `SECRET_KEY`) stay as active lines.
+
+## Formatting and lints
+
+CI runs these and fails on any difference or warning, so run them before pushing:
+
+```sh
+cargo fmt
+cargo clippy --all-targets -- -D warnings
+cargo test
+```
