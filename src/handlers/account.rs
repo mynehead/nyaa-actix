@@ -160,52 +160,65 @@ pub async fn register_post(
     REGISTRATIONS_BY_IP.hit(&ip);
 
     let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
-    let mut errors: Vec<String> = Vec::new();
-
-    if form.username.len() < 3 || form.username.len() > 32 {
-        errors.push("Username must be 3–32 characters.".into());
-    }
-    if !form.username.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
-        errors.push("Username may only contain letters, numbers, _ and -.".into());
-    }
-    if form.password != form.password_confirm {
-        errors.push("Passwords do not match.".into());
-    }
-    if form.password.len() < 6 {
-        errors.push("Password must be at least 6 characters.".into());
-    }
-    if User::by_username(&mut conn, &form.username).map_err(actix_web::error::ErrorInternalServerError)?.is_some() {
+    let (username, email) = (form.username.trim(), form.email.trim());
+    let mut errors = register_errors(username, email, &form.password, &form.password_confirm);
+    if User::username_taken(&mut conn, username).map_err(actix_web::error::ErrorInternalServerError)? {
         errors.push("Username is already taken.".into());
     }
-    if User::by_email(&mut conn, &form.email).map_err(actix_web::error::ErrorInternalServerError)?.is_some() {
+    if User::by_email(&mut conn, email).map_err(actix_web::error::ErrorInternalServerError)?.is_some() {
         errors.push("Email is already in use.".into());
     }
 
-    if !errors.is_empty() {
+    let render_errors = |errors: &[String]| -> Result<HttpResponse> {
         let mut ctx = base_context(&cfg, None);
-        ctx.insert("errors", &errors);
-        ctx.insert("username", &form.username);
-        ctx.insert("email", &form.email);
+        ctx.insert("errors", errors);
+        ctx.insert("username", username);
+        ctx.insert("email", email);
         let html = tmpl.render("register.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
-        return Ok(HttpResponse::Ok()
-            .status(actix_web::http::StatusCode::BAD_REQUEST)
-            .content_type("text/html")
-            .body(html));
+        Ok(HttpResponse::BadRequest().content_type("text/html").body(html))
+    };
+    if !errors.is_empty() {
+        return render_errors(&errors);
     }
 
-    let (username, email, password) = (form.username.clone(), form.email.clone(), form.password.clone());
-    let new_user = web::block(move || NewUser::new(&username, Some(&email), &password)).await?;
-    diesel::insert_into(users::table)
-        .values(&new_user)
-        .execute(&mut conn)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let (name, mail, password) = (username.to_string(), email.to_string(), form.password.clone());
+    let new_user = web::block(move || NewUser::new(&name, Some(&mail), &password)).await?;
+    // Two sign-ups for the same name or email at once: the second hits the UNIQUE index
+    match diesel::insert_into(users::table).values(&new_user).execute(&mut conn) {
+        Err(diesel::result::Error::DatabaseError(diesel::result::DatabaseErrorKind::UniqueViolation, _)) => {
+            return render_errors(&["Username or email is already taken.".to_string()]);
+        }
+        result => result.map_err(actix_web::error::ErrorInternalServerError)?,
+    };
 
-    let user = User::by_username(&mut conn, &form.username)
+    let user = User::by_username(&mut conn, username)
         .map_err(actix_web::error::ErrorInternalServerError)?
         .ok_or_else(|| actix_web::error::ErrorInternalServerError("Failed to fetch user"))?;
 
     login_user(&session, user.id).ok();
     Ok(HttpResponse::Found().insert_header(("Location", "/")).finish())
+}
+
+/// Upstream's `RegisterForm` rules, counted in characters: usernames are 3 to 32 ASCII
+/// letters, digits, `_` or `-`; the email is required; passwords are 6 to 1024 characters.
+fn register_errors(username: &str, email: &str, password: &str, password_confirm: &str) -> Vec<String> {
+    let mut errors = Vec::new();
+    if !(3..=32).contains(&username.chars().count()) {
+        errors.push("Username must be 3–32 characters.".into());
+    }
+    if !username.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+        errors.push("Username may only contain letters, numbers, _ and -.".into());
+    }
+    if !looks_like_email(email) || !(5..=128).contains(&email.chars().count()) {
+        errors.push("Please enter a valid email address.".into());
+    }
+    if password != password_confirm {
+        errors.push("Passwords do not match.".into());
+    }
+    if !(6..=1024).contains(&password.chars().count()) {
+        errors.push("Password must be 6–1024 characters.".into());
+    }
+    errors
 }
 
 /// Failed logins allowed per address and per account name before a 15-minute pause.
@@ -491,6 +504,7 @@ mod tests {
                     .wrap(SessionMiddleware::new(CookieSessionStore::default(), Key::from(&[7u8; 64])))
                     .route("/login/{id}", web::get().to(login_as))
                     .route("/account/login", web::post().to(login_post))
+                    .route("/account/register", web::post().to(register_post))
                     .route("/account/profile", web::get().to(profile))
                     .route("/account/profile", web::post().to(profile_post))
                     .route("/account/profile/avatar", web::post().to(avatar_post))
@@ -540,6 +554,52 @@ mod tests {
             let status = res.status();
             (status, String::from_utf8(test::read_body(res).await.to_vec()).unwrap())
         }};
+    }
+
+    #[actix_web::test]
+    async fn register_rules_count_characters() {
+        let ok = |u: &str, e: &str, p: &str| register_errors(u, e, p, p).is_empty();
+        assert!(ok("new_user-1", "a@b.co", "secret"));
+        assert!(!ok("ab", "a@b.co", "secret"));
+        assert!(!ok(&"a".repeat(33), "a@b.co", "secret"));
+        // Upstream allows ASCII only; non-ASCII letters were allowed but then counted in bytes
+        assert!(!ok("ゆきゆき", "a@b.co", "secret"));
+        assert!(!ok("new", "", "secret") && !ok("new", "not-an-email", "secret"));
+        // Six characters, even when they take more bytes
+        assert!(ok("new", "a@b.co", "éééééé") && !ok("new", "a@b.co", "ééééé"));
+        assert!(!register_errors("new", "a@b.co", "secret", "secreT").is_empty());
+    }
+
+    #[actix_web::test]
+    async fn register_rejects_lookalike_names_and_bad_email() {
+        let (pool, cfg) = (pool(), config("register"));
+        let (app, _) = app!(pool, cfg);
+        let register = |username: &'static str, email: &'static str| {
+            let app = &app;
+            async move {
+                let req = test::TestRequest::post()
+                    .uri("/account/register")
+                    .set_form([
+                        ("username", username),
+                        ("email", email),
+                        ("password", PASSWORD),
+                        ("password_confirm", PASSWORD),
+                    ])
+                    .to_request();
+                let res = test::call_service(app, req).await;
+                let status = res.status();
+                (status, String::from_utf8(test::read_body(res).await.to_vec()).unwrap())
+            }
+        };
+        let (status, page) = register("Alice", "x@example.com").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(page.contains("Username is already taken."), "{page}");
+        let (status, page) = register("carl", "carl").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(page.contains("Please enter a valid email address."), "{page}");
+        let (status, _) = register(" carl ", "carl@example.com").await;
+        assert_eq!(status, StatusCode::FOUND);
+        assert!(User::by_username(&mut pool.get().unwrap(), "carl").unwrap().is_some(), "stored trimmed");
     }
 
     #[actix_web::test]

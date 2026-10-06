@@ -211,6 +211,14 @@ impl User {
         users::table.filter(users::username.eq(name)).first(conn).optional()
     }
 
+    /// Whether a user with this name exists, ignoring case, so nobody can register a
+    /// look-alike of an existing name ("Admin" next to "admin").
+    pub fn username_taken(conn: &mut DbConnection, name: &str) -> QueryResult<bool> {
+        use crate::search::db::lower;
+        let n: i64 = users::table.filter(lower(users::username).eq(name.to_lowercase())).count().get_result(conn)?;
+        Ok(n > 0)
+    }
+
     pub fn by_email(conn: &mut DbConnection, addr: &str) -> QueryResult<Option<User>> {
         users::table.filter(users::email.eq(addr)).first(conn).optional()
     }
