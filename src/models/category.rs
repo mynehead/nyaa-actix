@@ -18,14 +18,6 @@ pub struct SubCategory {
     pub name: String,
 }
 
-impl SubCategory {
-    /// The "main_sub" form used in the `c=` search param and the upload form (upstream `id_as_string`).
-    #[allow(dead_code)]
-    pub fn id_str(&self) -> String {
-        format!("{}_{}", self.main_category_id, self.id)
-    }
-}
-
 pub fn get_all_categories(conn: &mut DbConnection) -> QueryResult<Vec<(MainCategory, Vec<SubCategory>)>> {
     let mains = nyaa_main_categories::table.order(nyaa_main_categories::id.asc()).load::<MainCategory>(conn)?;
     let subs = nyaa_sub_categories::table
@@ -49,28 +41,4 @@ pub fn get_sub_category(conn: &mut DbConnection, main_id: i32, sub_id: i32) -> Q
         .filter(nyaa_sub_categories::id.eq(sub_id))
         .first(conn)
         .optional()
-}
-
-/// "Main - Sub" name for a torrent's category ids. For the listing and view page, which
-/// still print the raw "1_2" ids.
-#[allow(dead_code)]
-pub fn category_display(conn: &mut DbConnection, main_id: i32, sub_id: i32) -> String {
-    let main = nyaa_main_categories::table.find(main_id).first::<MainCategory>(conn).ok();
-    let sub = nyaa_sub_categories::table
-        .filter(nyaa_sub_categories::main_category_id.eq(main_id))
-        .filter(nyaa_sub_categories::id.eq(sub_id))
-        .first::<SubCategory>(conn)
-        .ok();
-
-    match (main, sub) {
-        (Some(m), Some(s)) => {
-            if sub_id == 0 {
-                m.name
-            } else {
-                format!("{} - {}", m.name, s.name)
-            }
-        }
-        (Some(m), None) => m.name,
-        _ => "Unknown".to_string(),
-    }
 }

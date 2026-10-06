@@ -244,6 +244,7 @@ impl ProfileForm {
 }
 
 /// The profile page; `errors` go to the form of `active_tab` ("password", "email" or "preferences").
+#[allow(clippy::too_many_arguments)]
 fn render_profile(
     session: &Session,
     conn: &mut DbConnection,

@@ -46,10 +46,9 @@ pub async fn home(
         is_admin,
     );
 
-    let mut conn = pool.get().map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
 
-    let result =
-        search(&mut conn, cfg.meili.as_ref(), &q).map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+    let result = search(&mut conn, cfg.meili.as_ref(), &q).map_err(actix_web::error::ErrorInternalServerError)?;
 
     let pagination = Pagination::new(q.page, result.total, q.per_page);
 
@@ -60,7 +59,7 @@ pub async fn home(
     ctx.insert("banners", &Banner::active(&mut conn).map_err(actix_web::error::ErrorInternalServerError)?);
     ctx.insert("search", &SearchState::new(&params.q, &params.c, &params.f, &params.s, &params.o));
 
-    let html = tmpl.render("home.html", &ctx).map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+    let html = tmpl.render("home.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
 
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }

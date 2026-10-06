@@ -75,6 +75,7 @@ impl SearchQuery {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn from_params(
         term: Option<String>,
         user_id: Option<i32>,

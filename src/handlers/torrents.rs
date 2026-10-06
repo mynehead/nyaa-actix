@@ -188,7 +188,7 @@ async fn render_view(
     let uploader_ip = current_user
         .as_ref()
         .filter(|u| u.is_superadmin())
-        .and_then(|_| torrent.uploader_ip.as_deref())
+        .and(torrent.uploader_ip.as_deref())
         .and_then(unpack_ip)
         .map(|ip| ip.to_string());
 
@@ -422,12 +422,8 @@ pub async fn upload_post(
                     flags |= crate::models::TorrentFlags::COMPLETE.bits();
                 }
             }
-            "is_trusted" => {
-                if !data.is_empty() {
-                    if current_user.as_ref().map(|u| u.is_trusted()).unwrap_or(false) {
-                        flags |= crate::models::TorrentFlags::TRUSTED.bits();
-                    }
-                }
+            "is_trusted" if !data.is_empty() && current_user.as_ref().map(|u| u.is_trusted()).unwrap_or(false) => {
+                flags |= crate::models::TorrentFlags::TRUSTED.bits();
             }
             _ => {}
         }
