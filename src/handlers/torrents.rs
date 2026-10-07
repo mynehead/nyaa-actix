@@ -40,7 +40,18 @@ pub async fn view_torrent(
 
     check_visible(&torrent, &current_user)?;
 
-    let html = render_view(&mut conn, &tmpl, &cfg, &storage, &torrent, current_user.as_ref(), "", None).await?;
+    let html = render_view(
+        &mut conn,
+        &tmpl,
+        &cfg,
+        &storage,
+        &torrent,
+        current_user.as_ref(),
+        "",
+        None,
+        &crate::utils::flash::take(&session),
+    )
+    .await?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
@@ -88,7 +99,8 @@ pub async fn post_comment(
         let error =
             format!("Comment must be at least {COMMENT_MIN_LEN} characters long and {COMMENT_MAX_LEN} at most.");
         let html =
-            render_view(&mut conn, &tmpl, &cfg, &storage, &torrent, Some(&user), &form.comment, Some(&error)).await?;
+            render_view(&mut conn, &tmpl, &cfg, &storage, &torrent, Some(&user), &form.comment, Some(&error), &[])
+                .await?;
         return Ok(HttpResponse::BadRequest().content_type("text/html").body(html));
     }
 
@@ -125,6 +137,7 @@ async fn render_view(
     current_user: Option<&User>,
     comment_text: &str,
     comment_error: Option<&str>,
+    flash_messages: &[crate::utils::flash::Flash],
 ) -> Result<String> {
     let torrent_id = torrent.id;
     let current_user = current_user.cloned();
@@ -216,6 +229,8 @@ async fn render_view(
     ctx.insert("can_comment", &can_comment(torrent, current_user.as_ref()));
     ctx.insert("comment_text", comment_text);
     ctx.insert("comment_error", &comment_error);
+    ctx.insert("can_report", &crate::handlers::reports::can_report(current_user.as_ref(), cfg));
+    ctx.insert("flash_messages", flash_messages);
 
     tmpl.render("view.html", &ctx).map_err(internal_error)
 }
@@ -935,6 +950,7 @@ mod tests {
                 tracker_urls: vec![],
                 trusted_proxies: vec![],
                 meili: None,
+                ratelimit_account_age: 0,
                 trusted: Default::default(),
             }
         }

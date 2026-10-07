@@ -1,0 +1,149 @@
+{% extends "layout.html" %}
+{% macro pager(pagination, key, other_key, other_page) -%}
+	<div class=pagination>
+		<ul class="pagination">
+			{% if pagination.has_prev %}
+			<li><a rel="prev" href="?{{ key }}={{ pagination.current - 1 }}&amp;{{ other_key }}={{ other_page }}">&laquo;</a></li>
+			{% else %}
+			<li class="disabled"><a href="#">&laquo;</a></li>
+			{% endif %}
+			{% for page in pagination.pages %}
+			{% if page.is_ellipsis %}
+			<li class="disabled"><a href="#">…</a></li>
+			{% elif page.is_current %}
+			<li class="active"><a href="#">{{ page.num }} <span class="sr-only">(current)</span></a></li>
+			{% else %}
+			<li><a href="?{{ key }}={{ page.num }}&amp;{{ other_key }}={{ other_page }}">{{ page.num }}</a></li>
+			{% endif %}
+			{% endfor %}
+			{% if pagination.has_next %}
+			<li><a rel="next" href="?{{ key }}={{ pagination.current + 1 }}&amp;{{ other_key }}={{ other_page }}">&raquo;</a></li>
+			{% else %}
+			<li class="disabled"><a href="#">&raquo;</a></li>
+			{% endif %}
+		</ul>
+	</div>
+{%- endmacro pager %}
+
+{% block title %}Reports :: {{ config.site_name }}{% endblock %}
+{% block body %}
+{# Upstream reports.html, plus a second table for group reports #}
+	<div class="table">
+		<table class="table table-bordered table-hover table-striped table-condensed">
+			<thead>
+			<tr>
+				<th>#</th>
+				<th>Reported by</th>
+				<th>Torrent</th>
+				<th>Reason</th>
+				<th>Date</th>
+				<th>Action</th>
+			</tr>
+			</thead>
+			<tbody>
+			{% for row in reports %}
+			<tr class="reports-row">
+				<td>{{ row.report.id }}</td>
+				<td>
+					{% if row.reporter %}
+					<a href="/user/{{ row.reporter.username | urlencode }}">{{ row.reporter.username }}</a>
+					{% if row.reporter.level >= 1 %}
+					<span class="label label-success pull-right">Trusted</span>
+					{% endif %}
+					{% else %}
+					[deleted user]
+					{% endif %}
+				</td>
+				<td>
+					<a href="/view/{{ row.torrent.id }}">{{ row.torrent.display_name }}</a>
+					{% if row.uploader %}
+					by <a href="/user/{{ row.uploader.username | urlencode }}">
+					{{ row.uploader.username }}</a>
+					{% endif %}
+					{% if row.uploader_ip %}
+					({{ row.uploader_ip }})
+					{% endif %}
+					{% if row.uploader and row.uploader.level >= 1 %}
+					<span class="label label-success pull-right">Trusted</span>
+					{% endif %}
+				</td>
+				<td>{{ row.report.reason }}</td>
+				<td>{{ row.report.created_time | date(format="%Y-%m-%d %H:%M:%S") }}</td>
+				<td class="report-action-column">
+					<form method="post">
+						<input id="report" name="report" type="hidden" value="{{ row.report.id }}">
+						<div class="input-group input-group-sm">
+							<select class="form-control" id="action" name="action">
+								<option value="close">Close</option>
+								<option value="hide">Hide</option>
+								<option value="delete">Delete</option>
+							</select>
+							<div class="input-group-btn">
+								<button type="submit" class="btn btn-primary">Review</button>
+							</div>
+						</div>
+					</form>
+				</td>
+			</tr>
+			{% else %}
+			<tr><td colspan="6" class="text-center">No torrent reports.</td></tr>
+			{% endfor %}
+			</tbody>
+		</table>
+	</div>
+
+	{{ self::pager(pagination=pagination, key="p", other_key="gp", other_page=group_pagination.current) }}
+
+	<h3>Group Reports</h3>
+	<div class="table">
+		<table class="table table-bordered table-hover table-striped table-condensed">
+			<thead>
+			<tr>
+				<th>#</th>
+				<th>Reported by</th>
+				<th>Group</th>
+				<th>Reason</th>
+				<th>Date</th>
+				<th>Action</th>
+			</tr>
+			</thead>
+			<tbody>
+			{% for row in group_reports %}
+			<tr class="reports-row">
+				<td>{{ row.report.id }}</td>
+				<td>
+					{% if row.reporter %}
+					<a href="/user/{{ row.reporter.username | urlencode }}">{{ row.reporter.username }}</a>
+					{% if row.reporter.level >= 1 %}
+					<span class="label label-success pull-right">Trusted</span>
+					{% endif %}
+					{% else %}
+					[deleted user]
+					{% endif %}
+				</td>
+				<td><a href="/group/{{ row.group.slug | urlencode }}">[{{ row.group.tag }}] {{ row.group.name }}</a></td>
+				<td>{{ row.report.reason }}</td>
+				<td>{{ row.report.created_time | date(format="%Y-%m-%d %H:%M:%S") }}</td>
+				<td class="report-action-column">
+					<form method="post">
+						<input id="group_report" name="group_report" type="hidden" value="{{ row.report.id }}">
+						<div class="input-group input-group-sm">
+							<select class="form-control" id="group_action" name="action">
+								<option value="close">Close</option>
+							</select>
+							<div class="input-group-btn">
+								<button type="submit" class="btn btn-primary">Review</button>
+							</div>
+						</div>
+					</form>
+				</td>
+			</tr>
+			{% else %}
+			<tr><td colspan="6" class="text-center">No group reports.</td></tr>
+			{% endfor %}
+			</tbody>
+		</table>
+	</div>
+
+	{{ self::pager(pagination=group_pagination, key="gp", other_key="p", other_page=pagination.current) }}
+{% endblock %}

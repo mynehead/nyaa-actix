@@ -24,6 +24,8 @@ pub struct Config {
     pub tracker_urls: Vec<String>,
     /// TRUSTED_PROXIES: reverse proxies whose `X-Forwarded-For` names the visitor.
     pub trusted_proxies: Vec<crate::utils::proxy::IpNet>,
+    /// Upstream RATELIMIT_ACCOUNT_AGE, in seconds: accounts must be older than this to report torrents.
+    pub ratelimit_account_age: i64,
     /// Meilisearch for text search and stats sorts (MEILI_URL and friends); None keeps search on SQLite.
     pub meili: Option<crate::search::meili::Meili>,
     /// Who may apply for trusted status (upstream's "Trusted Requirements").
@@ -91,6 +93,10 @@ impl Config {
                 &env::var("TRUSTED_PROXIES").unwrap_or_default(),
             )
             .unwrap_or_else(|e| panic!("{e}")),
+            ratelimit_account_age: env::var("RATELIMIT_ACCOUNT_AGE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(7 * 24 * 3600),
             meili: crate::search::meili::Meili::from_env(),
             trusted: TrustedConfig::from_env(),
         }
@@ -114,6 +120,7 @@ impl Config {
             tracker_urls: vec![],
             trusted_proxies: vec![],
             meili: None,
+            ratelimit_account_age: 0,
             trusted: Default::default(),
         }
     }
