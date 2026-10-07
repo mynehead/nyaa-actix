@@ -142,14 +142,22 @@ fn render_group_form(
     tmpl.render(template, &ctx).map_err(internal_error)
 }
 
+/// Only moderators and admins may create groups.
+fn group_creator(session: &Session, pool: &DbPool) -> Result<User> {
+    let user = get_current_user(session, pool).ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
+    if !user.is_moderator() {
+        return Err(actix_web::error::ErrorForbidden("Only moderators and admins can create groups"));
+    }
+    Ok(user)
+}
+
 pub async fn create_group_get(
     session: Session,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
 ) -> Result<HttpResponse> {
-    let current_user =
-        get_current_user(&session, &pool).ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
+    let current_user = group_creator(&session, &pool)?;
     let html = render_group_form(&tmpl, &cfg, &current_user, "group_create.html", None, &GroupForm::default(), &[])?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
@@ -161,8 +169,7 @@ pub async fn create_group_post(
     cfg: web::Data<Config>,
     form: web::Form<GroupForm>,
 ) -> Result<HttpResponse> {
-    let current_user =
-        get_current_user(&session, &pool).ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
+    let current_user = group_creator(&session, &pool)?;
     let mut conn = pool.get().map_err(internal_error)?;
 
     let form = form.cleaned();
@@ -436,14 +443,14 @@ mod tests {
     };
     use diesel::r2d2::Pool;
 
-    /// Group 1 owned by user 1; user 2 is an editor, user 3 uploads, user 4 isn't a member.
+    /// Group 1 owned by user 1 (a moderator); user 2 is an editor, user 3 uploads, user 4 isn't a member.
     fn pool() -> DbPool {
         let pool = Pool::builder().max_size(1).build(crate::db::DbManager::new(":memory:")).unwrap();
         let mut conn = pool.get().unwrap();
         crate::db::run_migrations(&mut conn).unwrap();
         for sql in [
             "INSERT INTO users (id, username, password_hash, status, level) VALUES \
-             (1, 'owner', 'x', 1, 0), (2, 'editor', 'x', 1, 0), (3, 'uploader', 'x', 1, 0), (4, 'other', 'x', 1, 0)",
+             (1, 'owner', 'x', 1, 2), (2, 'editor', 'x', 1, 0), (3, 'uploader', 'x', 1, 0), (4, 'other', 'x', 1, 0)",
             "INSERT INTO groups (id, name, tag, slug, owner_id) VALUES (1, 'Group', 'G', 'grp', 1)",
             "INSERT INTO group_members (group_id, user_id, permissions) VALUES (1, 2, 3), (1, 3, 1)",
         ] {
@@ -509,6 +516,66 @@ mod tests {
         let owner = cookie(1).await;
         assert_eq!(post(owner, &[("username", "editor"), ("can_upload", "1")]).await, StatusCode::FOUND);
         assert_eq!(perms(&pool, 2), Some(PERM_UPLOAD));
+    }
+
+    #[actix_web::test]
+    async fn only_moderators_and_admins_create_groups() {
+        let pool = pool();
+        let mut tera = Tera::new("templates/**/*").unwrap();
+        crate::utils::tera_filters::register(&mut tera);
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(pool.clone()))
+                .app_data(web::Data::new(tera))
+                .app_data(web::Data::new(Config::for_tests()))
+                .wrap(SessionMiddleware::new(CookieSessionStore::default(), Key::from(&[7u8; 64])))
+                .route("/login/{id}", web::get().to(login))
+                .route("/groups/create", web::get().to(create_group_get))
+                .route("/groups/create", web::post().to(create_group_post)),
+        )
+        .await;
+        diesel::sql_query(
+            "INSERT INTO users (id, username, password_hash, status, level) VALUES (5, 'admin', 'x', 1, 3)",
+        )
+        .execute(&mut pool.get().unwrap())
+        .unwrap();
+        let cookie = |user: i32| {
+            let app = &app;
+            async move {
+                let req = test::TestRequest::get().uri(&format!("/login/{user}")).to_request();
+                test::call_service(app, req).await.response().cookies().next().unwrap().into_owned()
+            }
+        };
+        let create = |cookie: Option<Cookie<'static>>, slug: &'static str| {
+            let app = &app;
+            async move {
+                let mut get = test::TestRequest::get().uri("/groups/create");
+                let mut post = test::TestRequest::post().uri("/groups/create").set_form([
+                    ("name", slug),
+                    ("tag", slug),
+                    ("slug", slug),
+                ]);
+                if let Some(c) = cookie {
+                    get = get.cookie(c.clone());
+                    post = post.cookie(c);
+                }
+                let get = test::call_service(app, get.to_request()).await.status();
+                (get, test::call_service(app, post.to_request()).await.status())
+            }
+        };
+        let exists = |slug: &str| Group::by_slug(&mut pool.get().unwrap(), slug).unwrap().is_some();
+
+        assert_eq!(create(None, "anon").await, (StatusCode::UNAUTHORIZED, StatusCode::UNAUTHORIZED));
+        // Regular (user 4) and trusted users are refused
+        assert_eq!(create(Some(cookie(4).await), "regular").await, (StatusCode::FORBIDDEN, StatusCode::FORBIDDEN));
+        diesel::sql_query("UPDATE users SET level = 1 WHERE id = 4").execute(&mut pool.get().unwrap()).unwrap();
+        assert_eq!(create(Some(cookie(4).await), "trusted").await, (StatusCode::FORBIDDEN, StatusCode::FORBIDDEN));
+        assert!(!exists("anon") && !exists("regular") && !exists("trusted"));
+
+        // Moderators (user 1) and admins can
+        assert_eq!(create(Some(cookie(1).await), "moderator").await, (StatusCode::OK, StatusCode::FOUND));
+        assert_eq!(create(Some(cookie(5).await), "admin").await, (StatusCode::OK, StatusCode::FOUND));
+        assert!(exists("moderator") && exists("admin"));
     }
 
     #[actix_web::test]
