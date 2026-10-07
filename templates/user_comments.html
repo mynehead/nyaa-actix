@@ -1,0 +1,56 @@
+{% extends "layout.html" %}
+{% import "macros.html" as macros %}
+{% block title %}Comments made by {{ profile_user.username }} :: {{ config.site_name }}{% endblock %}
+{% block meta_image %}{{ avatar_url }}{% endblock %}
+{% block metatags %}
+<meta property="og:description" content="Comments made by {{ profile_user.username }}">
+{% endblock %}
+
+{% block body %}
+<h3>
+	{{ macros::user_link(user=profile_user) }}'{% if profile_user.username is ending_with("s") %}{% else %}s{% endif %} comments
+</h3>
+
+{% if comments %}
+<div id="comments" class="panel panel-default">
+	<div class="panel-heading">
+		<h3 class="panel-title">
+			Total of {{ pagination.total_items }} comments
+		</h3>
+	</div>
+	{% for item in comments %}
+	{% set comment = item.comment %}
+	<div class="panel panel-default comment-panel" id="com-{{ loop.index }}">
+		<div class="panel-body">
+			<div class="col-md-2">
+				<p>
+					{{ macros::user_link(user=profile_user) }}
+				</p>
+				<img class="avatar" src="{{ avatar_url }}" alt="{{ profile_user | level_str }}">
+			</div>
+			<div class="col-md-10 comment">
+				<div class="row comment-details">
+					<a href="#com-{{ loop.index }}"><small data-timestamp-swap data-timestamp="{{ comment.created_time | date(format="%s") }}">{{ comment.created_time | date(format="%Y-%m-%d %H:%M UTC") }}</small></a>
+					{% if comment.edited_time %}
+					<small data-timestamp-swap data-timestamp-title data-timestamp="{{ comment.edited_time | date(format="%s") }}" title="{{ comment.edited_time }}">(edited)</small>
+					{% endif %}
+					<small>on torrent <a href="/view/{{ comment.torrent_id }}">#{{ comment.torrent_id }} <i>{{ item.torrent_name }}</i></a></small>
+				</div>
+				<div class="row comment-body">
+					<div markdown-text class="comment-content" id="torrent-comment{{ comment.id }}">{{- comment.text -}}</div>
+				</div>
+			</div>
+		</div>
+	</div>
+	{% endfor %}
+</div>
+{% else %}
+<h3>No comments</h3>
+{% endif %}
+
+{% if pagination.total_pages > 1 %}
+{% set encoded_username = profile_user.username | urlencode %}
+{% set page_url = "/user/" ~ encoded_username ~ "/comments" %}
+{% include "admin/pagination.html" %}
+{% endif %}
+{% endblock %}
