@@ -14,7 +14,7 @@
 			{% if can_edit %}
 			<a href="/view/{{ torrent.id }}/edit" title="Edit torrent"><i class="fa fa-fw fa-pencil"></i></a>
 			{% endif %}
-			{{ torrent.display_name }}
+			{% if group %}<a href="/group/{{ group.slug | urlencode }}" class="group-tag" title="{{ group.name }}">[{{ group.tag }}]</a> {{ title }}{% else %}{{ torrent.display_name }}{% endif %}
 		</h3>
 	</div>
 	<div class="panel-body">

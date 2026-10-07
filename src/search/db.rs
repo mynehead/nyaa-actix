@@ -339,10 +339,19 @@ pub struct ListedTorrent {
     pub seed_count: i32,
     pub leech_count: i32,
     pub download_count: i32,
+    /// The group it was released under, shown as a "[tag]" link before the name
+    pub group: Option<crate::models::Group>,
+    /// The display name, minus a leading "[tag]" the group link replaces
+    pub title: String,
 }
 
-/// Attaches stats to a page of torrents with one query.
+/// Attaches stats and groups to a page of torrents with one query each.
 pub fn with_stats(conn: &mut DbConnection, torrents: Vec<Torrent>) -> QueryResult<Vec<ListedTorrent>> {
+    let mut group_ids: Vec<i32> = torrents.iter().filter_map(|t| t.group_id).collect();
+    group_ids.sort_unstable();
+    group_ids.dedup();
+    let groups: std::collections::HashMap<i32, crate::models::Group> =
+        crate::models::Group::by_ids(conn, &group_ids)?.into_iter().map(|g| (g.id, g)).collect();
     let ids: Vec<i32> = torrents.iter().map(|t| t.id).collect();
     let stats: std::collections::HashMap<i32, Statistic> = nyaa_statistics::table
         .filter(nyaa_statistics::torrent_id.eq_any(&ids))
@@ -354,10 +363,17 @@ pub fn with_stats(conn: &mut DbConnection, torrents: Vec<Torrent>) -> QueryResul
         .into_iter()
         .map(|torrent| {
             let s = stats.get(&torrent.id);
+            let group = torrent.group_id.and_then(|gid| groups.get(&gid)).cloned();
+            let title = match &group {
+                Some(g) => g.strip_tag(&torrent.display_name).to_string(),
+                None => torrent.display_name.clone(),
+            };
             ListedTorrent {
                 seed_count: s.map_or(0, |s| s.seed_count),
                 leech_count: s.map_or(0, |s| s.leech_count),
                 download_count: s.map_or(0, |s| s.download_count),
+                group,
+                title,
                 torrent,
             }
         })
@@ -411,6 +427,27 @@ mod tests {
         q.hide_anonymous = false;
         q.include_hidden = true;
         assert_eq!(ids(&mut conn, &q), (vec![3, 2, 1], 3));
+    }
+
+    #[test]
+    fn listing_rows_carry_their_group_and_untagged_title() {
+        let mut conn = db_with(&[(1, TorrentFlags::empty()), (2, TorrentFlags::empty())]);
+        diesel::sql_query(
+            "INSERT INTO groups (id, name, tag, slug, created_time, owner_id) \
+             VALUES (1, 'Test Subs', 'Test', 'test', CURRENT_TIMESTAMP, 1)",
+        )
+        .execute(&mut conn)
+        .unwrap();
+        diesel::sql_query("UPDATE nyaa_torrents SET group_id = 1, display_name = '[Test] Show - 01' WHERE id = 2")
+            .execute(&mut conn)
+            .unwrap();
+        let page = search(&mut conn, &SearchQuery::new()).unwrap().torrents;
+        let rows = with_stats(&mut conn, page).unwrap();
+        let row = |id| rows.iter().find(|r| r.torrent.id == id).unwrap();
+        assert_eq!(row(2).group.as_ref().map(|g| g.slug.as_str()), Some("test"));
+        assert_eq!(row(2).title, "Show - 01");
+        assert!(row(1).group.is_none());
+        assert_eq!(row(1).title, "t");
     }
 
     #[test]

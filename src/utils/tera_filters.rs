@@ -112,7 +112,17 @@ mod render_tests {
     fn listing_renders_rows_sort_links_and_pages() {
         let mut ctx = base_context(&config(), None);
         let torrent = crate::torrent::tests::sample_torrent();
-        ctx.insert("torrents", &vec![ListedTorrent { torrent, seed_count: 4, leech_count: 2, download_count: 9 }]);
+        ctx.insert(
+            "torrents",
+            &vec![ListedTorrent {
+                title: torrent.display_name.clone(),
+                torrent,
+                seed_count: 4,
+                leech_count: 2,
+                download_count: 9,
+                group: None,
+            }],
+        );
         ctx.insert("pagination", &Pagination::new(2, 500, 75));
         ctx.insert(
             "search",

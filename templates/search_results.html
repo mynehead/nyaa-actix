@@ -31,7 +31,7 @@
 						<i class="fa fa-comments-o"></i>{{ torrent.comment_count -}}
 					</a>
 					{% endif %}
-					<a href="/view/{{ torrent.id }}" title="{{ torrent.display_name }}">{{ torrent.display_name }}</a>
+					{% if torrent.group %}<a href="/group/{{ torrent.group.slug | urlencode }}" class="group-tag" title="{{ torrent.group.name }}">[{{ torrent.group.tag }}]</a> {% endif %}<a href="/view/{{ torrent.id }}" title="{{ torrent.display_name }}">{{ torrent.title }}</a>
 				</td>
 				<td class="text-center">
 					{% if torrent.has_torrent %}
