@@ -714,3 +714,74 @@ body.dark .dropdown-menu .logout-form button:focus {
 	color: #cbcbcb;
 	background-color: #434343;
 }
+
+/* Search patterns popover (templates/search_help.html) */
+.navbar-form {
+	position: relative;
+}
+
+.search-help {
+	position: absolute;
+	right: 15px;
+	top: 100%;
+	z-index: 1060;
+	width: 440px;
+	max-width: calc(100vw - 30px);
+	margin-top: 6px;
+	padding: 12px 14px;
+	background: #fff;
+	color: #333;
+	border: 1px solid rgba(0, 0, 0, .15);
+	border-radius: 6px;
+	box-shadow: 0 6px 16px rgba(0, 0, 0, .2);
+	font-size: 13px;
+	text-align: left;
+	white-space: normal;
+}
+
+.search-help[hidden] {
+	display: none;
+}
+
+.search-help-title {
+	font-weight: bold;
+	text-transform: uppercase;
+	letter-spacing: .05em;
+	margin-bottom: 8px;
+}
+
+.search-help table td {
+	padding: 3px 12px 3px 0;
+	vertical-align: top;
+}
+
+.search-help table td:first-child {
+	white-space: nowrap;
+}
+
+.search-help code {
+	color: inherit;
+	background: rgba(0, 0, 0, .07);
+}
+
+.search-help-more {
+	margin-top: 8px;
+}
+
+body.dark .search-help {
+	background: #1e2227;
+	color: #ddd;
+	border-color: #3a3f45;
+}
+
+body.dark .search-help code {
+	color: #9cd3ff;
+	background: rgba(255, 255, 255, .08);
+}
+
+/* On narrow screens the popover sits in the menu's flow instead of floating */
+.search-container .search-help {
+	position: static;
+	width: auto;
+	margin: 6px 0;
+}

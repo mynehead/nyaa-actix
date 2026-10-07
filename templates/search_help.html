@@ -1,0 +1,13 @@
+{# Search syntax popover, opened by the ? button next to the search bar (see main.js). Keep in sync with src/search/syntax.rs. #}
+<div class="search-help" id="{{ help_id }}" role="dialog" aria-label="Search patterns" hidden>
+	<div class="search-help-title">Search patterns</div>
+	<table>
+		<tr><td><code>word</code></td><td>name contains the word (every word must match)</td></tr>
+		<tr><td><code>"exact phrase"</code></td><td>name contains the exact phrase</td></tr>
+		<tr><td><code>user:name</code></td><td>only this uploader's torrents (short: <code>u:</code>)</td></tr>
+		<tr><td><code>group:slug</code></td><td>only this group's torrents (short: <code>g:</code>)</td></tr>
+		<tr><td><code>-word</code> <code>!group:slug</code></td><td>put <code>-</code> or <code>!</code> in front of anything to exclude it</td></tr>
+		<tr><td><code>a1b2c3&hellip;</code></td><td>open the torrent with this info hash (40 hex or 32 base32)</td></tr>
+	</table>
+	<div class="search-help-more"><a href="/help#using-search">More on searching</a></div>
+</div>
