@@ -22,10 +22,42 @@ pub struct Config {
     pub site_url: String,
     /// Announce URLs written into magnets and .torrent files, own tracker first.
     pub tracker_urls: Vec<String>,
+    /// TRUSTED_PROXIES: reverse proxies whose `X-Forwarded-For` names the visitor.
+    pub trusted_proxies: Vec<crate::utils::proxy::IpNet>,
     /// Upstream RATELIMIT_ACCOUNT_AGE, in seconds: accounts must be older than this to report torrents.
     pub ratelimit_account_age: i64,
     /// Meilisearch for text search and stats sorts (MEILI_URL and friends); None keeps search on SQLite.
     pub meili: Option<crate::search::meili::Meili>,
+    /// Who may apply for trusted status (upstream's "Trusted Requirements").
+    pub trusted: TrustedConfig,
+}
+
+#[derive(Clone, Debug)]
+pub struct TrustedConfig {
+    /// TRUSTED_MIN_UPLOADS: non-remake uploads needed to apply.
+    pub min_uploads: i64,
+    /// TRUSTED_MIN_DOWNLOADS: total downloads of those uploads needed to apply.
+    pub min_downloads: i64,
+    /// TRUSTED_REAPPLY_COOLDOWN: days after a rejection before applying again.
+    pub reapply_cooldown_days: i64,
+}
+
+impl Default for TrustedConfig {
+    fn default() -> Self {
+        TrustedConfig { min_uploads: 10, min_downloads: 10000, reapply_cooldown_days: 90 }
+    }
+}
+
+impl TrustedConfig {
+    fn from_env() -> Self {
+        let num = |key: &str, default: i64| env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default);
+        let d = TrustedConfig::default();
+        TrustedConfig {
+            min_uploads: num("TRUSTED_MIN_UPLOADS", d.min_uploads),
+            min_downloads: num("TRUSTED_MIN_DOWNLOADS", d.min_downloads),
+            reapply_cooldown_days: num("TRUSTED_REAPPLY_COOLDOWN", d.reapply_cooldown_days),
+        }
+    }
 }
 
 impl Config {
@@ -43,18 +75,12 @@ impl Config {
             secret_key,
             site_name: env::var("SITE_NAME").unwrap_or_else(|_| "Nyaa".into()),
             site_flavor: env::var("SITE_FLAVOR").unwrap_or_else(|_| "nyaa".into()),
-            results_per_page: env::var("RESULTS_PER_PAGE")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(75),
-            max_pages: env::var("MAX_PAGES")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(0),
-            torrent_storage_path: env::var("TORRENT_STORAGE_PATH")
-                .unwrap_or_else(|_| "./torrents".into()),
-            avatar_storage_path: env::var("AVATAR_STORAGE_PATH")
-                .unwrap_or_else(|_| "./avatars".into()),
-            enable_gravatar: env::var("ENABLE_GRAVATAR")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(false),
-            maintenance_mode: env::var("MAINTENANCE_MODE")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(false),
+            results_per_page: env::var("RESULTS_PER_PAGE").ok().and_then(|v| v.parse().ok()).unwrap_or(75),
+            max_pages: env::var("MAX_PAGES").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
+            torrent_storage_path: env::var("TORRENT_STORAGE_PATH").unwrap_or_else(|_| "./torrents".into()),
+            avatar_storage_path: env::var("AVATAR_STORAGE_PATH").unwrap_or_else(|_| "./avatars".into()),
+            enable_gravatar: env::var("ENABLE_GRAVATAR").ok().and_then(|v| v.parse().ok()).unwrap_or(false),
+            maintenance_mode: env::var("MAINTENANCE_MODE").ok().and_then(|v| v.parse().ok()).unwrap_or(false),
             site_url: env::var("SITE_URL")
                 .unwrap_or_else(|_| "http://localhost:8080".into())
                 .trim_end_matches('/')
@@ -63,9 +89,39 @@ impl Config {
                 .iter()
                 .flat_map(|key| split_list(&env::var(key).unwrap_or_default()))
                 .collect(),
+            trusted_proxies: crate::utils::proxy::parse_trusted_proxies(
+                &env::var("TRUSTED_PROXIES").unwrap_or_default(),
+            )
+            .unwrap_or_else(|e| panic!("{e}")),
             ratelimit_account_age: env::var("RATELIMIT_ACCOUNT_AGE")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(7 * 24 * 3600),
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(7 * 24 * 3600),
             meili: crate::search::meili::Meili::from_env(),
+            trusted: TrustedConfig::from_env(),
+        }
+    }
+
+    /// Defaults for handler tests: no files, no trackers, no Meilisearch.
+    #[cfg(test)]
+    pub fn for_tests() -> Config {
+        Config {
+            database_url: String::new(),
+            secret_key: String::new(),
+            site_name: "Nyaa".into(),
+            site_flavor: "nyaa".into(),
+            results_per_page: 75,
+            max_pages: 0,
+            torrent_storage_path: String::new(),
+            avatar_storage_path: String::new(),
+            enable_gravatar: false,
+            maintenance_mode: false,
+            site_url: String::new(),
+            tracker_urls: vec![],
+            trusted_proxies: vec![],
+            meili: None,
+            ratelimit_account_age: 0,
+            trusted: Default::default(),
         }
     }
 
@@ -76,11 +132,7 @@ impl Config {
 
 /// Splits a comma separated list, dropping blanks.
 fn split_list(value: &str) -> Vec<String> {
-    value.split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .collect()
+    value.split(',').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect()
 }
 
 #[cfg(test)]
@@ -89,7 +141,10 @@ mod tests {
 
     #[test]
     fn split_list_trims_and_drops_blanks() {
-        assert_eq!(split_list(" udp://a/announce , ,http://b/announce,"), vec!["udp://a/announce", "http://b/announce"]);
+        assert_eq!(
+            split_list(" udp://a/announce , ,http://b/announce,"),
+            vec!["udp://a/announce", "http://b/announce"]
+        );
         assert!(split_list("").is_empty());
     }
 }

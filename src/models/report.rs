@@ -2,8 +2,8 @@ use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::db::DbConnection;
 use crate::db::schema::{group_reports, nyaa_reports};
+use crate::db::DbConnection;
 
 /// Upstream ReportStatus, stored in `status` of both report tables.
 pub const REPORT_IN_REVIEW: i32 = 0;
@@ -25,8 +25,9 @@ pub fn validate_reason(reason: &str) -> Result<String, &'static str> {
     let reason = reason.trim().to_string();
     match reason.chars().count() {
         0 => Err("Please give a report reason!"),
-        n if !(REPORT_REASON_MIN..=REPORT_REASON_MAX).contains(&n) =>
-            Err("Report reason must be at least 3 characters long and 255 at most."),
+        n if !(REPORT_REASON_MIN..=REPORT_REASON_MAX).contains(&n) => {
+            Err("Report reason must be at least 3 characters long and 255 at most.")
+        }
         _ => Ok(reason),
     }
 }
@@ -61,10 +62,7 @@ impl Report {
 
     /// One page of reports still in review, oldest first, and how many there are in all.
     pub fn not_reviewed(conn: &mut DbConnection, page: i64) -> QueryResult<(Vec<Report>, i64)> {
-        let total = nyaa_reports::table
-            .filter(nyaa_reports::status.eq(REPORT_IN_REVIEW))
-            .count()
-            .get_result(conn)?;
+        let total = nyaa_reports::table.filter(nyaa_reports::status.eq(REPORT_IN_REVIEW)).count().get_result(conn)?;
         let rows = nyaa_reports::table
             .filter(nyaa_reports::status.eq(REPORT_IN_REVIEW))
             .order(nyaa_reports::id.asc())
@@ -77,11 +75,13 @@ impl Report {
     /// Gives every report on the torrent still in review the outcome `status`. Upstream
     /// deletes the other open reports on the torrent instead; this keeps them for the record.
     pub fn review_all(conn: &mut DbConnection, torrent_id: i32, status: i32) -> QueryResult<usize> {
-        diesel::update(nyaa_reports::table
-            .filter(nyaa_reports::torrent_id.eq(torrent_id))
-            .filter(nyaa_reports::status.eq(REPORT_IN_REVIEW)))
-            .set(nyaa_reports::status.eq(status))
-            .execute(conn)
+        diesel::update(
+            nyaa_reports::table
+                .filter(nyaa_reports::torrent_id.eq(torrent_id))
+                .filter(nyaa_reports::status.eq(REPORT_IN_REVIEW)),
+        )
+        .set(nyaa_reports::status.eq(status))
+        .execute(conn)
     }
 }
 
@@ -114,10 +114,7 @@ impl GroupReport {
     }
 
     pub fn not_reviewed(conn: &mut DbConnection, page: i64) -> QueryResult<(Vec<GroupReport>, i64)> {
-        let total = group_reports::table
-            .filter(group_reports::status.eq(REPORT_IN_REVIEW))
-            .count()
-            .get_result(conn)?;
+        let total = group_reports::table.filter(group_reports::status.eq(REPORT_IN_REVIEW)).count().get_result(conn)?;
         let rows = group_reports::table
             .filter(group_reports::status.eq(REPORT_IN_REVIEW))
             .order(group_reports::id.asc())
@@ -128,11 +125,13 @@ impl GroupReport {
     }
 
     pub fn review_all(conn: &mut DbConnection, group_id: i32, status: i32) -> QueryResult<usize> {
-        diesel::update(group_reports::table
-            .filter(group_reports::group_id.eq(group_id))
-            .filter(group_reports::status.eq(REPORT_IN_REVIEW)))
-            .set(group_reports::status.eq(status))
-            .execute(conn)
+        diesel::update(
+            group_reports::table
+                .filter(group_reports::group_id.eq(group_id))
+                .filter(group_reports::status.eq(REPORT_IN_REVIEW)),
+        )
+        .set(group_reports::status.eq(status))
+        .execute(conn)
     }
 }
 

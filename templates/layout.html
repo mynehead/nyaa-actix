@@ -67,6 +67,7 @@
 							<ul class="dropdown-menu">
 								<li{% if active_page is defined and active_page == "rules" %} class="active"{% endif %}><a href="/rules">Rules</a></li>
 								<li{% if active_page is defined and active_page == "help" %} class="active"{% endif %}><a href="/help">Help</a></li>
+								<li{% if active_page is defined and active_page == "trusted" %} class="active"{% endif %}><a href="/trusted">Trusted</a></li>
 							</ul>
 						</li>
 						{% if current_user and current_user.level >= 2 %}
@@ -79,6 +80,8 @@
 								<li><a href="/admin/reports">Reports</a></li>
 								<li><a href="/admin/log">Log</a></li>
 								<li><a href="/admin/bans">Bans</a></li>
+								<li><a href="/admin/trusted">Trusted</a></li>
+								<li><a href="/admin/banners">Banners</a></li>
 							</ul>
 						</li>
 						{% endif %}
@@ -109,16 +112,19 @@
 									</a>
 								</li>
 								<li>
-									<a href="/account/profile">
+									<a href="/profile">
 										<i class="fa fa-gear fa-fw"></i>
 										Profile
 									</a>
 								</li>
 								<li>
-									<a href="/account/logout">
-										<i class="fa fa-times fa-fw"></i>
-										Logout
-									</a>
+									{# A POST, so other sites can't sign visitors out #}
+									<form action="/logout" method="post" class="logout-form">
+										<button type="submit" class="btn btn-link">
+											<i class="fa fa-times fa-fw"></i>
+											Logout
+										</button>
+									</form>
 								</li>
 							</ul>
 						</li>
@@ -135,13 +141,13 @@
 							</a>
 							<ul class="dropdown-menu">
 								<li>
-									<a href="/account/login">
+									<a href="/login">
 										<i class="fa fa-sign-in fa-fw"></i>
 										Login
 									</a>
 								</li>
 								<li>
-									<a href="/account/register">
+									<a href="/register">
 										<i class="fa fa-pencil fa-fw"></i>
 										Register
 									</a>

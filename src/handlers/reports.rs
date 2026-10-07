@@ -43,9 +43,9 @@ pub async fn submit_torrent_report(
         return Err(actix_web::error::ErrorForbidden("You may not report torrents"));
     }
     let user = user.expect("can_report requires a user");
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(crate::utils::internal_error)?;
     let torrent = Torrent::by_id(&mut conn, path.into_inner())
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(crate::utils::internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))?;
     // Deleted torrents are 404 to everyone but moderators, and banned ones need no report
     if torrent.is_banned() || (torrent.is_deleted() && !user.is_moderator()) {
@@ -54,8 +54,7 @@ pub async fn submit_torrent_report(
 
     match validate_reason(&form.reason) {
         Ok(reason) => {
-            Report::create(&mut conn, torrent.id, user.id, &reason)
-                .map_err(actix_web::error::ErrorInternalServerError)?;
+            Report::create(&mut conn, torrent.id, user.id, &reason).map_err(crate::utils::internal_error)?;
             flash::push(&session, "success", "", "Successfully reported torrent!");
         }
         Err(msg) => flash::push(&session, "danger", "", msg),
@@ -75,15 +74,14 @@ pub async fn submit_group_report(
         return Err(actix_web::error::ErrorForbidden("You may not report groups"));
     }
     let user = user.expect("can_report requires a user");
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(crate::utils::internal_error)?;
     let group = Group::by_slug(&mut conn, &path.into_inner())
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(crate::utils::internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Group not found"))?;
 
     match validate_reason(&form.reason) {
         Ok(reason) => {
-            GroupReport::create(&mut conn, group.id, user.id, &reason)
-                .map_err(actix_web::error::ErrorInternalServerError)?;
+            GroupReport::create(&mut conn, group.id, user.id, &reason).map_err(crate::utils::internal_error)?;
             flash::push(&session, "success", "", "Successfully reported group!");
         }
         Err(msg) => flash::push(&session, "danger", "", msg),
@@ -100,8 +98,7 @@ pub struct ReportsQuery {
 }
 
 fn require_moderator(session: &Session, pool: &DbPool) -> Result<User> {
-    let user = get_current_user(session, pool)
-        .ok_or_else(|| actix_web::error::ErrorForbidden("Not allowed"))?;
+    let user = get_current_user(session, pool).ok_or_else(|| actix_web::error::ErrorForbidden("Not allowed"))?;
     if !user.is_moderator() {
         return Err(actix_web::error::ErrorForbidden("Not allowed"));
     }
@@ -116,8 +113,8 @@ pub async fn admin_reports(
     query: web::Query<ReportsQuery>,
 ) -> Result<HttpResponse> {
     let moderator = require_moderator(&session, &pool)?;
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
-    let err = actix_web::error::ErrorInternalServerError;
+    let mut conn = pool.get().map_err(crate::utils::internal_error)?;
+    let err = crate::utils::internal_error;
 
     let (reports, total) = Report::not_reviewed(&mut conn, query.p.unwrap_or(1)).map_err(err)?;
     let pagination = Pagination::new(query.p.unwrap_or(1), total, REPORTS_PER_PAGE);
@@ -133,7 +130,9 @@ pub async fn admin_reports(
             None => None,
         };
         // Upstream shows the uploader's IP to superadmins only
-        let uploader_ip = torrent.uploader_ip.as_deref()
+        let uploader_ip = torrent
+            .uploader_ip
+            .as_deref()
             .filter(|_| moderator.is_superadmin())
             .and_then(crate::utils::unpack_ip)
             .map(|ip| ip.to_string());
@@ -161,7 +160,7 @@ pub async fn admin_reports(
     ctx.insert("group_reports", &group_rows);
     ctx.insert("group_pagination", &group_pagination);
     ctx.insert("flash_messages", &flash::take(&session));
-    let html = tmpl.render("reports.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("reports.html", &ctx).map_err(crate::utils::internal_error)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
@@ -182,12 +181,13 @@ pub async fn admin_reports_post(
     form: web::Form<ReportActionForm>,
 ) -> Result<HttpResponse> {
     let moderator = require_moderator(&session, &pool)?;
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
-    let err = actix_web::error::ErrorInternalServerError;
+    let mut conn = pool.get().map_err(crate::utils::internal_error)?;
+    let err = crate::utils::internal_error;
     let not_found = || actix_web::error::ErrorNotFound("Report not found");
 
     if let Some(id) = form.group_report {
-        let report = GroupReport::by_id(&mut conn, id).map_err(err)?
+        let report = GroupReport::by_id(&mut conn, id)
+            .map_err(err)?
             .filter(|r| r.status == crate::models::REPORT_IN_REVIEW)
             .ok_or_else(not_found)?;
         let group = Group::by_id(&mut conn, report.group_id).map_err(err)?.ok_or_else(not_found)?;
@@ -197,17 +197,24 @@ pub async fn admin_reports_post(
         let reporter = reporter_link(&mut conn, report.user_id).map_err(err)?;
         // Brackets in the name would break the Markdown link
         let name: String = group.name.chars().filter(|c| !"[]".contains(*c)).collect();
-        let entry = format!("Group report #{}: Closed [{}](/group/{}), reported by {}",
-            report.id, name, urlencoding::encode(&group.slug), reporter);
+        let entry = format!(
+            "Group report #{}: Closed [{}](/group/{}), reported by {}",
+            report.id,
+            name,
+            urlencoding::encode(&group.slug),
+            reporter
+        );
         conn.transaction::<_, diesel::result::Error, _>(|conn| {
             GroupReport::review_all(conn, group.id, REPORT_INVALID)?;
             AdminLog::add(conn, moderator.id, &entry)
-        }).map_err(err)?;
+        })
+        .map_err(err)?;
         flash::push(&session, "success", "", &format!("Closed group report #{}", report.id));
         return Ok(redirect("/admin/reports"));
     }
 
-    let report = Report::by_id(&mut conn, form.report.ok_or_else(not_found)?).map_err(err)?
+    let report = Report::by_id(&mut conn, form.report.ok_or_else(not_found)?)
+        .map_err(err)?
         .filter(|r| r.status == crate::models::REPORT_IN_REVIEW)
         .ok_or_else(not_found)?;
     let torrent = Torrent::by_id(&mut conn, report.torrent_id).map_err(err)?.ok_or_else(not_found)?;
@@ -228,7 +235,8 @@ pub async fn admin_reports_post(
         }
         Report::review_all(conn, torrent.id, status)?;
         AdminLog::add(conn, moderator.id, &entry)
-    }).map_err(err)?;
+    })
+    .map_err(err)?;
     if flag.is_some() {
         crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), torrent.id);
     }
@@ -256,13 +264,16 @@ mod tests {
     use crate::models::REPORT_IN_REVIEW;
     use crate::storage::Storage;
     use actix_session::{storage::CookieSessionStore, SessionMiddleware};
-    use actix_web::{cookie::{Cookie, Key}, http::StatusCode, test, App};
+    use actix_web::{
+        cookie::{Cookie, Key},
+        http::StatusCode,
+        test, App,
+    };
     use diesel::r2d2::Pool;
 
     fn pool() -> DbPool {
         // One connection, so every request sees the same in-memory database
-        let pool = Pool::builder().max_size(1)
-            .build(crate::db::DbManager::new(":memory:")).unwrap();
+        let pool = Pool::builder().max_size(1).build(crate::db::DbManager::new(":memory:")).unwrap();
         let mut conn = pool.get().unwrap();
         crate::db::run_migrations(&mut conn).unwrap();
         // User 4 signed up just now; the others a month ago
@@ -276,26 +287,24 @@ mod tests {
              VALUES (5, X'{}', 'Reported torrent', 'r.torrent', '', '', 0, 1, X'0000000000000000000000007f000001', 1, 2)",
             "ab".repeat(20)
         )).execute(&mut conn).unwrap();
-        diesel::sql_query("INSERT INTO groups (id, name, tag, slug, owner_id) VALUES (7, 'Some Group', 'SG', 'some-group', 1)")
-            .execute(&mut conn).unwrap();
+        diesel::sql_query(
+            "INSERT INTO groups (id, name, tag, slug, owner_id) VALUES (7, 'Some Group', 'SG', 'some-group', 1)",
+        )
+        .execute(&mut conn)
+        .unwrap();
         pool
     }
 
     fn config(account_age: i64) -> Config {
         let storage = std::env::temp_dir().join(format!("nyaa-report-test-{}", std::process::id()));
         Config {
-            database_url: String::new(), secret_key: String::new(), site_name: "Nyaa".into(),
-            site_flavor: "nyaa".into(), results_per_page: 75, max_pages: 0,
-            torrent_storage_path: storage.to_string_lossy().into_owned(), avatar_storage_path: String::new(),
-            enable_gravatar: false, maintenance_mode: false, site_url: String::new(), tracker_urls: vec![],
-            ratelimit_account_age: account_age, meili: None,
+            torrent_storage_path: storage.to_string_lossy().into_owned(),
+            ratelimit_account_age: account_age,
+            ..Config::for_tests()
         }
     }
 
-    async fn login(session: Session, path: web::Path<i32>) -> HttpResponse {
-        crate::middleware::auth::login_user(&session, path.into_inner()).unwrap();
-        HttpResponse::Ok().finish()
-    }
+    use crate::middleware::auth::test_support::login;
 
     /// The report routes plus the pages showing the button; returns the app and a session cookie.
     macro_rules! app {
@@ -303,22 +312,27 @@ mod tests {
             let mut tera = Tera::new("templates/**/*").unwrap();
             crate::utils::tera_filters::register(&mut tera);
             let dir = config(0).torrent_storage_path;
-            let app = test::init_service(App::new()
-                .app_data(web::Data::new(config(24 * 3600)))
-                .app_data(web::Data::new($pool.clone()))
-                .app_data(web::Data::new(Storage::local(&dir, &dir).unwrap()))
-                .app_data(web::Data::new(tera))
-                .wrap(SessionMiddleware::new(CookieSessionStore::default(), Key::from(&[7u8; 64])))
-                .route("/login/{id}", web::get().to(login))
-                .route("/view/{id}", web::get().to(crate::handlers::torrents::view_torrent))
-                .route("/view/{id}/submit_report", web::post().to(submit_torrent_report))
-                .route("/group/{slug}", web::get().to(crate::handlers::groups::view_group))
-                .route("/group/{slug}/submit_report", web::post().to(submit_group_report))
-                .route("/admin/reports", web::get().to(admin_reports))
-                .route("/admin/reports", web::post().to(admin_reports_post))).await;
+            let app = test::init_service(
+                App::new()
+                    .app_data(web::Data::new(config(24 * 3600)))
+                    .app_data(web::Data::new($pool.clone()))
+                    .app_data(web::Data::new(Storage::local(&dir, &dir).unwrap()))
+                    .app_data(web::Data::new(tera))
+                    .wrap(SessionMiddleware::new(CookieSessionStore::default(), Key::from(&[7u8; 64])))
+                    .route("/login/{id}", web::get().to(login))
+                    .route("/view/{id}", web::get().to(crate::handlers::torrents::view_torrent))
+                    .route("/view/{id}/submit_report", web::post().to(submit_torrent_report))
+                    .route("/group/{slug}", web::get().to(crate::handlers::groups::view_group))
+                    .route("/group/{slug}/submit_report", web::post().to(submit_group_report))
+                    .route("/admin/reports", web::get().to(admin_reports))
+                    .route("/admin/reports", web::post().to(admin_reports_post)),
+            )
+            .await;
             let cookie: Option<Cookie<'static>> = match $user {
                 Some(id) => {
-                    let res = test::call_service(&app, test::TestRequest::get().uri(&format!("/login/{}", id)).to_request()).await;
+                    let res =
+                        test::call_service(&app, test::TestRequest::get().uri(&format!("/login/{}", id)).to_request())
+                            .await;
                     res.response().cookies().next().map(|c| c.into_owned())
                 }
                 None => None,
@@ -329,13 +343,17 @@ mod tests {
 
     fn get(uri: &str, cookie: &Option<Cookie<'static>>) -> test::TestRequest {
         let mut req = test::TestRequest::get().uri(uri);
-        if let Some(c) = cookie { req = req.cookie(c.clone()); }
+        if let Some(c) = cookie {
+            req = req.cookie(c.clone());
+        }
         req
     }
 
     fn post(uri: &str, cookie: &Option<Cookie<'static>>, form: &[(&str, &str)]) -> test::TestRequest {
         let mut req = test::TestRequest::post().uri(uri).set_form(form);
-        if let Some(c) = cookie { req = req.cookie(c.clone()); }
+        if let Some(c) = cookie {
+            req = req.cookie(c.clone());
+        }
         req
     }
 
@@ -344,7 +362,9 @@ mod tests {
     macro_rules! send {
         ($app:expr, $req:expr, $cookie:expr) => {{
             let res = test::call_service(&$app, $req.to_request()).await;
-            if let Some(c) = res.response().cookies().next() { *$cookie = Some(c.into_owned()); }
+            if let Some(c) = res.response().cookies().next() {
+                *$cookie = Some(c.into_owned());
+            }
             res.status()
         }};
     }
@@ -352,19 +372,26 @@ mod tests {
     macro_rules! page {
         ($app:expr, $uri:expr, $cookie:expr) => {{
             let res = test::call_service(&$app, get($uri, $cookie).to_request()).await;
-            if let Some(c) = res.response().cookies().next() { *$cookie = Some(c.into_owned()); }
+            if let Some(c) = res.response().cookies().next() {
+                *$cookie = Some(c.into_owned());
+            }
             String::from_utf8(test::read_body(res).await.to_vec()).unwrap()
         }};
     }
 
     fn statuses(pool: &DbPool) -> Vec<i32> {
-        crate::db::schema::nyaa_reports::table.select(crate::db::schema::nyaa_reports::status)
-            .order(crate::db::schema::nyaa_reports::id).load(&mut pool.get().unwrap()).unwrap()
+        crate::db::schema::nyaa_reports::table
+            .select(crate::db::schema::nyaa_reports::status)
+            .order(crate::db::schema::nyaa_reports::id)
+            .load(&mut pool.get().unwrap())
+            .unwrap()
     }
 
     fn log_lines(pool: &DbPool) -> Vec<String> {
-        crate::db::schema::adminlog::table.select(crate::db::schema::adminlog::log)
-            .load(&mut pool.get().unwrap()).unwrap()
+        crate::db::schema::adminlog::table
+            .select(crate::db::schema::adminlog::log)
+            .load(&mut pool.get().unwrap())
+            .unwrap()
     }
 
     fn flags(pool: &DbPool) -> i32 {
@@ -422,7 +449,8 @@ mod tests {
             let (app, mut cookie) = app!(pool, user);
             let res = test::call_service(&app, get("/admin/reports", &cookie).to_request()).await;
             assert_eq!(res.status(), StatusCode::FORBIDDEN, "{user:?}");
-            let status = send!(app, post("/admin/reports", &cookie, &[("report", "1"), ("action", "delete")]), &mut cookie);
+            let status =
+                send!(app, post("/admin/reports", &cookie, &[("report", "1"), ("action", "delete")]), &mut cookie);
             assert_eq!(status, StatusCode::FORBIDDEN, "{user:?}");
         }
         assert_eq!((statuses(&pool), flags(&pool)), (vec![REPORT_IN_REVIEW], 0));
@@ -449,9 +477,11 @@ mod tests {
 
     #[actix_web::test]
     async fn review_actions_flag_the_torrent_and_close_its_reports() {
-        for (action, flag, status) in [("close", 0, REPORT_INVALID),
-                                       ("hide", TorrentFlags::HIDDEN.bits(), REPORT_VALID),
-                                       ("delete", TorrentFlags::DELETED.bits(), REPORT_VALID)] {
+        for (action, flag, status) in [
+            ("close", 0, REPORT_INVALID),
+            ("hide", TorrentFlags::HIDDEN.bits(), REPORT_VALID),
+            ("delete", TorrentFlags::DELETED.bits(), REPORT_VALID),
+        ] {
             let pool = pool();
             for reason in ["one", "two"] {
                 Report::create(&mut pool.get().unwrap(), 5, 2, reason).unwrap();
@@ -461,8 +491,15 @@ mod tests {
             assert_eq!(res, StatusCode::FOUND, "{action}");
             assert_eq!(flags(&pool), flag, "{action}");
             assert_eq!(statuses(&pool), vec![status, status], "{action}");
-            let verb = match action { "close" => "Closed", "hide" => "Hid", _ => "Deleted" };
-            assert_eq!(log_lines(&pool), vec![format!("Report #1: {verb} [#5](/view/5), reported by [reporter](/user/reporter)")]);
+            let verb = match action {
+                "close" => "Closed",
+                "hide" => "Hid",
+                _ => "Deleted",
+            };
+            assert_eq!(
+                log_lines(&pool),
+                vec![format!("Report #1: {verb} [#5](/view/5), reported by [reporter](/user/reporter)")]
+            );
             let html = page!(app, "/admin/reports", &mut cookie);
             assert!(html.contains("Closed report #1") && html.contains("No torrent reports."), "{action}: {html}");
 
@@ -479,13 +516,17 @@ mod tests {
         let (app, mut cookie) = app!(pool, Some(3));
         let html = page!(app, "/admin/reports", &mut cookie);
         assert!(html.contains("<a href=\"/group/some-group\">[SG] Some Group</a>"), "{html}");
-        let res = send!(app, post("/admin/reports", &cookie, &[("group_report", "1"), ("action", "delete")]), &mut cookie);
+        let res =
+            send!(app, post("/admin/reports", &cookie, &[("group_report", "1"), ("action", "delete")]), &mut cookie);
         assert_eq!(res, StatusCode::BAD_REQUEST);
         send!(app, post("/admin/reports", &cookie, &[("group_report", "1"), ("action", "close")]), &mut cookie);
         let html = page!(app, "/admin/reports", &mut cookie);
         assert!(html.contains("Closed group report #1") && html.contains("No group reports."), "{html}");
         let report = GroupReport::by_id(&mut pool.get().unwrap(), 1).unwrap().unwrap();
         assert_eq!(report.status, REPORT_INVALID);
-        assert_eq!(log_lines(&pool), vec!["Group report #1: Closed [Some Group](/group/some-group), reported by [reporter](/user/reporter)"]);
+        assert_eq!(
+            log_lines(&pool),
+            vec!["Group report #1: Closed [Some Group](/group/some-group), reported by [reporter](/user/reporter)"]
+        );
     }
 }

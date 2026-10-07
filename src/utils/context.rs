@@ -61,7 +61,11 @@ const SUKEBEI_CATS: &[NavCategory] = cats![
 ];
 
 pub fn nav_categories(flavor: &str) -> &'static [NavCategory] {
-    if flavor == "sukebei" { SUKEBEI_CATS } else { NYAA_CATS }
+    if flavor == "sukebei" {
+        SUKEBEI_CATS
+    } else {
+        NYAA_CATS
+    }
 }
 
 /// Current search, for refilling the navbar form and building sort and page links.
@@ -75,7 +79,13 @@ pub struct SearchState {
 }
 
 impl SearchState {
-    pub fn new(q: &Option<String>, c: &Option<String>, f: &Option<String>, s: &Option<String>, o: &Option<String>) -> Self {
+    pub fn new(
+        q: &Option<String>,
+        c: &Option<String>,
+        f: &Option<String>,
+        s: &Option<String>,
+        o: &Option<String>,
+    ) -> Self {
         let get = |v: &Option<String>, default: &str| v.clone().unwrap_or_else(|| default.to_string());
         SearchState {
             term: get(q, ""),
@@ -91,10 +101,13 @@ impl SearchState {
 pub fn base_context(cfg: &Config, current_user: Option<&User>) -> tera::Context {
     let mut ctx = tera::Context::new();
     ctx.insert("current_user", &current_user);
-    ctx.insert("config", &serde_json::json!({
-        "site_name": cfg.site_name,
-        "site_flavor": cfg.site_flavor,
-    }));
+    ctx.insert(
+        "config",
+        &serde_json::json!({
+            "site_name": cfg.site_name,
+            "site_flavor": cfg.site_flavor,
+        }),
+    );
     let cats = nav_categories(&cfg.site_flavor);
     let names: std::collections::HashMap<&str, &str> = cats.iter().map(|c| (c.id, c.title)).collect();
     ctx.insert("nav_categories", cats);
@@ -117,6 +130,9 @@ mod tests {
     #[test]
     fn search_state_defaults() {
         let s = SearchState::new(&None, &None, &None, &None, &None);
-        assert_eq!((s.category.as_str(), s.quality_filter.as_str(), s.sort.as_str(), s.order.as_str()), ("0_0", "0", "id", "desc"));
+        assert_eq!(
+            (s.category.as_str(), s.quality_filter.as_str(), s.sort.as_str(), s.order.as_str()),
+            ("0_0", "0", "id", "desc")
+        );
     }
 }

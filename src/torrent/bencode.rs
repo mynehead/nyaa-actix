@@ -49,18 +49,16 @@ fn decode_value(data: &[u8], pos: usize, depth: usize) -> Result<(BencodeValue, 
 
 fn decode_int(data: &[u8], pos: usize) -> Result<(BencodeValue, usize), BencodeError> {
     // i<int>e
-    let end = data[pos..].iter().position(|&b| b == b'e')
-        .ok_or(BencodeError::UnexpectedEnd)?;
+    let end = data[pos..].iter().position(|&b| b == b'e').ok_or(BencodeError::UnexpectedEnd)?;
     let end = pos + end;
-    let s = std::str::from_utf8(&data[pos+1..end]).map_err(|_| BencodeError::InvalidInt)?;
+    let s = std::str::from_utf8(&data[pos + 1..end]).map_err(|_| BencodeError::InvalidInt)?;
     let n: i64 = s.parse().map_err(|_| BencodeError::InvalidInt)?;
     Ok((BencodeValue::Int(n), end + 1))
 }
 
 fn decode_bytes(data: &[u8], pos: usize) -> Result<(BencodeValue, usize), BencodeError> {
     // <len>:<data>
-    let colon = data[pos..].iter().position(|&b| b == b':')
-        .ok_or(BencodeError::UnexpectedEnd)?;
+    let colon = data[pos..].iter().position(|&b| b == b':').ok_or(BencodeError::UnexpectedEnd)?;
     let colon = pos + colon;
     let len_str = std::str::from_utf8(&data[pos..colon]).map_err(|_| BencodeError::InvalidLength)?;
     let len: usize = len_str.parse().map_err(|_| BencodeError::InvalidLength)?;
@@ -145,19 +143,31 @@ fn encode_value(val: &BencodeValue, out: &mut Vec<u8>) {
 
 impl BencodeValue {
     pub fn as_bytes(&self) -> Option<&[u8]> {
-        match self { BencodeValue::Bytes(b) => Some(b), _ => None }
+        match self {
+            BencodeValue::Bytes(b) => Some(b),
+            _ => None,
+        }
     }
     pub fn as_str(&self) -> Option<&str> {
         self.as_bytes().and_then(|b| std::str::from_utf8(b).ok())
     }
     pub fn as_int(&self) -> Option<i64> {
-        match self { BencodeValue::Int(n) => Some(*n), _ => None }
+        match self {
+            BencodeValue::Int(n) => Some(*n),
+            _ => None,
+        }
     }
     pub fn as_list(&self) -> Option<&[BencodeValue]> {
-        match self { BencodeValue::List(l) => Some(l), _ => None }
+        match self {
+            BencodeValue::List(l) => Some(l),
+            _ => None,
+        }
     }
     pub fn as_dict(&self) -> Option<&BTreeMap<Vec<u8>, BencodeValue>> {
-        match self { BencodeValue::Dict(d) => Some(d), _ => None }
+        match self {
+            BencodeValue::Dict(d) => Some(d),
+            _ => None,
+        }
     }
     pub fn get(&self, key: &[u8]) -> Option<&BencodeValue> {
         self.as_dict()?.get(key)
