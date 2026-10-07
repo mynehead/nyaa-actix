@@ -1,12 +1,12 @@
+use argon2::password_hash::{rand_core::OsRng, SaltString};
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
-use argon2::password_hash::{rand_core::OsRng, SaltString};
 
 use crate::config::Config;
-use crate::db::DbConnection;
 use crate::db::schema::{user_preferences, users};
+use crate::db::DbConnection;
 
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,12 +42,17 @@ pub struct User {
     pub id: i32,
     pub username: String,
     pub email: Option<String>,
+    // The hash and IPs never go into template context (users are serialized for Tera);
+    // pages that show the IPs pass them on their own.
+    #[serde(skip_serializing, default)]
     pub password_hash: String,
     pub status: i32,
     pub level: i32,
     pub created_time: NaiveDateTime,
     pub last_login_date: Option<NaiveDateTime>,
+    #[serde(skip_serializing, default)]
     pub last_login_ip: Option<Vec<u8>>,
+    #[serde(skip_serializing, default)]
     pub registration_ip: Option<Vec<u8>>,
     /// When the current uploaded avatar was set; None when there is none.
     pub avatar_time: Option<NaiveDateTime>,
@@ -56,10 +61,24 @@ pub struct User {
 /// Argon2 hash with a fresh salt, as stored in `password_hash`.
 pub fn hash_password(password: &str) -> String {
     let salt = SaltString::generate(&mut OsRng);
-    Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
-        .expect("failed to hash password")
-        .to_string()
+    Argon2::default().hash_password(password.as_bytes(), &salt).expect("failed to hash password").to_string()
+}
+
+/// Checks `password` against `user`'s hash. Without a user it checks a throwaway hash
+/// anyway, so an unknown username takes as long to reject as a wrong password.
+pub fn password_matches(user: Option<&User>, password: &str) -> bool {
+    static DUMMY_HASH: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| hash_password("no such user"));
+    match user {
+        Some(u) => u.verify_password(password),
+        None => {
+            let _ = verify_hash(&DUMMY_HASH, password);
+            false
+        }
+    }
+}
+
+fn verify_hash(hash: &str, password: &str) -> bool {
+    PasswordHash::new(hash).is_ok_and(|hash| Argon2::default().verify_password(password.as_bytes(), &hash).is_ok())
 }
 
 pub const DEFAULT_AVATAR: &str = "/static/img/avatar/default.png";
@@ -87,6 +106,11 @@ impl User {
         self.level == UserLevel::SuperAdmin as i32
     }
 
+    /// Seconds since the account was created (upstream `User.age`).
+    pub fn age_secs(&self) -> i64 {
+        (chrono::Utc::now().naive_utc() - self.created_time).num_seconds()
+    }
+
     pub fn level_str(&self) -> String {
         let level = match UserLevel::from_i32(self.level) {
             UserLevel::Regular => "User",
@@ -94,7 +118,11 @@ impl User {
             UserLevel::Moderator => "Moderator",
             UserLevel::SuperAdmin => "Administrator",
         };
-        if self.is_banned() { format!("BANNED {}", level) } else { level.to_string() }
+        if self.is_banned() {
+            format!("BANNED {}", level)
+        } else {
+            level.to_string()
+        }
     }
 
     pub fn status_str(&self) -> &'static str {
@@ -112,15 +140,15 @@ impl User {
             UserLevel::Trusted => "success",
             UserLevel::Moderator | UserLevel::SuperAdmin => "purple",
         };
-        if self.is_banned() { format!("{} strike", color) } else { color.to_string() }
+        if self.is_banned() {
+            format!("{} strike", color)
+        } else {
+            color.to_string()
+        }
     }
 
     pub fn verify_password(&self, password: &str) -> bool {
-        if let Ok(hash) = PasswordHash::new(&self.password_hash) {
-            Argon2::default().verify_password(password.as_bytes(), &hash).is_ok()
-        } else {
-            false
-        }
+        verify_hash(&self.password_hash, password)
     }
 
     /// The uploaded avatar, else Gravatar when enabled (upstream `gravatar_url`), else the default.
@@ -135,17 +163,19 @@ impl User {
                 let default_url = format!("{}{}", cfg.site_url, DEFAULT_AVATAR);
                 // Nyaa: PG-rated, Sukebei: X-rated
                 let rating = if cfg.site_flavor == "nyaa" { "pg" } else { "x" };
-                format!("https://www.gravatar.com/avatar/{}?s=120&d={}&r={}",
-                    hash, urlencoding::encode(&default_url), rating)
+                format!(
+                    "https://www.gravatar.com/avatar/{}?s=120&d={}&r={}",
+                    hash,
+                    urlencoding::encode(&default_url),
+                    rating
+                )
             }
             _ => DEFAULT_AVATAR.to_string(),
         }
     }
 
     pub fn set_password(conn: &mut DbConnection, uid: i32, password: &str) -> QueryResult<usize> {
-        diesel::update(users::table.find(uid))
-            .set(users::password_hash.eq(hash_password(password)))
-            .execute(conn)
+        diesel::update(users::table.find(uid)).set(users::password_hash.eq(hash_password(password))).execute(conn)
     }
 
     pub fn set_email(conn: &mut DbConnection, uid: i32, email: &str) -> QueryResult<usize> {
@@ -158,9 +188,8 @@ impl User {
 
     /// The "Hide comments by default" preference; off when the user never saved preferences.
     pub fn hide_comments(conn: &mut DbConnection, uid: i32) -> QueryResult<bool> {
-        let hide: Option<i32> = user_preferences::table.find(uid)
-            .select(user_preferences::hide_comments)
-            .first(conn).optional()?;
+        let hide: Option<i32> =
+            user_preferences::table.find(uid).select(user_preferences::hide_comments).first(conn).optional()?;
         Ok(hide.unwrap_or(0) != 0)
     }
 
@@ -187,6 +216,14 @@ impl User {
         users::table.filter(users::username.eq(name)).first(conn).optional()
     }
 
+    /// Whether a user with this name exists, ignoring case, so nobody can register a
+    /// look-alike of an existing name ("Admin" next to "admin").
+    pub fn username_taken(conn: &mut DbConnection, name: &str) -> QueryResult<bool> {
+        use crate::search::db::lower;
+        let n: i64 = users::table.filter(lower(users::username).eq(name.to_lowercase())).count().get_result(conn)?;
+        Ok(n > 0)
+    }
+
     pub fn by_email(conn: &mut DbConnection, addr: &str) -> QueryResult<Option<User>> {
         users::table.filter(users::email.eq(addr)).first(conn).optional()
     }
@@ -209,6 +246,7 @@ pub struct NewUser {
     pub status: i32,
     pub level: i32,
     pub created_time: NaiveDateTime,
+    pub registration_ip: Option<Vec<u8>>,
 }
 
 impl NewUser {
@@ -221,6 +259,49 @@ impl NewUser {
             status: UserStatus::Active as i32,
             level: UserLevel::Regular as i32,
             created_time: chrono::Utc::now().naive_utc(),
+            registration_ip: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn template_json_leaves_out_hash_and_ips() {
+        let user = User {
+            id: 1,
+            username: "alice".into(),
+            email: Some("a@example.com".into()),
+            password_hash: hash_password("secret123"),
+            status: UserStatus::Active as i32,
+            level: UserLevel::Regular as i32,
+            created_time: chrono::Utc::now().naive_utc(),
+            last_login_date: None,
+            last_login_ip: Some(vec![127, 0, 0, 1]),
+            registration_ip: Some(vec![127, 0, 0, 1]),
+            avatar_time: None,
+        };
+        let json = serde_json::to_value(&user).unwrap();
+        for hidden in ["password_hash", "last_login_ip", "registration_ip"] {
+            assert!(json.get(hidden).is_none(), "{hidden} serialized");
+        }
+        // Tera filters read users back from that JSON
+        let back: User = serde_json::from_value(json).unwrap();
+        assert_eq!(back.username, "alice");
+    }
+
+    #[test]
+    fn password_matches_checks_the_hash_and_rejects_missing_users() {
+        let mut user: User = serde_json::from_value(serde_json::json!({
+            "id": 1, "username": "alice", "email": null, "status": 1, "level": 0,
+            "created_time": "2026-10-06T00:00:00", "last_login_date": null, "avatar_time": null
+        }))
+        .unwrap();
+        user.password_hash = hash_password("secret123");
+        assert!(password_matches(Some(&user), "secret123"));
+        assert!(!password_matches(Some(&user), "wrong"));
+        assert!(!password_matches(None, "secret123"));
     }
 }

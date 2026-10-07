@@ -112,16 +112,19 @@
 									</a>
 								</li>
 								<li>
-									<a href="/account/profile">
+									<a href="/profile">
 										<i class="fa fa-gear fa-fw"></i>
 										Profile
 									</a>
 								</li>
 								<li>
-									<a href="/account/logout">
-										<i class="fa fa-times fa-fw"></i>
-										Logout
-									</a>
+									{# A POST, so other sites can't sign visitors out #}
+									<form action="/logout" method="post" class="logout-form">
+										<button type="submit" class="btn btn-link">
+											<i class="fa fa-times fa-fw"></i>
+											Logout
+										</button>
+									</form>
 								</li>
 							</ul>
 						</li>
@@ -138,13 +141,13 @@
 							</a>
 							<ul class="dropdown-menu">
 								<li>
-									<a href="/account/login">
+									<a href="/login">
 										<i class="fa fa-sign-in fa-fw"></i>
 										Login
 									</a>
 								</li>
 								<li>
-									<a href="/account/register">
+									<a href="/register">
 										<i class="fa fa-pencil fa-fw"></i>
 										Register
 									</a>

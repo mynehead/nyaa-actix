@@ -9,7 +9,7 @@
         <div class="form-group"><label class="control-label">Username</label>
             <input type="text" name="username" class="form-control" required></div>
         <div class="checkbox"><label class="control-label"><input type="checkbox" name="can_upload" value="1"> Can upload under group</label></div>
-        <div class="checkbox"><label class="control-label"><input type="checkbox" name="can_edit" value="1"> Can edit group details</label></div>
+        {% if is_owner %}<div class="checkbox"><label class="control-label"><input type="checkbox" name="can_edit" value="1"> Can edit group details</label></div>{% endif %}
         <p class="help-block">Setting no permissions removes the user from the group.</p>
         <button type="submit" class="btn btn-primary">Update Member</button>
     </form>

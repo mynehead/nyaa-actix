@@ -10,8 +10,14 @@ mod torrent;
 mod utils;
 
 use actix_files as fs;
+use actix_session::config::{PersistentSession, TtlExtensionPolicy};
 use actix_session::{storage::CookieSessionStore, SessionMiddleware};
-use actix_web::{cookie::Key, http::StatusCode, middleware::{ErrorHandlers, Logger}, web, App, HttpServer};
+use actix_web::{
+    cookie::{time::Duration as CookieDuration, Key},
+    http::StatusCode,
+    middleware::{DefaultHeaders, ErrorHandlers, Logger},
+    web, App, HttpServer,
+};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
 use tera::Tera;
@@ -70,7 +76,21 @@ async fn main() -> std::io::Result<()> {
             .wrap(ErrorHandlers::new().handler(StatusCode::NOT_FOUND, handlers::site::not_found))
             .wrap(Logger::default())
             .wrap(actix_web::middleware::from_fn(middleware::ip_ban::reject_banned_ip))
-            .wrap(SessionMiddleware::new(CookieSessionStore::default(), secret_key.clone()))
+            .wrap(actix_web::middleware::from_fn(middleware::csrf::reject_cross_site))
+            .wrap(security_headers())
+            // Registered before the session middleware, so it runs inside it and sees the session
+            .wrap(actix_web::middleware::from_fn(middleware::auth::refresh_session))
+            .wrap(
+                SessionMiddleware::builder(CookieSessionStore::default(), secret_key.clone())
+                    // A 7-day cookie renewed on every request, like upstream; the row in
+                    // user_sessions enforces the same limit and can be revoked
+                    .session_lifecycle(
+                        PersistentSession::default()
+                            .session_ttl(CookieDuration::days(middleware::auth::SESSION_TTL_DAYS))
+                            .session_ttl_extension_policy(TtlExtensionPolicy::OnEveryRequest),
+                    )
+                    .build(),
+            )
             // Static files
             .service(fs::Files::new("/static", "./static"))
             // Home / search
@@ -82,15 +102,22 @@ async fn main() -> std::io::Result<()> {
             .route("/trusted/request", web::get().to(handlers::trusted::request_trusted))
             .route("/trusted/request", web::post().to(handlers::trusted::request_trusted))
             // Torrents
-            .route("/view/{id}", web::get().to(handlers::torrents::view_torrent))
-            .route("/view/{id}", web::post().to(handlers::torrents::post_comment))
-            .service(web::resource("/view/{id}/edit")
-                // Room for a full 10 KiB description of percent-encoded non-ASCII text
-                .app_data(web::FormConfig::default().limit(256 * 1024))
-                .route(web::get().to(handlers::torrents::edit_torrent_get))
-                .route(web::post().to(handlers::torrents::edit_torrent_post)))
-            .route("/download/{id}", web::get().to(handlers::torrents::download_torrent))
-            .route("/magnet/{id}", web::get().to(handlers::torrents::magnet_redirect))
+            .route("/view/{id:\\d+}", web::get().to(handlers::torrents::view_torrent))
+            .route("/view/{id:\\d+}", web::post().to(handlers::torrents::post_comment))
+            .service(
+                web::resource("/view/{id:\\d+}/edit")
+                    // Room for a full 10 KiB description of percent-encoded non-ASCII text
+                    .app_data(web::FormConfig::default().limit(256 * 1024))
+                    .route(web::get().to(handlers::torrents::edit_torrent_get))
+                    .route(web::post().to(handlers::torrents::edit_torrent_post)),
+            )
+            // Upstream's URLs; the .torrent suffix lets clients add a torrent by URL
+            .route("/view/{id:\\d+}/submit_report", web::post().to(handlers::reports::submit_torrent_report))
+            .route("/download/{id:\\d+}.torrent", web::get().to(handlers::torrents::download_torrent))
+            .route("/view/{id:\\d+}/torrent", web::get().to(handlers::torrents::download_torrent))
+            .route("/view/{id:\\d+}/magnet", web::get().to(handlers::torrents::magnet_redirect))
+            .route("/download/{id:\\d+}", web::get().to(handlers::torrents::legacy_download_redirect))
+            .route("/magnet/{id:\\d+}", web::get().to(handlers::torrents::legacy_magnet_redirect))
             .route("/upload", web::get().to(handlers::torrents::upload_get))
             .route("/upload", web::post().to(handlers::torrents::upload_post))
             // Users
@@ -99,14 +126,16 @@ async fn main() -> std::io::Result<()> {
             .route("/user/{username}/nuke/torrents", web::post().to(handlers::users::nuke_torrents_post))
             .route("/user/{username}/nuke/comments", web::post().to(handlers::users::nuke_comments_post))
             // Account
-            .route("/account/login", web::get().to(handlers::account::login_get))
-            .route("/account/login", web::post().to(handlers::account::login_post))
-            .route("/account/register", web::get().to(handlers::account::register_get))
-            .route("/account/register", web::post().to(handlers::account::register_post))
-            .route("/account/logout", web::get().to(handlers::account::logout))
-            .route("/account/profile", web::get().to(handlers::account::profile))
-            .route("/account/profile", web::post().to(handlers::account::profile_post))
-            .route("/account/profile/avatar", web::post().to(handlers::account::avatar_post))
+            // Account pages sit at the root like upstream; /account/* redirects for old links
+            .route("/login", web::get().to(handlers::account::login_get))
+            .route("/login", web::post().to(handlers::account::login_post))
+            .route("/register", web::get().to(handlers::account::register_get))
+            .route("/register", web::post().to(handlers::account::register_post))
+            .route("/logout", web::post().to(handlers::account::logout))
+            .route("/profile", web::get().to(handlers::account::profile))
+            .route("/profile", web::post().to(handlers::account::profile_post))
+            .route("/profile/avatar", web::post().to(handlers::account::avatar_post))
+            .route("/account/{page:.+}", web::route().to(handlers::account::legacy_redirect))
             .route("/avatar/{id}", web::get().to(handlers::users::avatar))
             // Groups
             .route("/groups", web::get().to(handlers::groups::group_list))
@@ -117,8 +146,10 @@ async fn main() -> std::io::Result<()> {
             .route("/group/{slug}/edit", web::post().to(handlers::groups::edit_group_post))
             .route("/group/{slug}/members", web::get().to(handlers::groups::manage_members_get))
             .route("/group/{slug}/members", web::post().to(handlers::groups::manage_members_post))
+            .route("/group/{slug}/submit_report", web::post().to(handlers::reports::submit_group_report))
             // Admin
-            .route("/admin/reports", web::get().to(handlers::admin::reports))
+            .route("/admin/reports", web::get().to(handlers::reports::admin_reports))
+            .route("/admin/reports", web::post().to(handlers::reports::admin_reports_post))
             .route("/admin/log", web::get().to(handlers::admin::log))
             .route("/admin/bans", web::get().to(handlers::admin::bans))
             .route("/admin/bans", web::post().to(handlers::admin::bans_post))
@@ -146,6 +177,25 @@ async fn main() -> std::io::Result<()> {
 }
 
 const PORT: u16 = 8080;
+
+/// Headers every response gets. The CSP allows inline scripts and styles because the
+/// templates (from upstream) use them; it still blocks scripts from other hosts, plugins,
+/// framing and form posts to other sites.
+fn security_headers() -> DefaultHeaders {
+    DefaultHeaders::new()
+        .add((
+            "Content-Security-Policy",
+            "default-src 'self'; \
+             script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; \
+             style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; \
+             font-src 'self' data: https://cdnjs.cloudflare.com; \
+             img-src * data:; \
+             object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        ))
+        .add(("X-Frame-Options", "DENY"))
+        .add(("X-Content-Type-Options", "nosniff"))
+        .add(("Referrer-Policy", "same-origin"))
+}
 
 /// A listening socket like the one `HttpServer::bind` makes, except that an IPv6 one
 /// takes IPv6 only, so it can sit next to the IPv4 one on the same port on every OS.

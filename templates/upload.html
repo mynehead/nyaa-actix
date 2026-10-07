@@ -14,7 +14,7 @@
 
 	<div class="row">
 		<div class="col-md-12">
-			<div class="form-group">
+			<div class="form-group{% if errors.torrent_file %} has-error{% endif %}">
 				<label class="control-label" for="torrent_file">Torrent file</label>
 				<div class="input-group">
 					<label for="torrent_file" class="input-group-btn">
@@ -25,18 +25,20 @@
 				<div class="sr-only">
 					<input id="torrent_file" name="torrent_file" type="file" accept=".torrent" required>
 				</div>
+				{% if errors.torrent_file %}<div class="help-block">{{ errors.torrent_file }}</div>{% endif %}
 			</div>
 		</div>
 	</div>
 	<div class="row">
 		<div class="col-md-6">
-			<div class="form-group">
+			<div class="form-group{% if errors.display_name %} has-error{% endif %}">
 				<label class="control-label" for="display_name">Torrent display name (optional)</label>
-				<input class="form-control" id="display_name" name="display_name" placeholder="Display name" type="text" minlength="3" maxlength="255">
+				<input class="form-control" id="display_name" name="display_name" placeholder="Display name" type="text" minlength="3" maxlength="255" value="{{ form.display_name }}">
+				{% if errors.display_name %}<div class="help-block">{{ errors.display_name }}</div>{% endif %}
 			</div>
 		</div>
 		<div class="col-md-6">
-			<div class="form-group">
+			<div class="form-group{% if errors.category %} has-error{% endif %}">
 				<label class="control-label" for="category">Category</label>
 				<select class="form-control" id="category" name="category" required>
 					<option value="">[Select a category]</option>
@@ -45,33 +47,36 @@
 					<option value="{{ main.id }}_0" disabled>{{ main.name }}</option>
 					{% for sub in entry.1 %}
 					{% if sub.id != 0 %}
-					<option value="{{ main.id }}_{{ sub.id }}">{{ main.name }} - {{ sub.name }}</option>
+					{% set value = main.id ~ "_" ~ sub.id %}
+					<option value="{{ value }}"{% if form.category == value %} selected{% endif %}>{{ main.name }} - {{ sub.name }}</option>
 					{% endif %}
 					{% endfor %}
 					{% endfor %}
 				</select>
+				{% if errors.category %}<div class="help-block">{{ errors.category }}</div>{% endif %}
 			</div>
 		</div>
 	</div>
 	<div class="row form-group">
 		<div class="col-md-6">
-			<div class="form-group">
+			<div class="form-group{% if errors.information %} has-error{% endif %}">
 				<label class="control-label" for="information">Information</label>
-				<input class="form-control" id="information" name="information" placeholder="Your website or IRC channel" type="text" maxlength="255">
+				<input class="form-control" id="information" name="information" placeholder="Your website or IRC channel" type="text" maxlength="255" value="{{ form.information }}">
+				{% if errors.information %}<div class="help-block">{{ errors.information }}</div>{% endif %}
 			</div>
 		</div>
 		<div class="col-md-6">
 			<label class="control-label">Torrent flags</label><br>
 
 			<div class="btn-group" data-toggle="buttons">
-				<label class="btn btn-default" title="Upload torrent anonymously (don't display your username)">
-					<input id="is_anonymous" name="is_anonymous" type="checkbox" value="y">
+				<label class="btn btn-default{% if form.is_anonymous %} active{% endif %}" title="Upload torrent anonymously (don't display your username)">
+					<input id="is_anonymous" name="is_anonymous" type="checkbox" value="y"{% if form.is_anonymous %} checked{% endif %}>
 					<span class="glyphicon glyphicon-check"></span>
 					<span class="glyphicon glyphicon-unchecked"></span>
 					Anonymous
 				</label>
-				<label class="btn btn-grey" title="Hide torrent from listing">
-					<input id="is_hidden" name="is_hidden" type="checkbox" value="y">
+				<label class="btn btn-grey{% if form.is_hidden %} active{% endif %}" title="Hide torrent from listing">
+					<input id="is_hidden" name="is_hidden" type="checkbox" value="y"{% if form.is_hidden %} checked{% endif %}>
 					<span class="glyphicon glyphicon-check"></span>
 					<span class="glyphicon glyphicon-unchecked"></span>
 					Hidden
@@ -79,21 +84,21 @@
 			</div>
 			<div class="hidden-xl hidden-lg"><br></div>
 			<div class="btn-group" data-toggle="buttons">
-				<label class="btn btn-danger" title="This torrent is derived from another release">
-					<input id="is_remake" name="is_remake" type="checkbox" value="y">
+				<label class="btn btn-danger{% if form.is_remake %} active{% endif %}" title="This torrent is derived from another release">
+					<input id="is_remake" name="is_remake" type="checkbox" value="y"{% if form.is_remake %} checked{% endif %}>
 					<span class="glyphicon glyphicon-check"></span>
 					<span class="glyphicon glyphicon-unchecked"></span>
 					Remake
 				</label>
-				<label class="btn btn-warning" title="This torrent is a complete batch (eg. season)">
-					<input id="is_complete" name="is_complete" type="checkbox" value="y">
+				<label class="btn btn-warning{% if form.is_complete %} active{% endif %}" title="This torrent is a complete batch (eg. season)">
+					<input id="is_complete" name="is_complete" type="checkbox" value="y"{% if form.is_complete %} checked{% endif %}>
 					<span class="glyphicon glyphicon-check"></span>
 					<span class="glyphicon glyphicon-unchecked"></span>
 					Complete
 				</label>
 				{% if current_user and current_user.level >= 1 %}
-				<label class="btn btn-success active" title="Mark torrent trusted">
-					<input checked id="is_trusted" name="is_trusted" type="checkbox" value="y">
+				<label class="btn btn-success{% if form.is_trusted %} active{% endif %}" title="Mark torrent trusted">
+					<input id="is_trusted" name="is_trusted" type="checkbox" value="y"{% if form.is_trusted %} checked{% endif %}>
 					<span class="glyphicon glyphicon-check"></span>
 					<span class="glyphicon glyphicon-unchecked"></span>
 					Trusted
@@ -110,7 +115,7 @@
 				<select class="form-control" id="group_id" name="group_id">
 					<option value="0">None (personal upload)</option>
 					{% for group in groups %}
-					<option value="{{ group.id }}">[{{ group.tag }}] {{ group.name }}</option>
+					<option value="{{ group.id }}"{% if group_id == group.id %} selected{% endif %}>[{{ group.tag }}] {{ group.name }}</option>
 					{% endfor %}
 				</select>
 			</div>
@@ -119,7 +124,7 @@
 	{% endif %}
 	<div class="row">
 		<div class="col-md-12">
-			<div class="form-group">
+			<div class="form-group{% if errors.description %} has-error{% endif %}">
 				<div class="markdown-editor" id="description-markdown-editor" data-field-name="description">
 					<label class="control-label" for="description">Description</label>
 					<a href="https://github.com/adam-p/markdown-here/wiki/Markdown-Cheatsheet" class="small" target="_blank">Markdown supported</a>
@@ -137,12 +142,13 @@
 					</ul>
 					<div class="tab-content">
 						<div role="tabpanel" class="tab-pane active" id="description-tab" data-markdown-target="#description-markdown-target">
-							<textarea class="form-control markdown-source" id="description" name="description" maxlength="10240"></textarea>
+							<textarea class="form-control markdown-source" id="description" name="description" maxlength="10240">{{ form.description }}</textarea>
 						</div>
 						<div role="tabpanel" class="tab-pane" id="description-preview">
 							<div class="well" id="description-markdown-target"></div>
 						</div>
 					</div>
+					{% if errors.description %}<div class="help-block">{{ errors.description }}</div>{% endif %}
 				</div>
 			</div>
 		</div>

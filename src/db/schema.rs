@@ -155,6 +155,38 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    user_sessions (id) {
+        id -> Text,
+        user_id -> Integer,
+        created_time -> Timestamp,
+        last_seen -> Timestamp,
+        ip -> Nullable<Binary>,
+    }
+}
+
+diesel::table! {
+    nyaa_reports (id) {
+        id -> Integer,
+        created_time -> Timestamp,
+        reason -> Text,
+        status -> Integer,
+        torrent_id -> Integer,
+        user_id -> Nullable<Integer>,
+    }
+}
+
+diesel::table! {
+    group_reports (id) {
+        id -> Integer,
+        created_time -> Timestamp,
+        reason -> Text,
+        status -> Integer,
+        group_id -> Integer,
+        user_id -> Nullable<Integer>,
+    }
+}
+
 diesel::joinable!(adminlog -> users (admin_id));
 diesel::joinable!(groups -> users (owner_id));
 diesel::joinable!(nyaa_torrents -> users (uploader_id));
@@ -167,8 +199,16 @@ diesel::joinable!(group_members -> groups (group_id));
 diesel::joinable!(group_members -> users (user_id));
 diesel::joinable!(trusted_reviews -> trusted_applications (app_id));
 diesel::joinable!(site_banners -> users (created_by));
+diesel::joinable!(user_sessions -> users (user_id));
+
+diesel::joinable!(nyaa_reports -> nyaa_torrents (torrent_id));
+diesel::joinable!(nyaa_reports -> users (user_id));
+diesel::joinable!(group_reports -> groups (group_id));
+diesel::joinable!(group_reports -> users (user_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
+    nyaa_reports,
+    group_reports,
     adminlog,
     users,
     groups,
@@ -183,4 +223,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     trusted_applications,
     trusted_reviews,
     site_banners,
+    user_sessions,
 );

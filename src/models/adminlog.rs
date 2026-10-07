@@ -2,8 +2,8 @@ use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::Serialize;
 
-use crate::db::DbConnection;
 use crate::db::schema::{adminlog, users};
+use crate::db::DbConnection;
 
 /// A row of `adminlog`: one moderator action, shown on /admin/log. `log` is Markdown
 /// rendered inline on the page, using upstream's wording, for example
@@ -53,9 +53,7 @@ impl AdminLog {
             .offset((page.max(1) - 1) * per_page)
             .select((AdminLog::as_select(), users::username))
             .load::<(AdminLog, String)>(conn)?;
-        let entries = rows.into_iter()
-            .map(|(entry, admin_name)| AdminLogEntry { entry, admin_name })
-            .collect();
+        let entries = rows.into_iter().map(|(entry, admin_name)| AdminLogEntry { entry, admin_name }).collect();
         Ok((entries, total))
     }
 }
@@ -96,8 +94,10 @@ mod tests {
 
     #[test]
     fn hides_ips_like_upstream() {
-        assert_eq!(hide_ips("User [a](/user/a) IP(1.2.3.4) has been banned."),
-                   "User [a](/user/a) IP(hidden) has been banned.");
+        assert_eq!(
+            hide_ips("User [a](/user/a) IP(1.2.3.4) has been banned."),
+            "User [a](/user/a) IP(hidden) has been banned."
+        );
         assert_eq!(hide_ips("IP(::1) IP(10.0.0.1)"), "IP(hidden) IP(hidden)");
         assert_eq!(hide_ips("no ip here IP(unclosed"), "no ip here IP(unclosed");
     }

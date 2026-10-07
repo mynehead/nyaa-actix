@@ -4,17 +4,17 @@ use serde::Deserialize;
 use tera::Tera;
 
 use crate::config::Config;
-use crate::db::DbPool;
-use crate::utils::context::base_context;
-use crate::middleware::auth::get_current_user;
 use crate::db::schema::{bans, nyaa_comments, nyaa_statistics, nyaa_torrents, users};
+use crate::db::DbPool;
+use crate::middleware::auth::get_current_user;
 use crate::models::{user_link, AdminLog, Ban, NewBan, TorrentFlags, User, UserStatus, MAX_BAN_REASON_LEN};
-use crate::utils::{flash, sanitize_text, unpack_ip};
-use diesel::prelude::*;
 use crate::search::db::{with_stats, SearchQuery};
 use crate::search::search;
+use crate::utils::context::base_context;
 use crate::utils::context::SearchState;
 use crate::utils::pagination::Pagination;
+use crate::utils::{flash, internal_error, sanitize_text, unpack_ip};
+use diesel::prelude::*;
 
 #[derive(Debug, Deserialize)]
 pub struct UserSearchParams {
@@ -38,9 +38,9 @@ pub async fn view_user(
     let current_user = get_current_user(&session, &pool);
     let is_admin = current_user.as_ref().map(|u| u.is_moderator()).unwrap_or(false);
 
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
     let profile_user = User::by_username(&mut conn, &username)
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("User not found"))?;
 
     let mut q = SearchQuery::from_params(
@@ -61,15 +61,13 @@ pub async fn view_user(
     q.include_hidden = is_admin || is_owner;
     q.hide_anonymous = !(is_admin || is_owner);
 
-    let result = search(&mut conn, cfg.meili.as_ref(), &q)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let result = search(&mut conn, cfg.meili.as_ref(), &q).map_err(internal_error)?;
     let pagination = Pagination::new(q.page, result.total, q.per_page);
 
     let mut ctx = base_context(&cfg, current_user.as_ref());
     ctx.insert("profile_user", &profile_user);
     ctx.insert("avatar_url", &profile_user.avatar_url(&cfg));
-    let torrents = with_stats(&mut conn, result.torrents)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let torrents = with_stats(&mut conn, result.torrents).map_err(internal_error)?;
     ctx.insert("torrents", &torrents);
     ctx.insert("pagination", &pagination);
     ctx.insert("search", &SearchState::new(&params.q, &params.c, &params.f, &params.s, &params.o));
@@ -78,9 +76,9 @@ pub async fn view_user(
     ctx.insert("flash_messages", &flash::take(&session));
     if let Some(moderator) = current_user.as_ref().filter(|m| can_ban(m, &profile_user)) {
         let bans = Ban::banned(&mut conn, Some(profile_user.id), profile_user.last_login_ip.as_deref())
-            .map_err(actix_web::error::ErrorInternalServerError)?;
+            .map_err(internal_error)?;
         let ip_banned = bans.iter().any(|b| b.user_ip.is_some() && b.user_ip == profile_user.last_login_ip);
-        let bans = Ban::with_names(&mut conn, bans).map_err(actix_web::error::ErrorInternalServerError)?;
+        let bans = Ban::with_names(&mut conn, bans).map_err(internal_error)?;
         ctx.insert("ban_form", &true);
         ctx.insert("bans", &bans);
         ctx.insert("ip_banned", &ip_banned);
@@ -91,18 +89,16 @@ pub async fn view_user(
         }
     }
 
-    let html = tmpl.render("user.html", &ctx)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("user.html", &ctx).map_err(internal_error)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
 /// An uploaded avatar. Links carry `?v=` with the upload time, so a new one shows at once.
-pub async fn avatar(
-    storage: web::Data<crate::storage::Storage>,
-    path: web::Path<i32>,
-) -> Result<HttpResponse> {
-    let data = storage.get(crate::storage::Kind::Avatar, path.into_inner()).await
-        .map_err(actix_web::error::ErrorInternalServerError)?
+pub async fn avatar(storage: web::Data<crate::storage::Storage>, path: web::Path<i32>) -> Result<HttpResponse> {
+    let data = storage
+        .get(crate::storage::Kind::Avatar, path.into_inner())
+        .await
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("No avatar"))?;
     Ok(HttpResponse::Ok()
         .content_type("image/png")
@@ -134,11 +130,11 @@ pub async fn ban_user_post(
     path: web::Path<String>,
     form: web::Form<BanForm>,
 ) -> Result<HttpResponse> {
-    let moderator = get_current_user(&session, &pool)
-        .ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let moderator =
+        get_current_user(&session, &pool).ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
+    let mut conn = pool.get().map_err(internal_error)?;
     let user = User::by_username(&mut conn, &path.into_inner())
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("User not found"))?;
     if !can_ban(&moderator, &user) {
         return Err(actix_web::error::ErrorForbidden("Not allowed"));
@@ -146,8 +142,7 @@ pub async fn ban_user_post(
     let url = format!("/user/{}", user.username);
     let back = || HttpResponse::SeeOther().insert_header(("Location", url.clone())).finish();
 
-    let bans = Ban::banned(&mut conn, Some(user.id), user.last_login_ip.as_deref())
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let bans = Ban::banned(&mut conn, Some(user.id), user.last_login_ip.as_deref()).map_err(internal_error)?;
     let ip_banned = bans.iter().any(|b| b.user_ip.is_some() && b.user_ip == user.last_login_ip);
     let unban = form.unban.is_some();
     let ban_ip = !unban && form.ban_userip.is_some();
@@ -169,8 +164,12 @@ pub async fn ban_user_post(
             return Ok(back());
         }
         if reason.chars().count() > MAX_BAN_REASON_LEN {
-            flash::push(&session, "danger", "Ban failed!",
-                &format!("Reason must be at most {} characters long.", MAX_BAN_REASON_LEN));
+            flash::push(
+                &session,
+                "danger",
+                "Ban failed!",
+                &format!("Reason must be at most {} characters long.", MAX_BAN_REASON_LEN),
+            );
             return Ok(back());
         }
         if ban_ip {
@@ -181,8 +180,12 @@ pub async fn ban_user_post(
                 }
                 // Behind a reverse proxy every visitor looks like loopback; banning it locks out the site
                 Some(ip) if ip.is_loopback() => {
-                    flash::push(&session, "danger", "Ban failed!",
-                        "This user's IP is a loopback address, which would ban everyone behind the proxy.");
+                    flash::push(
+                        &session,
+                        "danger",
+                        "Ban failed!",
+                        "This user's IP is a loopback address, which would ban everyone behind the proxy.",
+                    );
                     return Ok(back());
                 }
                 Some(_) => {}
@@ -194,9 +197,7 @@ pub async fn ban_user_post(
     conn.transaction::<_, diesel::result::Error, _>(|conn| {
         let mut user_str = user_link(&user.username);
         let status = if unban { UserStatus::Active } else { UserStatus::Banned };
-        diesel::update(users::table.find(user.id))
-            .set(users::status.eq(status as i32))
-            .execute(conn)?;
+        diesel::update(users::table.find(user.id)).set(users::status.eq(status as i32)).execute(conn)?;
         if unban {
             for ban in &bans {
                 if let Some(ip) = ban.ip_string() {
@@ -209,24 +210,30 @@ pub async fn ban_user_post(
             if let Some(ip) = user_ip.as_deref().and_then(unpack_ip) {
                 user_str.push_str(&format!(" IP({})", ip));
             }
-            diesel::insert_into(bans::table).values(NewBan {
-                created_time: chrono::Utc::now().naive_utc(),
-                admin_id: moderator.id,
-                user_id: Some(user.id),
-                user_ip,
-                reason: sanitize_text(reason),
-            }).execute(conn)?;
+            diesel::insert_into(bans::table)
+                .values(NewBan {
+                    created_time: chrono::Utc::now().naive_utc(),
+                    admin_id: moderator.id,
+                    user_id: Some(user.id),
+                    user_ip,
+                    reason: sanitize_text(reason),
+                })
+                .execute(conn)?;
         }
         AdminLog::add(conn, moderator.id, &format!("User {} has been {}.", user_str, action))
-    }).map_err(actix_web::error::ErrorInternalServerError)?;
+    })
+    .map_err(internal_error)?;
     flash::push(&session, "success", "", &format!("User has been successfully {}.", action));
     Ok(back())
 }
 
 /// The user behind a nuke request; superadmins only, and only on users below them.
-fn nuke_target(session: &Session, pool: &DbPool, username: &str) -> Result<(User, User, diesel::r2d2::PooledConnection<crate::db::DbManager>)> {
-    let admin = get_current_user(session, pool)
-        .ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
+fn nuke_target(
+    session: &Session,
+    pool: &DbPool,
+    username: &str,
+) -> Result<(User, User, diesel::r2d2::PooledConnection<crate::db::DbManager>)> {
+    let admin = get_current_user(session, pool).ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
     let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
     let user = User::by_username(&mut conn, username)
         .map_err(actix_web::error::ErrorInternalServerError)?
@@ -246,26 +253,32 @@ pub async fn nuke_torrents_post(
     path: web::Path<String>,
 ) -> Result<HttpResponse> {
     let (admin, user, mut conn) = nuke_target(&session, &pool, &path.into_inner())?;
-    let ids: Vec<i32> = conn.transaction::<_, diesel::result::Error, _>(|conn| {
-        let torrents: Vec<(i32, i32)> = nyaa_torrents::table
-            .filter(nyaa_torrents::uploader_id.eq(user.id))
-            .select((nyaa_torrents::id, nyaa_torrents::flags))
-            .load(conn)?;
-        let banned = (TorrentFlags::DELETED | TorrentFlags::BANNED).bits();
-        for &(id, flags) in &torrents {
-            diesel::update(nyaa_torrents::table.find(id))
-                .set(nyaa_torrents::flags.eq(flags | banned))
+    let ids: Vec<i32> = conn
+        .transaction::<_, diesel::result::Error, _>(|conn| {
+            let torrents: Vec<(i32, i32)> = nyaa_torrents::table
+                .filter(nyaa_torrents::uploader_id.eq(user.id))
+                .select((nyaa_torrents::id, nyaa_torrents::flags))
+                .load(conn)?;
+            let banned = (TorrentFlags::DELETED | TorrentFlags::BANNED).bits();
+            for &(id, flags) in &torrents {
+                diesel::update(nyaa_torrents::table.find(id))
+                    .set(nyaa_torrents::flags.eq(flags | banned))
+                    .execute(conn)?;
+            }
+            let ids: Vec<i32> = torrents.into_iter().map(|(id, _)| id).collect();
+            diesel::update(nyaa_statistics::table.filter(nyaa_statistics::torrent_id.eq_any(&ids)))
+                .set((nyaa_statistics::seed_count.eq(0), nyaa_statistics::leech_count.eq(0)))
                 .execute(conn)?;
-        }
-        let ids: Vec<i32> = torrents.into_iter().map(|(id, _)| id).collect();
-        diesel::update(nyaa_statistics::table.filter(nyaa_statistics::torrent_id.eq_any(&ids)))
-            .set((nyaa_statistics::seed_count.eq(0), nyaa_statistics::leech_count.eq(0)))
-            .execute(conn)?;
-        if !ids.is_empty() {
-            AdminLog::add(conn, admin.id, &format!("Nuked {} torrents of {}", ids.len(), user_link(&user.username)))?;
-        }
-        Ok(ids)
-    }).map_err(actix_web::error::ErrorInternalServerError)?;
+            if !ids.is_empty() {
+                AdminLog::add(
+                    conn,
+                    admin.id,
+                    &format!("Nuked {} torrents of {}", ids.len(), user_link(&user.username)),
+                )?;
+            }
+            Ok(ids)
+        })
+        .map_err(actix_web::error::ErrorInternalServerError)?;
     for id in ids {
         crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), id);
     }
@@ -281,26 +294,29 @@ pub async fn nuke_comments_post(
     path: web::Path<String>,
 ) -> Result<HttpResponse> {
     let (admin, user, mut conn) = nuke_target(&session, &pool, &path.into_inner())?;
-    let torrent_ids: Vec<i32> = conn.transaction::<_, diesel::result::Error, _>(|conn| {
-        let mut torrent_ids: Vec<i32> = nyaa_comments::table
-            .filter(nyaa_comments::user_id.eq(user.id))
-            .select(nyaa_comments::torrent_id)
-            .load(conn)?;
-        let deleted = diesel::delete(nyaa_comments::table.filter(nyaa_comments::user_id.eq(user.id)))
-            .execute(conn)?;
-        torrent_ids.sort_unstable();
-        torrent_ids.dedup();
-        for &tid in &torrent_ids {
-            let count: i64 = nyaa_comments::table.filter(nyaa_comments::torrent_id.eq(tid)).count().get_result(conn)?;
-            diesel::update(nyaa_torrents::table.find(tid))
-                .set(nyaa_torrents::comment_count.eq(count as i32))
-                .execute(conn)?;
-        }
-        if deleted > 0 {
-            AdminLog::add(conn, admin.id, &format!("Nuked {} comments of {}", deleted, user_link(&user.username)))?;
-        }
-        Ok(torrent_ids)
-    }).map_err(actix_web::error::ErrorInternalServerError)?;
+    let torrent_ids: Vec<i32> = conn
+        .transaction::<_, diesel::result::Error, _>(|conn| {
+            let mut torrent_ids: Vec<i32> = nyaa_comments::table
+                .filter(nyaa_comments::user_id.eq(user.id))
+                .select(nyaa_comments::torrent_id)
+                .load(conn)?;
+            let deleted =
+                diesel::delete(nyaa_comments::table.filter(nyaa_comments::user_id.eq(user.id))).execute(conn)?;
+            torrent_ids.sort_unstable();
+            torrent_ids.dedup();
+            for &tid in &torrent_ids {
+                let count: i64 =
+                    nyaa_comments::table.filter(nyaa_comments::torrent_id.eq(tid)).count().get_result(conn)?;
+                diesel::update(nyaa_torrents::table.find(tid))
+                    .set(nyaa_torrents::comment_count.eq(count as i32))
+                    .execute(conn)?;
+            }
+            if deleted > 0 {
+                AdminLog::add(conn, admin.id, &format!("Nuked {} comments of {}", deleted, user_link(&user.username)))?;
+            }
+            Ok(torrent_ids)
+        })
+        .map_err(actix_web::error::ErrorInternalServerError)?;
     for id in torrent_ids {
         crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), id);
     }

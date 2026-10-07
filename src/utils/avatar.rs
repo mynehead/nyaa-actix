@@ -15,11 +15,8 @@ const MAX_DIMENSION: u32 = 8192;
 /// or a message for the user.
 pub fn process(data: &[u8]) -> Result<Vec<u8>, &'static str> {
     const UNSUPPORTED: &str = "Unsupported image. Upload a PNG, JPEG, GIF or WebP file.";
-    let mut reader = ImageReader::new(Cursor::new(data))
-        .with_guessed_format()
-        .map_err(|_| UNSUPPORTED)?;
-    if !matches!(reader.format(),
-        Some(ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::Gif | ImageFormat::WebP)) {
+    let mut reader = ImageReader::new(Cursor::new(data)).with_guessed_format().map_err(|_| UNSUPPORTED)?;
+    if !matches!(reader.format(), Some(ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::Gif | ImageFormat::WebP)) {
         return Err(UNSUPPORTED);
     }
     let mut limits = Limits::default();
@@ -42,7 +39,12 @@ pub(crate) mod tests {
 
     /// A `w`x`h` PNG, left half red and right half blue.
     pub fn sample_png(w: u32, h: u32) -> Vec<u8> {
-        let img = image::RgbImage::from_fn(w, h, |x, _| if x < w / 2 { image::Rgb([255, 0, 0]) } else { image::Rgb([0, 0, 255]) });
+        let img =
+            image::RgbImage::from_fn(
+                w,
+                h,
+                |x, _| if x < w / 2 { image::Rgb([255, 0, 0]) } else { image::Rgb([0, 0, 255]) },
+            );
         let mut out = Vec::new();
         img.write_to(&mut Cursor::new(&mut out), ImageFormat::Png).unwrap();
         out

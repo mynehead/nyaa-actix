@@ -1,33 +1,16 @@
+use crate::config::Config;
+use crate::db::schema::{bans, users};
+use crate::db::DbPool;
+use crate::middleware::auth::get_current_user;
+use crate::models::{hide_ips, AdminLog, Ban, User, UserStatus};
+use crate::utils::context::base_context;
+use crate::utils::pagination::Pagination;
+use crate::utils::{flash, internal_error};
 use actix_session::Session;
 use actix_web::{web, HttpResponse, Result};
-use tera::Tera;
-use crate::config::Config;
-use crate::db::DbPool;
-use crate::utils::context::base_context;
-use crate::middleware::auth::get_current_user;
-use crate::db::schema::{bans, users};
-use crate::models::{hide_ips, AdminLog, Ban, User, UserStatus};
-use crate::utils::flash;
 use diesel::prelude::*;
-use crate::utils::pagination::Pagination;
 use serde::Deserialize;
-
-pub async fn reports(
-    session: Session,
-    pool: web::Data<DbPool>,
-    tmpl: web::Data<Tera>,
-    cfg: web::Data<Config>,
-) -> Result<HttpResponse> {
-    let current_user = get_current_user(&session, &pool)
-        .ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
-    if !current_user.is_moderator() {
-        return Err(actix_web::error::ErrorForbidden("Not allowed"));
-    }
-    let ctx = base_context(&cfg, Some(&current_user));
-    let html = tmpl.render("admin/reports.html", &ctx)
-        .unwrap_or_else(|_| "<h1>Admin Reports</h1><p>Not yet implemented.</p>".to_string());
-    Ok(HttpResponse::Ok().content_type("text/html").body(html))
-}
+use tera::Tera;
 
 /// `?p=N` on the admin lists (upstream also takes `offset`).
 #[derive(Debug, Deserialize)]
@@ -47,8 +30,7 @@ const ADMIN_PER_PAGE: i64 = 20;
 
 /// The signed-in moderator, or 401/403 as upstream's `is_moderator` check.
 fn require_moderator(session: &Session, pool: &DbPool) -> Result<User> {
-    let user = get_current_user(session, pool)
-        .ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
+    let user = get_current_user(session, pool).ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
     if !user.is_moderator() {
         return Err(actix_web::error::ErrorForbidden("Not allowed"));
     }
@@ -64,9 +46,8 @@ pub async fn log(
     query: web::Query<PageParams>,
 ) -> Result<HttpResponse> {
     let current_user = require_moderator(&session, &pool)?;
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
-    let (mut logs, total) = AdminLog::page(&mut conn, query.page(), ADMIN_PER_PAGE)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
+    let (mut logs, total) = AdminLog::page(&mut conn, query.page(), ADMIN_PER_PAGE).map_err(internal_error)?;
     if !current_user.is_superadmin() {
         for entry in &mut logs {
             entry.entry.log = hide_ips(&entry.entry.log);
@@ -75,8 +56,7 @@ pub async fn log(
     let mut ctx = base_context(&cfg, Some(&current_user));
     ctx.insert("logs", &logs);
     ctx.insert("pagination", &Pagination::new(query.page(), total, ADMIN_PER_PAGE));
-    let html = tmpl.render("admin/log.html", &ctx)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("admin/log.html", &ctx).map_err(internal_error)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
@@ -89,15 +69,13 @@ pub async fn bans(
     query: web::Query<PageParams>,
 ) -> Result<HttpResponse> {
     let current_user = require_moderator(&session, &pool)?;
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
-    let (bans, total) = Ban::page(&mut conn, query.page(), ADMIN_PER_PAGE)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
+    let (bans, total) = Ban::page(&mut conn, query.page(), ADMIN_PER_PAGE).map_err(internal_error)?;
     let mut ctx = base_context(&cfg, Some(&current_user));
     ctx.insert("bans", &bans);
     ctx.insert("pagination", &Pagination::new(query.page(), total, ADMIN_PER_PAGE));
     ctx.insert("flash_messages", &flash::take(&session));
-    let html = tmpl.render("admin/bans.html", &ctx)
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let html = tmpl.render("admin/bans.html", &ctx).map_err(internal_error)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
@@ -108,15 +86,11 @@ pub struct UnbanForm {
 }
 
 /// Lifts one ban, reactivates its user and logs it, as upstream's `view_adminbans` POST.
-pub async fn bans_post(
-    session: Session,
-    pool: web::Data<DbPool>,
-    form: web::Form<UnbanForm>,
-) -> Result<HttpResponse> {
+pub async fn bans_post(session: Session, pool: web::Data<DbPool>, form: web::Form<UnbanForm>) -> Result<HttpResponse> {
     let current_user = require_moderator(&session, &pool)?;
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
     let ban = Ban::by_id(&mut conn, form.submit)
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Ban not found"))?;
     conn.transaction::<_, diesel::result::Error, _>(|conn| {
         let mut log = format!("Unbanned ban #{}", ban.id);
@@ -133,7 +107,8 @@ pub async fn bans_post(
         AdminLog::add(conn, current_user.id, &log)?;
         diesel::delete(bans::table.find(ban.id)).execute(conn)?;
         Ok(())
-    }).map_err(actix_web::error::ErrorInternalServerError)?;
+    })
+    .map_err(internal_error)?;
     flash::push(&session, "success", "", &format!("Unbanned ban #{}", ban.id));
     Ok(HttpResponse::SeeOther().insert_header(("Location", "/admin/bans")).finish())
 }
@@ -142,59 +117,80 @@ pub async fn bans_post(
 mod tests {
     use super::*;
     use actix_session::{storage::CookieSessionStore, SessionMiddleware};
-    use actix_web::{cookie::{Cookie, Key}, http::StatusCode, test, App};
+    use actix_web::{
+        cookie::{Cookie, Key},
+        http::StatusCode,
+        test, App,
+    };
     use diesel::r2d2::Pool;
     use diesel::RunQueryDsl;
 
     fn pool() -> DbPool {
-        let pool = Pool::builder().max_size(1)
-            .build(crate::db::DbManager::new(":memory:")).unwrap();
+        let pool = Pool::builder().max_size(1).build(crate::db::DbManager::new(":memory:")).unwrap();
         let mut conn = pool.get().unwrap();
         crate::db::run_migrations(&mut conn).unwrap();
-        diesel::sql_query("INSERT INTO users (id, username, password_hash, status, level) VALUES \
-                           (1, 'regular', 'x', 1, 0), (2, 'mod', 'x', 1, 2), (3, 'boss', 'x', 1, 3)")
-            .execute(&mut conn).unwrap();
+        diesel::sql_query(
+            "INSERT INTO users (id, username, password_hash, status, level) VALUES \
+                           (1, 'regular', 'x', 1, 0), (2, 'mod', 'x', 1, 2), (3, 'boss', 'x', 1, 3)",
+        )
+        .execute(&mut conn)
+        .unwrap();
         // 10.0.0.9, packed as crate::utils::pack_ip does
         diesel::sql_query("UPDATE users SET last_login_ip = X'0000000000000000000000000A000009' WHERE id = 1")
-            .execute(&mut conn).unwrap();
+            .execute(&mut conn)
+            .unwrap();
         pool
     }
 
     fn config() -> Config {
         Config {
-            database_url: String::new(), secret_key: String::new(), site_name: "Nyaa".into(),
-            site_flavor: "nyaa".into(), results_per_page: 75, max_pages: 0,
-            torrent_storage_path: String::new(), avatar_storage_path: String::new(), enable_gravatar: false,
-            maintenance_mode: false, site_url: String::new(), tracker_urls: vec![], meili: None,
+            database_url: String::new(),
+            secret_key: String::new(),
+            site_name: "Nyaa".into(),
+            site_flavor: "nyaa".into(),
+            results_per_page: 75,
+            max_pages: 0,
+            torrent_storage_path: String::new(),
+            avatar_storage_path: String::new(),
+            enable_gravatar: false,
+            maintenance_mode: false,
+            site_url: String::new(),
+            tracker_urls: vec![],
+            trusted_proxies: vec![],
+            meili: None,
+            ratelimit_account_age: 0,
             trusted: Default::default(),
         }
     }
 
-    async fn login(session: Session, path: web::Path<i32>) -> HttpResponse {
-        crate::middleware::auth::login_user(&session, path.into_inner()).unwrap();
-        HttpResponse::Ok().finish()
-    }
+    use crate::middleware::auth::test_support::login;
 
     macro_rules! app {
         ($pool:expr, $user:expr) => {{
             let mut tera = Tera::new("templates/**/*").unwrap();
             crate::utils::tera_filters::register(&mut tera);
-            let app = test::init_service(App::new()
-                .app_data(web::Data::new(config()))
-                .app_data(web::Data::new($pool.clone()))
-                .app_data(web::Data::new(tera))
-                .route("/login/{id}", web::get().to(login))
-                .wrap(actix_web::middleware::from_fn(crate::middleware::ip_ban::reject_banned_ip))
-                .wrap(SessionMiddleware::new(CookieSessionStore::default(), Key::from(&[7u8; 64])))
-                .route("/admin/log", web::get().to(log))
-                .route("/admin/bans", web::get().to(bans))
-                .route("/admin/bans", web::post().to(bans_post))
-                .route("/user/{username}", web::get().to(crate::handlers::users::view_user))
-                .route("/user/{username}", web::post().to(crate::handlers::users::ban_user_post))
-                .route("/user/{username}/nuke/torrents", web::post().to(crate::handlers::users::nuke_torrents_post))
-                .route("/user/{username}/nuke/comments", web::post().to(crate::handlers::users::nuke_comments_post))).await;
-            let res = test::call_service(&app,
-                test::TestRequest::get().uri(&format!("/login/{}", $user)).to_request()).await;
+            let app = test::init_service(
+                App::new()
+                    .app_data(web::Data::new(config()))
+                    .app_data(web::Data::new($pool.clone()))
+                    .app_data(web::Data::new(tera))
+                    .route("/login/{id}", web::get().to(login))
+                    .wrap(actix_web::middleware::from_fn(crate::middleware::ip_ban::reject_banned_ip))
+                    .wrap(SessionMiddleware::new(CookieSessionStore::default(), Key::from(&[7u8; 64])))
+                    .route("/admin/log", web::get().to(log))
+                    .route("/admin/bans", web::get().to(bans))
+                    .route("/admin/bans", web::post().to(bans_post))
+                    .route("/user/{username}", web::get().to(crate::handlers::users::view_user))
+                    .route("/user/{username}", web::post().to(crate::handlers::users::ban_user_post))
+                    .route("/user/{username}/nuke/torrents", web::post().to(crate::handlers::users::nuke_torrents_post))
+                    .route(
+                        "/user/{username}/nuke/comments",
+                        web::post().to(crate::handlers::users::nuke_comments_post),
+                    ),
+            )
+            .await;
+            let res =
+                test::call_service(&app, test::TestRequest::get().uri(&format!("/login/{}", $user)).to_request()).await;
             let cookie: Cookie<'static> = res.response().cookies().next().unwrap().into_owned();
             (app, cookie)
         }};
@@ -203,8 +199,9 @@ mod tests {
     /// GETs `uri` as the cookie's user; returns the status and body.
     macro_rules! page {
         ($app:expr, $cookie:expr, $uri:expr) => {{
-            let res = test::call_service(&$app,
-                test::TestRequest::get().uri($uri).cookie($cookie.clone()).to_request()).await;
+            let res =
+                test::call_service(&$app, test::TestRequest::get().uri($uri).cookie($cookie.clone()).to_request())
+                    .await;
             let status = res.status();
             (status, String::from_utf8(test::read_body(res).await.to_vec()).unwrap())
         }};
@@ -257,8 +254,11 @@ mod tests {
     /// POSTs a form as the cookie's user; returns the response.
     macro_rules! post {
         ($app:expr, $cookie:expr, $uri:expr, $form:expr) => {
-            test::call_service(&$app, test::TestRequest::post().uri($uri).cookie($cookie.clone())
-                .set_form($form).to_request()).await
+            test::call_service(
+                &$app,
+                test::TestRequest::post().uri($uri).cookie($cookie.clone()).set_form($form).to_request(),
+            )
+            .await
         };
     }
 
@@ -362,16 +362,28 @@ mod tests {
         post!(app, cookie, "/user/regular", &[("reason", "x"), ("ban_userip", "Ban User+IP")]);
 
         let banned: std::net::SocketAddr = "10.0.0.9:1234".parse().unwrap();
-        let res = test::call_service(&app, test::TestRequest::post().uri("/admin/bans")
-            .peer_addr(banned).set_form([("submit", "1")]).to_request()).await;
+        let res = test::call_service(
+            &app,
+            test::TestRequest::post().uri("/admin/bans").peer_addr(banned).set_form([("submit", "1")]).to_request(),
+        )
+        .await;
         assert_eq!(res.status(), StatusCode::FORBIDDEN);
         assert_eq!(test::read_body(res).await, "You are banned.");
         // GETs still work, and other IPs can still post
-        let res = test::call_service(&app, test::TestRequest::get().uri("/user/regular")
-            .peer_addr(banned).to_request()).await;
+        let res =
+            test::call_service(&app, test::TestRequest::get().uri("/user/regular").peer_addr(banned).to_request())
+                .await;
         assert_eq!(res.status(), StatusCode::OK);
-        let res = test::call_service(&app, test::TestRequest::post().uri("/user/regular")
-            .peer_addr("10.0.0.8:1".parse().unwrap()).cookie(cookie.clone()).set_form([("unban", "Unban")]).to_request()).await;
+        let res = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/user/regular")
+                .peer_addr("10.0.0.8:1".parse().unwrap())
+                .cookie(cookie.clone())
+                .set_form([("unban", "Unban")])
+                .to_request(),
+        )
+        .await;
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
         assert!(all_bans(&pool).is_empty());
     }
@@ -386,13 +398,24 @@ mod tests {
                 diesel::sql_query(format!(
                     "INSERT INTO nyaa_torrents (id, info_hash, display_name, torrent_name, information, description, \
                      flags, uploader_id, main_category_id, sub_category_id, comment_count) \
-                     VALUES ({id}, X'{}', 't', 't.torrent', '', '', 0, {uploader}, 1, 2, 2)", format!("{id:02}").repeat(20)
-                )).execute(&mut conn).unwrap();
-                diesel::sql_query(format!("INSERT INTO nyaa_statistics (torrent_id, seed_count, leech_count, download_count) \
-                                           VALUES ({id}, 4, 3, 9)")).execute(&mut conn).unwrap();
+                     VALUES ({id}, X'{}', 't', 't.torrent', '', '', 0, {uploader}, 1, 2, 2)",
+                    format!("{id:02}").repeat(20)
+                ))
+                .execute(&mut conn)
+                .unwrap();
+                diesel::sql_query(format!(
+                    "INSERT INTO nyaa_statistics (torrent_id, seed_count, leech_count, download_count) \
+                                           VALUES ({id}, 4, 3, 9)"
+                ))
+                .execute(&mut conn)
+                .unwrap();
             }
-            diesel::sql_query("INSERT INTO nyaa_comments (torrent_id, user_id, text) VALUES \
-                               (3, 1, 'a'), (3, 2, 'b'), (2, 1, 'c')").execute(&mut conn).unwrap();
+            diesel::sql_query(
+                "INSERT INTO nyaa_comments (torrent_id, user_id, text) VALUES \
+                               (3, 1, 'a'), (3, 2, 'b'), (2, 1, 'c')",
+            )
+            .execute(&mut conn)
+            .unwrap();
         }
 
         // Moderators can't nuke
@@ -409,8 +432,11 @@ mod tests {
         let res = post!(app, cookie, "/user/regular/nuke/torrents", &[("nuke_torrents", "x")]);
         assert_eq!(res.headers().get("Location").unwrap(), "/user/regular");
         let mut conn = pool.get().unwrap();
-        let flags: Vec<(i32, i32)> = nyaa_torrents::table.order(nyaa_torrents::id)
-            .select((nyaa_torrents::id, nyaa_torrents::flags)).load(&mut conn).unwrap();
+        let flags: Vec<(i32, i32)> = nyaa_torrents::table
+            .order(nyaa_torrents::id)
+            .select((nyaa_torrents::id, nyaa_torrents::flags))
+            .load(&mut conn)
+            .unwrap();
         let banned = (crate::models::TorrentFlags::DELETED | crate::models::TorrentFlags::BANNED).bits();
         assert_eq!(flags, [(1, banned), (2, banned), (3, 0)]);
         drop(conn);
@@ -420,11 +446,13 @@ mod tests {
         let mut conn = pool.get().unwrap();
         let left: Vec<String> = nyaa_comments::table.select(nyaa_comments::text).load(&mut conn).unwrap();
         assert_eq!(left, ["b"]);
-        let counts: Vec<i32> = nyaa_torrents::table.order(nyaa_torrents::id)
-            .select(nyaa_torrents::comment_count).load(&mut conn).unwrap();
+        let counts: Vec<i32> =
+            nyaa_torrents::table.order(nyaa_torrents::id).select(nyaa_torrents::comment_count).load(&mut conn).unwrap();
         assert_eq!(counts, [2, 0, 1], "recounted only where comments were removed");
         drop(conn);
-        assert_eq!(logs(&pool), ["Nuked 2 torrents of [regular](/user/regular)",
-                                 "Nuked 2 comments of [regular](/user/regular)"]);
+        assert_eq!(
+            logs(&pool),
+            ["Nuked 2 torrents of [regular](/user/regular)", "Nuked 2 comments of [regular](/user/regular)"]
+        );
     }
 }

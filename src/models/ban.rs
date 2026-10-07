@@ -1,9 +1,9 @@
+use crate::db::schema::{bans, users};
+use crate::db::DbConnection;
+use crate::utils::unpack_ip;
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
-use crate::db::DbConnection;
-use crate::db::schema::{bans, users};
-use crate::utils::unpack_ip;
 
 /// A row of the `bans` table: a user ban, an IP ban, or both. Listed on /admin/bans and
 /// managed from the user page, as upstream.
@@ -61,8 +61,7 @@ impl Ban {
 
     /// Whether any ban covers this IP.
     pub fn ip_banned(conn: &mut DbConnection, ip: &[u8]) -> QueryResult<bool> {
-        diesel::select(diesel::dsl::exists(bans::table.filter(bans::user_ip.eq(ip.to_vec()))))
-            .get_result(conn)
+        diesel::select(diesel::dsl::exists(bans::table.filter(bans::user_ip.eq(ip.to_vec())))).get_result(conn)
     }
 
     pub fn ip_string(&self) -> Option<String> {
@@ -78,13 +77,17 @@ impl Ban {
             .filter(users::id.eq_any(ids))
             .select((users::id, users::username))
             .load::<(i32, String)>(conn)?
-            .into_iter().collect();
-        Ok(bans.into_iter().map(|ban| BanEntry {
-            admin_name: names.get(&ban.admin_id).cloned().unwrap_or_default(),
-            user_name: ban.user_id.and_then(|id| names.get(&id).cloned()),
-            ip_string: ban.ip_string(),
-            ban,
-        }).collect())
+            .into_iter()
+            .collect();
+        Ok(bans
+            .into_iter()
+            .map(|ban| BanEntry {
+                admin_name: names.get(&ban.admin_id).cloned().unwrap_or_default(),
+                user_name: ban.user_id.and_then(|id| names.get(&id).cloned()),
+                ip_string: ban.ip_string(),
+                ban,
+            })
+            .collect())
     }
 
     /// One page of bans, newest first, and the total number of bans.

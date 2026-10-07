@@ -1,7 +1,7 @@
+use crate::db::schema::nyaa_comments;
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
-use crate::db::schema::nyaa_comments;
 
 #[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
 #[diesel(table_name = nyaa_comments)]
