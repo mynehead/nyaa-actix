@@ -225,6 +225,7 @@ async fn render_view(
     ctx.insert("uploader", &uploader);
     ctx.insert("uploader_ip", &uploader_ip);
     ctx.insert("group", &group);
+    ctx.insert("title", group.as_ref().map_or(torrent.display_name.as_str(), |g| g.strip_tag(&torrent.display_name)));
     ctx.insert("magnet", &magnet);
     ctx.insert("can_comment", &can_comment(torrent, current_user.as_ref()));
     ctx.insert("comment_text", comment_text);
@@ -1140,6 +1141,10 @@ mod tests {
                 .unwrap();
                 assert!(view.contains("<div class=\"col-md-1\">Group:</div>"), "{user:?}");
                 assert!(view.contains("<a href=\"/group/cyan\">[Cyan] Cyan</a>"), "{view}");
+                assert!(
+                    view.contains("<a href=\"/group/cyan\" class=\"group-tag\" title=\"Cyan\">[Cyan]</a> Old name"),
+                    "{view}"
+                );
                 assert_eq!(view.contains("(127.0.0.1)"), sees_ip, "{user:?}");
             }
         }
