@@ -33,7 +33,16 @@
 	Search results can be filtered by category, remake, trusted, and users.
 	The results can be further sorted by size, date, seeders, leechers, completed count, and comment count.
 </div>
-{# Upstream documents the | - "" () search operators here; they return with full-text search. #}
+<div>
+	A search finds torrents whose names contain every word you enter. These operators narrow it down:
+	<ul>
+		<li><kbd>"exact phrase"</kbd> matches the words in that order.</li>
+		<li><kbd>-word</kbd> or <kbd>!word</kbd> leaves out torrents containing the word; <kbd>-"some phrase"</kbd> works too.</li>
+		<li><kbd>user:name</kbd> shows only that user's uploads, <kbd>group:slug</kbd> only that group's. Put a <kbd>-</kbd> or <kbd>!</kbd> in front to leave them out instead, e.g. <kbd>-group:slug</kbd>.</li>
+		<li>An info hash (40 hex or 32 base32 characters) opens that torrent directly.</li>
+	</ul>
+	For example, <kbd>group:subsplease "one piece" 1080p -batch</kbd>.
+</div>
 
 {{ macros::linkable_header(heading="Reporting Torrents", label="reporting") }}
 <div>

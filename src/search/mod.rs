@@ -1,6 +1,7 @@
 pub mod db;
 pub mod index;
 pub mod meili;
+pub mod syntax;
 
 use diesel::prelude::*;
 
@@ -21,13 +22,14 @@ fn wants_index(q: &SearchQuery) -> bool {
 /// One page of a listing. Uses Meilisearch where it helps and falls back to SQLite when it
 /// is not configured or fails, so search never breaks because the index is down.
 pub fn search(conn: &mut DbConnection, meili: Option<&Meili>, q: &SearchQuery) -> QueryResult<SearchResult> {
-    if let Some(meili) = meili.filter(|m| m.is_ready() && wants_index(q)) {
-        match meili.search(q) {
+    let r = q.resolve(conn)?;
+    if let Some(meili) = meili.filter(|m| m.is_ready() && wants_index(q) && !r.matches_nothing) {
+        match meili.search(q, &r) {
             Ok((ids, total)) => return Ok(SearchResult { torrents: load_in_order(conn, &ids)?, total }),
             Err(e) => log::warn!("Meilisearch search failed, using SQLite: {e}"),
         }
     }
-    db::search(conn, q)
+    db::search_resolved(conn, q, &r)
 }
 
 /// Loads torrents by id in the given order, skipping any gone from SQLite since they were
@@ -56,6 +58,9 @@ mod tests {
         diesel::sql_query("INSERT INTO users (id, username, password_hash) VALUES (1, 'a', 'x'), (2, 'b', 'x')")
             .execute(&mut conn)
             .unwrap();
+        diesel::sql_query("INSERT INTO groups (id, name, tag, slug, owner_id) VALUES (1, 'Grp', 'Grp', 'grp', 1)")
+            .execute(&mut conn)
+            .unwrap();
         let rows = [
             (1, "[Grp] Dragon Show - 01 [1080p]", TorrentFlags::empty(), 1, 1, 1, 10),
             (2, "[Grp] Dragon Show - 02 [720p]", TorrentFlags::TRUSTED, 1, 2, 1, 50),
@@ -78,6 +83,11 @@ mod tests {
                  main_category_id, sub_category_id, filesize) VALUES ({id}, X'{id:040x}', '{name}', 't', {}, {uploader}, {main}, {sub}, {})",
                 flags.bits(), id * 100
             )).execute(&mut conn).unwrap();
+            if name.starts_with("[Grp]") {
+                diesel::sql_query(format!("UPDATE nyaa_torrents SET group_id = 1 WHERE id = {id}"))
+                    .execute(&mut conn)
+                    .unwrap();
+            }
             diesel::sql_query(format!(
                 "INSERT INTO nyaa_statistics (torrent_id, seed_count, leech_count, download_count) VALUES ({id}, {seeders}, 0, {id})"
             )).execute(&mut conn).unwrap();
@@ -106,6 +116,50 @@ mod tests {
         assert!(wants_index(&query(Some("dragon"), None, None, None, None)));
         assert!(wants_index(&query(None, None, None, Some("seeders"), None)));
         assert!(wants_index(&query(None, None, None, Some("downloads"), Some("asc"))));
+    }
+
+    /// Operator searches, as (term, moderator, viewer) and the ids they find. The
+    /// Meilisearch round trip below checks the index agrees on every one.
+    fn operator_cases() -> Vec<(SearchQuery, Vec<i32>)> {
+        let case = |term: &str, moderator: bool, viewer: Option<i32>, want: &[i32]| {
+            let mut q = query(Some(term), None, None, None, None);
+            q.moderator = moderator;
+            q.include_deleted = moderator;
+            q.include_hidden = moderator;
+            q.viewer_id = viewer;
+            (q, want.to_vec())
+        };
+        vec![
+            case("dragon -720p", false, None, &[6, 1]),
+            case(r#""dragon show""#, false, None, &[2, 1]),
+            case(r#"dragon -"dragon show""#, false, None, &[6]),
+            case("!dragon", false, None, &[3]),
+            case("user:a", false, None, &[2, 1]),
+            case("user:A dragon -720p", false, None, &[1]),
+            // Anonymous uploads stay unattributed, both ways, except to moderators and the
+            // uploader
+            case("user:b", false, None, &[3]),
+            case("-user:b dragon", false, None, &[6, 2, 1]),
+            case("user:b", false, Some(2), &[6, 3]),
+            case("user:b", true, None, &[6, 3]),
+            case("-user:b", true, None, &[5, 4, 2, 1]),
+            case("group:grp", false, None, &[2, 1]),
+            case("-group:GRP", false, None, &[6, 3]),
+            case("g:grp u:b", false, None, &[]),
+            // Unknown names: nothing to include, nothing to leave out
+            case("user:nobody dragon", false, None, &[]),
+            case("group:nothing", false, None, &[]),
+            case("-user:nobody sword", false, None, &[3]),
+        ]
+    }
+
+    #[test]
+    fn operators_filter_in_sqlite() {
+        let mut conn = db();
+        for (q, want) in operator_cases() {
+            let total = want.len() as i64;
+            assert_eq!(ids(&mut conn, None, &q), (want, total), "{q:?}");
+        }
     }
 
     #[test]
@@ -172,6 +226,10 @@ mod tests {
         ];
         for q in &cases {
             assert_eq!(ids(&mut conn, Some(&meili), q), ids(&mut conn, None, q), "{q:?}");
+        }
+        for (q, want) in operator_cases() {
+            let total = want.len() as i64;
+            assert_eq!(ids(&mut conn, Some(&meili), &q), (want, total), "{q:?}");
         }
         // Spot checks, so the comparison above can't pass with both sides wrong
         assert_eq!(ids(&mut conn, Some(&meili), &cases[0]), (vec![6, 2, 1], 3));

@@ -1,6 +1,7 @@
 use diesel::prelude::*;
 use serde::Serialize;
 
+use super::syntax::Resolved;
 use crate::db::schema::{nyaa_statistics, nyaa_torrents};
 use crate::db::DbConnection;
 use crate::models::{Statistic, Torrent};
@@ -37,6 +38,8 @@ pub struct SearchQuery {
     pub hide_anonymous: bool,
     /// The logged-in visitor. In the general listing they also see their own hidden uploads.
     pub viewer_id: Option<i32>,
+    /// A moderator is looking: `user:` searches also find that user's anonymous uploads.
+    pub moderator: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -75,6 +78,7 @@ impl SearchQuery {
             include_hidden: false,
             hide_anonymous: false,
             viewer_id: None,
+            moderator: false,
         }
     }
 
@@ -121,6 +125,7 @@ impl SearchQuery {
             include_hidden: is_admin,
             hide_anonymous: false,
             viewer_id: None,
+            moderator: is_admin,
         }
     }
 }
@@ -132,6 +137,14 @@ impl SearchQuery {
             self.viewer_id
         } else {
             None
+        }
+    }
+
+    /// The search term with its operators looked up; see `syntax`.
+    pub fn resolve(&self, conn: &mut DbConnection) -> QueryResult<Resolved> {
+        match &self.term {
+            Some(term) => Resolved::new(conn, term, |uid| self.moderator || self.viewer_id == Some(uid)),
+            None => Ok(Resolved::default()),
         }
     }
 }
@@ -175,14 +188,37 @@ fn escape_like(term: &str) -> String {
 
 /// Builds the filtered (unsorted, unpaged) query. Used for both the count
 /// and the page so the two can't disagree on what is visible.
-fn filtered(q: &SearchQuery) -> nyaa_torrents::BoxedQuery<'static, crate::db::MultiBackend> {
+fn filtered(q: &SearchQuery, r: &Resolved) -> nyaa_torrents::BoxedQuery<'static, crate::db::MultiBackend> {
     let mut query = nyaa_torrents::table.into_boxed();
 
-    // Term search (case-insensitive LIKE on display_name)
-    if let Some(ref term) = q.term {
-        // `%` and `_` in the term are literal characters, not wildcards
-        let pattern = format!("%{}%", escape_like(term));
-        query = query.filter(lower(nyaa_torrents::display_name).like(lower(pattern)).escape('\\'));
+    // Words and phrases (case-insensitive substrings of display_name), every one required;
+    // `%` and `_` in them are literal characters, not wildcards
+    let like = |t: &str| lower(format!("%{}%", escape_like(t)));
+    for t in &r.include {
+        query = query.filter(lower(nyaa_torrents::display_name).like(like(&t.text)).escape('\\'));
+    }
+    for t in &r.exclude {
+        query = query.filter(lower(nyaa_torrents::display_name).not_like(like(&t.text)).escape('\\'));
+    }
+
+    // `user:` and `group:`. Anonymous uploads only count as the user's where `Resolved`
+    // allows it, so excluding a user can't reveal them either.
+    let anonymous = || nyaa_torrents::flags.bitand(TorrentFlags::ANONYMOUS.bits()).ne(0);
+    for &(uid, reveals) in &r.users {
+        query = query.filter(nyaa_torrents::uploader_id.eq(uid));
+        if !reveals {
+            query = query.filter(diesel::dsl::not(anonymous()));
+        }
+    }
+    for &(uid, reveals) in &r.not_users {
+        let other = nyaa_torrents::uploader_id.is_null().or(nyaa_torrents::uploader_id.ne(uid));
+        query = if reveals { query.filter(other) } else { query.filter(other.or(anonymous())) };
+    }
+    for &gid in &r.groups {
+        query = query.filter(nyaa_torrents::group_id.eq(gid));
+    }
+    for &gid in &r.not_groups {
+        query = query.filter(nyaa_torrents::group_id.is_null().or(nyaa_torrents::group_id.ne(gid)));
     }
 
     // User filter
@@ -246,9 +282,20 @@ fn filtered(q: &SearchQuery) -> nyaa_torrents::BoxedQuery<'static, crate::db::Mu
     query
 }
 
+/// One page of a listing from SQL alone (the tests; listings go through `search::search`).
+#[cfg(test)]
 pub fn search(conn: &mut DbConnection, q: &SearchQuery) -> QueryResult<SearchResult> {
-    let total: i64 = filtered(q).count().get_result(conn)?;
-    let query = filtered(q);
+    let r = q.resolve(conn)?;
+    search_resolved(conn, q, &r)
+}
+
+/// `search` with the term already resolved.
+pub fn search_resolved(conn: &mut DbConnection, q: &SearchQuery, r: &Resolved) -> QueryResult<SearchResult> {
+    if r.matches_nothing {
+        return Ok(SearchResult { torrents: vec![], total: 0 });
+    }
+    let total: i64 = filtered(q, r).count().get_result(conn)?;
+    let query = filtered(q, r);
 
     // Sort
     // `p` comes from the URL; a huge one must not overflow
