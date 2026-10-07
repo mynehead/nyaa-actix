@@ -236,6 +236,8 @@ pub async fn view_group(
     ctx.insert("group", &group);
     ctx.insert("owner", &owner);
     ctx.insert("can_edit", &can_edit);
+    ctx.insert("can_report", &crate::handlers::reports::can_report(current_user.as_ref(), &cfg));
+    ctx.insert("flash_messages", &crate::utils::flash::take(&session));
     let torrents = with_stats(&mut conn, result.torrents).map_err(internal_error)?;
     ctx.insert("torrents", &torrents);
     ctx.insert("pagination", &pagination);

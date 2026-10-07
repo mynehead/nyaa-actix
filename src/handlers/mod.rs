@@ -3,6 +3,7 @@ pub mod admin;
 pub mod banners;
 pub mod groups;
 pub mod home;
+pub mod reports;
 pub mod site;
 pub mod torrents;
 pub mod trusted;

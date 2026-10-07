@@ -1,0 +1,87 @@
+# Full nyaa-actix stack on one host: the site, PostgreSQL and the torrust-actix tracker,
+# plus Meilisearch with `--profile search`. Settings come from .env (copy .env.example);
+# see docker/DEPLOY.md. The S3 test servers for development are in docker/compose.yml.
+#
+#   docker compose up -d --build
+#   docker compose exec site nyaa-actix create-user admin <password> --level admin
+
+services:
+  site:
+    build: .
+    image: nyaa-actix:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      # These override .env so the container always uses the compose services and volume
+      DATABASE_URL: postgres://nyaa:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/nyaa
+      TORRENT_STORAGE_PATH: /data/torrents
+      AVATAR_STORAGE_PATH: /data/avatars
+    ports:
+      - "${NYAA_PORT:-8080}:8080"
+    volumes:
+      - site-data:/data
+
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nyaa
+      POSTGRES_DB: nyaa
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nyaa -d nyaa"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Announce and scrape. Peers are kept in memory, as the tracker design intends; the
+  # site will read counts and manage the whitelist through the API (not wired up yet).
+  tracker:
+    image: power2all/torrust-actix:v4.2.23
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: info
+      TRACKER__API_KEY: ${TRACKER_API_KEY:?set TRACKER_API_KEY in .env}
+      TRACKER__SWAGGER: "false"
+      DATABASE__PERSISTENT: "false"
+      DATABASE__ENGINE: sqlite3
+      DATABASE__PATH: "sqlite://:memory:"
+    # The image's own init.sh and healthcheck have Windows line endings and fail to run,
+    # so start the binary directly (writing a default config.toml on first start).
+    working_dir: /app/torrust-actix/target/release
+    command: ["/bin/sh", "-c", "[ -f config.toml ] || ./torrust-actix --create-config; exec ./torrust-actix"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "-H", "Authorization: Bearer ${TRACKER_API_KEY}", "http://127.0.0.1:8080/stats"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    ports:
+      - "${TRACKER_PORT:-6969}:6969/tcp"   # HTTP announce
+      - "${TRACKER_PORT:-6969}:6969/udp"   # UDP announce
+    # The API (port 8080 inside) stays on the compose network, reachable as http://tracker:8080
+
+  meilisearch:
+    profiles: [search]
+    image: getmeili/meilisearch:v1.54
+    restart: unless-stopped
+    environment:
+      MEILI_ENV: production
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-}
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - meili-data:/meili_data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:7700/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  site-data:
+  postgres-data:
+  meili-data:

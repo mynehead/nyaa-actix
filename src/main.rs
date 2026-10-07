@@ -112,6 +112,7 @@ async fn main() -> std::io::Result<()> {
                     .route(web::post().to(handlers::torrents::edit_torrent_post)),
             )
             // Upstream's URLs; the .torrent suffix lets clients add a torrent by URL
+            .route("/view/{id:\\d+}/submit_report", web::post().to(handlers::reports::submit_torrent_report))
             .route("/download/{id:\\d+}.torrent", web::get().to(handlers::torrents::download_torrent))
             .route("/view/{id:\\d+}/torrent", web::get().to(handlers::torrents::download_torrent))
             .route("/view/{id:\\d+}/magnet", web::get().to(handlers::torrents::magnet_redirect))
@@ -143,8 +144,10 @@ async fn main() -> std::io::Result<()> {
             .route("/group/{slug}/edit", web::post().to(handlers::groups::edit_group_post))
             .route("/group/{slug}/members", web::get().to(handlers::groups::manage_members_get))
             .route("/group/{slug}/members", web::post().to(handlers::groups::manage_members_post))
+            .route("/group/{slug}/submit_report", web::post().to(handlers::reports::submit_group_report))
             // Admin
-            .route("/admin/reports", web::get().to(handlers::admin::reports))
+            .route("/admin/reports", web::get().to(handlers::reports::admin_reports))
+            .route("/admin/reports", web::post().to(handlers::reports::admin_reports_post))
             .route("/admin/log", web::get().to(handlers::admin::log))
             .route("/admin/bans", web::get().to(handlers::admin::bans))
             .route("/admin/bans", web::post().to(handlers::admin::bans_post))
