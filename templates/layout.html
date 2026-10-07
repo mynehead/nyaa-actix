@@ -32,6 +32,7 @@
 		<!-- Modified to not apply border-radius to selectpickers and stuff so our navbar looks cool -->
 		<script src="/static/js/bootstrap-select.js"></script>
 		<script src="/static/js/main.js"></script>
+		<script src="/static/js/search-help.js"></script>
 	</head>
 	<body>
 		<!-- Fixed navbar -->
@@ -161,6 +162,10 @@
 					{# The mobile menu #}
 						<form class="navbar-form navbar-right form" action="{{ search_action }}" method="get">
 							<input type="text" class="form-control" name="q" placeholder="{{ search_placeholder }}" value="{% if search is defined %}{{ search.term }}{% endif %}">
+							<button class="btn btn-link btn-xs search-help-toggle" type="button" aria-expanded="false" aria-controls="searchHelpMobile">
+								<i class="fa fa-question-circle fa-fw"></i> Search patterns
+							</button>
+							{% set help_id = "searchHelpMobile" %}{% include "search_help.html" %}
 							<br>
 
 							<select class="form-control" title="Filter" data-width="120px" name="f">
@@ -214,11 +219,15 @@
 							</div>
 							<input type="text" class="form-control search-bar" name="q" placeholder="{{ search_placeholder }}" value="{% if search is defined %}{{ search.term }}{% endif %}" />
 							<div class="input-group-btn search-btn">
+								<button class="btn btn-default search-help-toggle" type="button" title="Search patterns" aria-label="Search patterns" aria-expanded="false" aria-controls="searchHelp">
+									<i class="fa fa-question-circle fa-fw"></i>
+								</button>
 								<button class="btn btn-primary" type="submit">
 									<i class="fa fa-search fa-fw"></i>
 								</button>
 							</div>
 						</div>
+						{% set help_id = "searchHelp" %}{% include "search_help.html" %}
 					</form>
 				</div><!--/.nav-collapse -->
 			</div><!--/.container -->
