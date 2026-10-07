@@ -117,6 +117,7 @@ mod tests {
             site_url: String::new(),
             tracker_urls: vec![],
             trusted_proxies: vec![],
+            ratelimit_account_age: 0,
             meili: None,
             trusted: Default::default(),
         };
