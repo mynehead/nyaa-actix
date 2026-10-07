@@ -96,6 +96,11 @@ index. CI runs Meilisearch as a service container, so the test always runs there
 
 ## Search syntax
 
+The operators (`"phrase"`, `-word` / `!word`, `user:name`, `group:slug`, info-hash
+lookup) are parsed by the site and work the same with or without Meilisearch; see the
+help page or `src/search/syntax.rs`. Words and phrases go to Meilisearch in its own
+syntax, `user:` and `group:` become filters.
+
 Every word must match (as upstream's Elasticsearch `AND`), and the last word also
 matches as a prefix. `"quoted phrases"` match exactly and `-word` excludes a word. Typo
 tolerance is off, since release names that differ by a letter are usually different
