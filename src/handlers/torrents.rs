@@ -607,6 +607,10 @@ pub struct EditForm {
     pub is_trusted: bool,
     #[serde(default, deserialize_with = "checkbox")]
     pub is_comment_locked: bool,
+    /// The group select ("0" for none); absent when the page showed no select,
+    /// which keeps the torrent's group.
+    #[serde(default, skip_serializing)]
+    pub group_id: Option<String>,
     #[serde(default, skip_serializing)]
     pub submit: Option<String>,
     #[serde(default, skip_serializing)]
@@ -734,6 +738,33 @@ fn editable_torrent(conn: &mut DbConnection, torrent_id: i32, editor: Option<&Us
     Ok(torrent)
 }
 
+/// The group a saved edit leaves the torrent under. Keeping the current group or
+/// clearing it is always allowed; moving to another group needs upload rights in it,
+/// as on the upload page, unless the editor is a moderator.
+fn edited_group(
+    conn: &mut DbConnection,
+    form: &EditForm,
+    torrent: &Torrent,
+    editor: &User,
+) -> QueryResult<std::result::Result<Option<i32>, String>> {
+    let Some(value) = form.group_id.as_deref() else {
+        return Ok(Ok(torrent.group_id));
+    };
+    let gid = match value.trim().parse::<i32>() {
+        Ok(0) => return Ok(Ok(None)),
+        Ok(gid) => gid,
+        Err(_) => return Ok(Err("Please select a proper group".to_string())),
+    };
+    if Some(gid) == torrent.group_id {
+        return Ok(Ok(Some(gid)));
+    }
+    let allowed = match crate::models::Group::by_id(conn, gid)? {
+        Some(g) => editor.is_moderator() || g.can_upload(conn, editor.id),
+        None => false,
+    };
+    Ok(if allowed { Ok(Some(gid)) } else { Err("You may not release under this group".to_string()) })
+}
+
 fn render_edit(
     conn: &mut DbConnection,
     tmpl: &Tera,
@@ -749,11 +780,25 @@ fn render_edit(
         Some(uid) if uid != editor.id => User::by_id(conn, uid).map_err(internal_error)?,
         _ => None,
     };
+    // Groups the editor may release under (all of them for moderators), plus the
+    // torrent's current group so keeping it is always possible
+    let is_moderator = editor.is_moderator();
+    let groups: Vec<crate::models::Group> = crate::models::Group::all(conn)
+        .map_err(internal_error)?
+        .into_iter()
+        .filter(|g| is_moderator || Some(g.id) == torrent.group_id || g.can_upload(conn, editor.id))
+        .collect();
+    let group_id = match form.group_id.as_deref() {
+        Some(value) => value.parse::<i32>().ok().filter(|&id| id != 0),
+        None => torrent.group_id,
+    };
     let mut ctx = base_context(cfg, Some(editor));
     ctx.insert("torrent", torrent);
     ctx.insert("form", form);
     ctx.insert("errors", errors);
     ctx.insert("categories", &categories);
+    ctx.insert("groups", &groups);
+    ctx.insert("group_id", &group_id);
     ctx.insert("uploader", &uploader);
     ctx.insert("is_deleted", &torrent.is_deleted());
     ctx.insert("is_banned", &torrent.is_banned());
@@ -792,9 +837,15 @@ pub async fn edit_torrent_post(
     let view_url = format!("/view/{}", torrent.id);
 
     if form.submit.is_some() {
-        let (main_cat, sub_cat) = match form.validate(&mut conn) {
-            Ok(ids) => ids,
-            Err(errors) => {
+        let validated = form.validate(&mut conn);
+        let group = edited_group(&mut conn, &form, &torrent, &editor).map_err(internal_error)?;
+        let ((main_cat, sub_cat), group_id) = match (validated, group) {
+            (Ok(ids), Ok(group_id)) => (ids, group_id),
+            (validated, group) => {
+                let mut errors = validated.err().unwrap_or_default();
+                if let Err(e) = group {
+                    errors.insert("group_id", e);
+                }
                 let html = render_edit(&mut conn, &tmpl, &cfg, &editor, &torrent, &form, &errors)?;
                 return Ok(HttpResponse::BadRequest().content_type("text/html").body(html));
             }
@@ -812,6 +863,7 @@ pub async fn edit_torrent_post(
                     nyaa_torrents::description.eq(sanitize_text(form.description.trim())),
                     nyaa_torrents::main_category_id.eq(main_cat),
                     nyaa_torrents::sub_category_id.eq(sub_cat),
+                    nyaa_torrents::group_id.eq(group_id),
                     nyaa_torrents::flags.eq(new_flags),
                     nyaa_torrents::updated_time.eq(chrono::Utc::now().naive_utc()),
                 ))
@@ -1090,6 +1142,69 @@ mod tests {
                 assert!(view.contains("<a href=\"/group/cyan\">[Cyan] Cyan</a>"), "{view}");
                 assert_eq!(view.contains("(127.0.0.1)"), sees_ip, "{user:?}");
             }
+        }
+
+        #[actix_web::test]
+        async fn group_can_be_set_changed_and_cleared_on_edit() {
+            let pool = pool();
+            diesel::sql_query(
+                "INSERT INTO groups (id, name, tag, slug, created_time, owner_id) VALUES \
+                 (1, 'Cyan', 'Cyan', 'cyan', CURRENT_TIMESTAMP, 1), \
+                 (2, 'Magenta', 'Mag', 'magenta', CURRENT_TIMESTAMP, 2)",
+            )
+            .execute(&mut pool.get().unwrap())
+            .unwrap();
+            let save = |group: Option<&'static str>| {
+                let mut form = vec![("display_name", "Old name"), ("category", "1_2"), ("submit", "Save Changes")];
+                if let Some(g) = group {
+                    form.push(("group_id", g));
+                }
+                form
+            };
+
+            // The owner only gets the groups they may upload for
+            let (app, cookie) = app!(pool, Some(1));
+            let page = String::from_utf8(
+                test::call_and_read_body(&app, get("/view/5/edit", &cookie).to_request()).await.to_vec(),
+            )
+            .unwrap();
+            assert!(page.contains("<option value=\"0\">None (personal upload)</option>"), "{page}");
+            assert!(page.contains("<option value=\"1\">[Cyan] Cyan</option>"), "{page}");
+            assert!(!page.contains("[Mag] Magenta"), "{page}");
+
+            let res = test::call_service(&app, post("/view/5/edit", &cookie, &save(Some("1"))).to_request()).await;
+            assert_eq!(res.status(), StatusCode::FOUND);
+            assert_eq!(torrent(&pool).group_id, Some(1));
+            let page = String::from_utf8(
+                test::call_and_read_body(&app, get("/view/5/edit", &cookie).to_request()).await.to_vec(),
+            )
+            .unwrap();
+            assert!(page.contains("<option value=\"1\" selected>[Cyan] Cyan</option>"), "{page}");
+
+            // Someone else's group is refused and nothing is saved
+            let res = test::call_service(&app, post("/view/5/edit", &cookie, &save(Some("2"))).to_request()).await;
+            assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+            let page = String::from_utf8(test::read_body(res).await.to_vec()).unwrap();
+            assert!(page.contains("You may not release under this group"), "{page}");
+            assert_eq!(torrent(&pool).group_id, Some(1));
+
+            // No select sent keeps the group; "0" clears it
+            test::call_service(&app, post("/view/5/edit", &cookie, &save(None)).to_request()).await;
+            assert_eq!(torrent(&pool).group_id, Some(1));
+            test::call_service(&app, post("/view/5/edit", &cookie, &save(Some("0"))).to_request()).await;
+            assert_eq!(torrent(&pool).group_id, None);
+
+            // Moderators may pick any group
+            let (app, cookie) = app!(pool, Some(3));
+            let res = test::call_service(&app, post("/view/5/edit", &cookie, &save(Some("2"))).to_request()).await;
+            assert_eq!(res.status(), StatusCode::FOUND);
+            assert_eq!(torrent(&pool).group_id, Some(2));
+
+            // The owner keeps a group they aren't in when saving other changes
+            let (app, cookie) = app!(pool, Some(1));
+            let res = test::call_service(&app, post("/view/5/edit", &cookie, &save(Some("2"))).to_request()).await;
+            assert_eq!(res.status(), StatusCode::FOUND);
+            assert_eq!(torrent(&pool).group_id, Some(2));
         }
 
         #[actix_web::test]
