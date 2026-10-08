@@ -117,6 +117,7 @@ mod tests {
             trusted_proxies: vec![],
             ratelimit_account_age: 0,
             meili: None,
+            tracker: None,
             trusted: Default::default(),
         };
         let mut tera = Tera::new("templates/**/*").unwrap();

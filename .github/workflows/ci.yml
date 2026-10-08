@@ -39,9 +39,25 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Build
         run: cargo build --locked
+      # Not a service container: the image's own entrypoint has CRLF line endings (see compose.yml)
+      - name: Start torrust-actix
+        run: |
+          docker run -d --name tracker -p 6969:6969 -p 8080:8080 \
+            -e TRACKER__API_KEY=ci-tracker-key -e TRACKER__WHITELIST_ENABLED=true \
+            -e DATABASE__PERSISTENT=false -e DATABASE__ENGINE=sqlite3 -e "DATABASE__PATH=sqlite://:memory:" \
+            -w /app/torrust-actix/target/release power2all/torrust-actix:v4.2.23 \
+            /bin/sh -c '[ -f config.toml ] || ./torrust-actix --create-config; exec ./torrust-actix'
+          for i in $(seq 30); do
+            curl -fsS -o /dev/null -H "Authorization: Bearer ci-tracker-key" http://127.0.0.1:8080/stats && exit 0
+            sleep 1
+          done
+          docker logs tracker; exit 1
       - name: Test
         run: cargo test --locked
         env:
+          TRACKER_TEST_URL: http://127.0.0.1:8080
+          TRACKER_TEST_KEY: ci-tracker-key
+          TRACKER_TEST_ANNOUNCE_URL: http://127.0.0.1:6969/announce
           MEILI_TEST_URL: http://127.0.0.1:7700
           MEILI_TEST_KEY: ci-master-key-1234567890
           TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/nyaa_test

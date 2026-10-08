@@ -85,6 +85,7 @@ mod tests {
             tracker_urls: vec![],
             trusted_proxies: vec![],
             meili: None,
+            tracker: None,
             ratelimit_account_age: 0,
             trusted: Default::default(),
         };

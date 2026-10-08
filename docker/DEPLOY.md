@@ -74,9 +74,12 @@ up too (or use S3).
 - Put a reverse proxy with TLS (Caddy, nginx, Traefik) in front of port 8080 for a public
   site, and keep `SITE_URL` on the `https://` address. Only 8080 and 6969 are published;
   PostgreSQL, Meilisearch and the tracker API stay on the compose network.
-- The tracker keeps peers in memory, so a restart empties the swarm until clients
-  announce again (within one announce interval). The site does not call the tracker API
-  yet; when it does, it will reach it at `http://tracker:8080` with `TRACKER_API_KEY`.
+- The tracker keeps peers and its whitelist in memory, so a restart empties the swarm until
+  clients announce again (within one announce interval). The site reaches its API at
+  `http://tracker:8080` with `TRACKER_API_KEY`, sends the whole whitelist again when it sees
+  the tracker restarted, and pulls seeders, leechers and completed counts every
+  `TRACKER_STATS_SYNC_SECS` (default 300). The tracker only accepts announces for torrents
+  on that whitelist, so until the site has reached it once, announces are refused.
 - The image runs without compose too, with SQLite on the volume:
   `docker run -p 8080:8080 -v nyaa-data:/data -e SECRET_KEY=... nyaa-actix`.
 - On Windows use Docker Desktop with the WSL 2 backend; the commands above work the same in

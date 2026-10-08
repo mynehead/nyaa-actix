@@ -8,6 +8,7 @@ mod models;
 mod search;
 mod storage;
 mod torrent;
+mod tracker;
 mod utils;
 
 use actix_files as fs;
@@ -49,6 +50,12 @@ async fn main() -> std::io::Result<()> {
         let every = std::env::var("MEILI_STATS_SYNC_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(60);
         log::info!("Searching with Meilisearch index `{}`; syncing tracker stats every {every} s", meili.index());
         search::index::spawn_stats_sync(pool.clone(), meili, std::time::Duration::from_secs(every.max(1)));
+    }
+
+    if let Some(tracker) = cfg.tracker.clone() {
+        let every = std::env::var("TRACKER_STATS_SYNC_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(300);
+        log::info!("Syncing the whitelist with the tracker API at {}; pulling stats every {every} s", tracker.url());
+        tracker::spawn_sync(pool.clone(), tracker, std::time::Duration::from_secs(every.max(1)));
     }
 
     let storage = storage::Storage::from_env(&cfg).unwrap_or_else(|e| {

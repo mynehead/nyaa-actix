@@ -621,7 +621,14 @@ mod tests {
             flags: (TorrentFlags::BANNED | TorrentFlags::TRUSTED).bits(),
             ..crate::torrent::tests::sample_torrent()
         };
-        let s = Statistic { torrent_id: 7, seed_count: 3, leech_count: 4, download_count: 5, last_updated: now };
+        let s = Statistic {
+            torrent_id: 7,
+            seed_count: 3,
+            leech_count: 4,
+            download_count: 5,
+            last_updated: now,
+            tracker_completed: 0,
+        };
         let doc = TorrentDoc::new(&t, Some(&s));
         assert!(doc.deleted && doc.trusted && !doc.hidden && !doc.remake);
         assert_eq!((doc.seed_count, doc.leech_count, doc.download_count), (3, 4, 5));

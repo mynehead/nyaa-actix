@@ -358,6 +358,7 @@ pub async fn nuke_torrents_post(
         .map_err(actix_web::error::ErrorInternalServerError)?;
     for id in ids {
         crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), id);
+        crate::tracker::torrent_changed(cfg.tracker.as_ref(), id);
     }
     flash::push(&session, "success", "", &format!("Torrents of {} have been nuked.", user.username));
     Ok(HttpResponse::SeeOther().insert_header(("Location", format!("/user/{}", user.username))).finish())
@@ -516,6 +517,7 @@ mod tests {
             tracker_urls: vec![],
             trusted_proxies: vec![],
             meili: None,
+            tracker: None,
             ratelimit_account_age: 0,
             trusted: Default::default(),
         }
