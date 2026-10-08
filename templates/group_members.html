@@ -20,7 +20,7 @@
         <tbody>
             {% for m in members %}
             <tr>
-                <td>{{ m.username }}</td>
+                <td><a href="/user/{{ m.username | urlencode }}">{{ m.username }}</a></td>
                 <td>{% if m.can_upload %}&#10003;{% else %}&mdash;{% endif %}</td>
                 <td>{% if m.can_edit %}&#10003;{% else %}&mdash;{% endif %}</td>
             </tr>

@@ -34,7 +34,7 @@
 					{% if banner.active %}<span class="label label-success">Active</span>{% else %}<span class="label label-default">Inactive</span>{% endif %}
 				</td>
 				<td class="text-center" data-timestamp="{{ banner.created_time | date(format="%s") }}">{{ banner.created_time | date(format="%Y-%m-%d %H:%M") }}</td>
-				<td class="text-center"><a href="/user/{{ banner.creator }}">{{ banner.creator }}</a></td>
+				<td class="text-center"><a href="/user/{{ banner.creator | urlencode }}">{{ banner.creator }}</a></td>
 				<td class="text-center">
 					<form method="POST" action="/admin/banners/{{ banner.id }}/toggle" style="display: inline;">
 						{% if banner.active %}
