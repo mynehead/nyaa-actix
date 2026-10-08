@@ -169,6 +169,9 @@
 						{% if uploader and uploader.status == 2 %}
 						The uploader is <strong>banned</strong>.<br>
 						{% endif %}
+						{% if ban_form and ip_banned %}
+						The uploader is <strong>IP banned</strong>.<br>
+						{% endif %}
 					</p>
 
 {% if not is_deleted %}
@@ -221,6 +224,72 @@
 						Bans it from the tracker and disallows reuploading it.
 					</p>
 					{% endif %}
+{% endif %}
+
+{% if ban_form %}
+{% set user_banned = ban_uploader and ban_uploader.status == 2 %}
+{% if (ban_uploader and not user_banned) or not ip_banned %}
+					<hr>
+					<p class="lead">
+					{% if is_deleted %}
+						{% if is_banned %}
+						Ban uploader.
+						{% else %}
+						Ban torrent and ban uploader.
+						{% endif %}
+					{% else %}
+						Delete and ban torrent and ban uploader.
+					{% endif %}
+					</p>
+					<p>
+					{% if is_deleted %}
+						{% if is_banned %}
+						Bans the uploader.
+						{% else %}
+						Bans it from the tracker and disallows reuploading it.<br>
+						Additionally bans the uploader.
+						{% endif %}
+					{% else %}
+						Soft deletes the torrent.<br>
+						Bans it from the tracker and disallows reuploading it.<br>
+						Additionally bans the uploader.
+					{% endif %}
+					</p>
+					{% if is_banned %}{% set prefix = "" %}{% elif is_deleted %}{% set prefix = "Ban and " %}{% else %}{% set prefix = "Delete & Ban and " %}{% endif %}
+					<div class="form-group">
+						<label class="control-label" for="reason">Ban Reason</label>
+						<textarea class="form-control" id="reason" name="reason" placeholder="Specify a ban reason." maxlength="1024"></textarea>
+					</div><br>
+
+			{% if ban_uploader %}
+					<div class="pull-left">
+						{% if user_banned %}
+						<button type="button" class="btn btn-danger disabled">Already banned</button>
+						{% else %}
+						<input class="btn btn-danger" id="ban_user" name="ban_user" type="submit" value="{{ prefix }}Ban User">
+						{% endif %}
+					</div>
+					<div class="pull-right">
+						{% if ip_banned %}
+						<button type="button" class="btn btn-danger disabled">Already IP banned</button>
+						{% else %}
+						<input class="btn btn-danger" id="ban_userip" name="ban_userip" type="submit" value="{{ prefix }}Ban User+IP">
+						{% endif %}
+					</div>
+			{% else %}
+					<div class="pull-left">
+						<button type="button" class="btn btn-danger disabled">No user</button>
+					</div>
+					<div class="pull-right">
+						{% if ip_banned %}
+						<button type="button" class="btn btn-danger disabled">Already IP banned</button>
+						{% else %}
+						<input class="btn btn-danger" id="ban_userip" name="ban_userip" type="submit" value="{{ prefix }}Ban IP">
+						{% endif %}
+					</div>
+			{% endif %}
+					<div class="clearfix"></div>
+{% endif %}
 {% endif %}
 				</form>
 			</div>

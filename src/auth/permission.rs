@@ -20,10 +20,16 @@ pub enum Permission {
     SeeIps,
     /// Accept or reject trusted applications.
     DecideTrusted,
+    /// Change a lower-ranked user's class between Regular and Trusted, and activate them.
+    ChangeUserClass,
+    /// Also make users moderators in "Change User Class".
+    GrantModerator,
+    /// Delete and ban all torrents, or delete all comments, of a lower-ranked user.
+    NukeUsers,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 7] = [
+    pub const ALL: [Permission; 10] = [
         Permission::SetTrustedFlag,
         Permission::ModerateTorrents,
         Permission::BanUsers,
@@ -31,6 +37,9 @@ impl Permission {
         Permission::CreateGroups,
         Permission::SeeIps,
         Permission::DecideTrusted,
+        Permission::ChangeUserClass,
+        Permission::GrantModerator,
+        Permission::NukeUsers,
     ];
 }
 
@@ -40,8 +49,8 @@ impl UserLevel {
         use Permission::*;
         let needed = match p {
             SetTrustedFlag => UserLevel::Trusted,
-            ModerateTorrents | BanUsers | ViewAdminPages | CreateGroups => UserLevel::Moderator,
-            SeeIps | DecideTrusted => UserLevel::SuperAdmin,
+            ModerateTorrents | BanUsers | ViewAdminPages | CreateGroups | ChangeUserClass => UserLevel::Moderator,
+            SeeIps | DecideTrusted | GrantModerator | NukeUsers => UserLevel::SuperAdmin,
         };
         self >= needed
     }
@@ -84,7 +93,7 @@ mod tests {
         assert_eq!(granted(UserLevel::Trusted), vec![SetTrustedFlag]);
         assert_eq!(
             granted(UserLevel::Moderator),
-            vec![SetTrustedFlag, ModerateTorrents, BanUsers, ViewAdminPages, CreateGroups]
+            vec![SetTrustedFlag, ModerateTorrents, BanUsers, ViewAdminPages, CreateGroups, ChangeUserClass]
         );
         assert_eq!(granted(UserLevel::SuperAdmin), Permission::ALL.to_vec());
     }

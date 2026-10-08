@@ -16,6 +16,7 @@
 	<div class="row" style="margin-bottom: 20px;">
 		<div class="col-md-2" style="max-width: 150px;">
 			<img class="avatar" src="{{ avatar_url }}">
+			<a href="/user/{{ profile_user.username | urlencode }}/comments">View all comments</a>
 		</div>
 		<div class="col-md-4">
 			<div class="row">
@@ -40,6 +41,35 @@
 					</dl>
 				</div>
 			</div>
+			{% if admin_form %}
+			<form method="POST">
+				<div class="row">
+					<div class="col-md-6">
+						<div class="form-group">
+							<label class="control-label" for="user_class">Change User Class</label>
+							<div class="input-group input-group-sm">
+								<select class="form-control" id="user_class" name="user_class">
+									{% for choice in user_class_choices %}
+									<option value="{{ choice.value }}"{% if choice.value == user_class_default %} selected{% endif %}>{{ choice.label }}</option>
+									{% endfor %}
+								</select>
+								<div class="input-group-btn">
+									<button type="submit" class="btn btn-primary">Apply</button>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+				{% if profile_user.status == 0 %}
+				<div class="row">
+					<div class="col-md-6">
+						<input class="btn btn-primary" id="activate_user" name="activate_user" type="submit" value="Activate User">
+					</div>
+				</div>
+				{% endif %}
+			</form>
+			<br>
+			{% endif %}
 		</div>
 		{% if ban_form %}
 		{% set is_banned = profile_user.status == 2 %}
@@ -112,6 +142,19 @@
 						</div>
 						{% endif %}
 					</form>
+					{% if can.nuke_users %}
+					<hr>
+					<form method="POST" onsubmit="return prompt('Please type {{ profile_user.username }} to confirm') == '{{ profile_user.username }}'">
+						<div class="row">
+							<div class="col-md-6 text-left">
+								<input class="btn btn-danger" id="nuke_torrents" name="nuke_torrents" type="submit" value="&#x1F4A3; Nuke Torrents" formaction="/user/{{ profile_user.username | urlencode }}/nuke/torrents">
+							</div>
+							<div class="col-md-6 text-right">
+								<input class="btn btn-danger" id="nuke_comments" name="nuke_comments" type="submit" value="&#x1F4A3; Nuke Comments" formaction="/user/{{ profile_user.username | urlencode }}/nuke/comments">
+							</div>
+						</div>
+					</form>
+					{% endif %}
 				</div>
 			</div>
 		</div>

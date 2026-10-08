@@ -175,7 +175,12 @@ mod tests {
                     .route("/admin/bans", web::get().to(bans))
                     .route("/admin/bans", web::post().to(bans_post))
                     .route("/user/{username}", web::get().to(crate::handlers::users::view_user))
-                    .route("/user/{username}", web::post().to(crate::handlers::users::ban_user_post)),
+                    .route("/user/{username}", web::post().to(crate::handlers::users::ban_user_post))
+                    .route("/user/{username}/nuke/torrents", web::post().to(crate::handlers::users::nuke_torrents_post))
+                    .route(
+                        "/user/{username}/nuke/comments",
+                        web::post().to(crate::handlers::users::nuke_comments_post),
+                    ),
             )
             .await;
             let res =
@@ -375,5 +380,73 @@ mod tests {
         .await;
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
         assert!(all_bans(&pool).is_empty());
+    }
+
+    #[actix_web::test]
+    async fn superadmins_nuke_torrents_and_comments() {
+        use crate::db::schema::{nyaa_comments, nyaa_torrents};
+        let pool = pool();
+        {
+            let mut conn = pool.get().unwrap();
+            for (id, uploader) in [(1, 1), (2, 1), (3, 2)] {
+                diesel::sql_query(format!(
+                    "INSERT INTO nyaa_torrents (id, info_hash, display_name, torrent_name, information, description, \
+                     flags, uploader_id, main_category_id, sub_category_id, comment_count) \
+                     VALUES ({id}, X'{}', 't', 't.torrent', '', '', 0, {uploader}, 1, 2, 2)",
+                    format!("{id:02}").repeat(20)
+                ))
+                .execute(&mut conn)
+                .unwrap();
+                diesel::sql_query(format!(
+                    "INSERT INTO nyaa_statistics (torrent_id, seed_count, leech_count, download_count) \
+                                           VALUES ({id}, 4, 3, 9)"
+                ))
+                .execute(&mut conn)
+                .unwrap();
+            }
+            diesel::sql_query(
+                "INSERT INTO nyaa_comments (torrent_id, user_id, text) VALUES \
+                               (3, 1, 'a'), (3, 2, 'b'), (2, 1, 'c')",
+            )
+            .execute(&mut conn)
+            .unwrap();
+        }
+
+        // Moderators can't nuke
+        let (app, cookie) = app!(pool, 2);
+        let res = post!(app, cookie, "/user/regular/nuke/torrents", &[("nuke_torrents", "x")]);
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let (_, html) = page!(app, cookie, "/user/regular");
+        assert!(!html.contains("Nuke Torrents"));
+
+        let (app, cookie) = app!(pool, 3);
+        let (_, html) = page!(app, cookie, "/user/regular");
+        assert!(html.contains("formaction=\"/user/regular/nuke/torrents\""), "{html}");
+
+        let res = post!(app, cookie, "/user/regular/nuke/torrents", &[("nuke_torrents", "x")]);
+        assert_eq!(res.headers().get("Location").unwrap(), "/user/regular");
+        let mut conn = pool.get().unwrap();
+        let flags: Vec<(i32, i32)> = nyaa_torrents::table
+            .order(nyaa_torrents::id)
+            .select((nyaa_torrents::id, nyaa_torrents::flags))
+            .load(&mut conn)
+            .unwrap();
+        let banned = (crate::models::TorrentFlags::DELETED | crate::models::TorrentFlags::BANNED).bits();
+        assert_eq!(flags, [(1, banned), (2, banned), (3, 0)]);
+        drop(conn);
+
+        let res = post!(app, cookie, "/user/regular/nuke/comments", &[("nuke_comments", "x")]);
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let mut conn = pool.get().unwrap();
+        let left: Vec<String> = nyaa_comments::table.select(nyaa_comments::text).load(&mut conn).unwrap();
+        assert_eq!(left, ["b"]);
+        let counts: Vec<i32> =
+            nyaa_torrents::table.order(nyaa_torrents::id).select(nyaa_torrents::comment_count).load(&mut conn).unwrap();
+        assert_eq!(counts, [2, 0, 1], "recounted only where comments were removed");
+        drop(conn);
+        assert_eq!(
+            logs(&pool),
+            ["Nuked 2 torrents of [regular](/user/regular)", "Nuked 2 comments of [regular](/user/regular)"]
+        );
     }
 }
