@@ -28,6 +28,9 @@ pub struct Config {
     pub ratelimit_account_age: i64,
     /// Meilisearch for text search and stats sorts (MEILI_URL and friends); None keeps search on SQLite.
     pub meili: Option<crate::search::meili::Meili>,
+    /// The tracker's management API (TRACKER_API_URL and TRACKER_API_KEY) for the whitelist
+    /// and stats; None runs the site without talking to a tracker.
+    pub tracker: Option<crate::tracker::Tracker>,
     /// Who may apply for trusted status (upstream's "Trusted Requirements").
     pub trusted: TrustedConfig,
 }
@@ -98,6 +101,7 @@ impl Config {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(7 * 24 * 3600),
             meili: crate::search::meili::Meili::from_env(),
+            tracker: crate::tracker::Tracker::from_env(),
             trusted: TrustedConfig::from_env(),
         }
     }
@@ -120,6 +124,7 @@ impl Config {
             tracker_urls: vec![],
             trusted_proxies: vec![],
             meili: None,
+            tracker: None,
             ratelimit_account_age: 0,
             trusted: Default::default(),
         }

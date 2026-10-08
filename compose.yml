@@ -19,6 +19,8 @@ services:
       DATABASE_URL: postgres://nyaa:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/nyaa
       TORRENT_STORAGE_PATH: /data/torrents
       AVATAR_STORAGE_PATH: /data/avatars
+      # Whitelist and stats calls go to the tracker service, with TRACKER_API_KEY from .env
+      TRACKER_API_URL: http://tracker:8080
     ports:
       - "${NYAA_PORT:-8080}:8080"
     volumes:
@@ -40,13 +42,16 @@ services:
       retries: 10
 
   # Announce and scrape. Peers are kept in memory, as the tracker design intends; the
-  # site will read counts and manage the whitelist through the API (not wired up yet).
+  # site manages the whitelist and reads counts through the API, and sends the whole
+  # whitelist again whenever the tracker restarts.
   tracker:
     image: power2all/torrust-actix:v4.2.23
     restart: unless-stopped
     environment:
       LOG_LEVEL: info
       TRACKER__API_KEY: ${TRACKER_API_KEY:?set TRACKER_API_KEY in .env}
+      # Only torrents uploaded to the site can be announced
+      TRACKER__WHITELIST_ENABLED: "true"
       TRACKER__SWAGGER: "false"
       DATABASE__PERSISTENT: "false"
       DATABASE__ENGINE: sqlite3

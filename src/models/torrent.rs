@@ -278,6 +278,9 @@ pub struct Statistic {
     pub leech_count: i32,
     pub download_count: i32,
     pub last_updated: NaiveDateTime,
+    /// The tracker's completed count at the last stats sync (see `crate::tracker`).
+    #[serde(skip)]
+    pub tracker_completed: i32,
 }
 
 #[derive(Debug, Insertable)]

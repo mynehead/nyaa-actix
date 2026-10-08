@@ -81,6 +81,7 @@ diesel::table! {
         leech_count -> Integer,
         download_count -> Integer,
         last_updated -> Timestamp,
+        tracker_completed -> Integer,
     }
 }
 

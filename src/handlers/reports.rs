@@ -231,6 +231,7 @@ pub async fn admin_reports_post(
     .map_err(err)?;
     if flag.is_some() {
         crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), torrent.id);
+        crate::tracker::torrent_changed(cfg.tracker.as_ref(), torrent.id);
     }
 
     flash::push(&session, "success", "", &format!("Closed report #{}", report.id));

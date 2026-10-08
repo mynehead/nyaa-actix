@@ -572,6 +572,7 @@ pub async fn upload_post(
         return Err(actix_web::error::ErrorInternalServerError("Failed to store torrent"));
     }
     crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), inserted.id);
+    crate::tracker::torrent_changed(cfg.tracker.as_ref(), inserted.id);
 
     Ok(HttpResponse::Found().insert_header(("Location", format!("/view/{}", inserted.id))).finish())
 }
@@ -964,6 +965,7 @@ pub async fn edit_torrent_post(
         flash::push(&session, "success", "", "Uploader has been successfully banned.");
     }
     crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), torrent.id);
+    crate::tracker::torrent_changed(cfg.tracker.as_ref(), torrent.id);
 
     // Moderators go back to the torrent; owners deleting their own go home
     Ok(redirect(if editor.can(Permission::ModerateTorrents) { &view_url } else { "/" }))
@@ -1180,6 +1182,7 @@ mod tests {
                 tracker_urls: vec![],
                 trusted_proxies: vec![],
                 meili: None,
+                tracker: None,
                 ratelimit_account_age: 0,
                 trusted: Default::default(),
             }

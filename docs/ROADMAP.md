@@ -33,9 +33,11 @@ port internal).
 | Seed/leech/complete counts | Tracker writes into `statistics` | Background job scrapes torrust-actix (BEP 48 multi-hash scrape) and upserts `nyaa_statistics` |
 | Tracker URLs in magnets / .torrent | `MAIN_ANNOUNCE_URL` + `trackers` table (`trackers.txt` defaults) | `TRACKER_ANNOUNCE_URLS` config, main announce first; later a `trackers` table |
 
-Whitelist calls should go through an outbox table (`tracker_api_queue`: info_hash, action,
-attempts) drained by a background task, mirroring nyaa's `trackerapi` table. That way an
-upload never fails because the tracker is briefly down, and deletes/bans/user nukes are retried.
+Built (`src/tracker.rs`): instead of an outbox table, handlers queue the ids of changed
+torrents for a background thread, which sends them in batches. Whenever the tracker's
+start time changes (or a call failed) the thread sends the whole whitelist again, so an
+upload never fails because the tracker is briefly down, and deletes/bans/user nukes that
+happened meanwhile still reach it. Counts come from `GET /api/torrents` in batches of 200.
 
 Events that must enqueue: upload (`insert`), torrent delete or ban (`remove`), undelete/unban
 (`insert`), user nuke (`remove` for each torrent).
@@ -80,7 +82,7 @@ Status of this repo as of the initial port. "Stub" = route exists but returns pl
 | Full-text search (Elasticsearch, MySQL fulltext) | yes | missing; SQLite FTS5 or Postgres `tsvector` is the natural replacement |
 | RSS feed (`/?page=rss`, `nyaa:` xmlns with seeders/leechers/infoHash) | yes | missing |
 | Torrent file list on view page | yes (`torrents_filelist`) | missing; parse `info.files` at upload |
-| Seeders/leechers/downloads columns + sort | yes | columns exist, never populated (needs tracker sync) |
+| Seeders/leechers/downloads columns + sort | yes | yes, pulled from torrust-actix (`TRACKER_API_URL`, `src/tracker.rs`) |
 | Sukebei flavor (second category set, table prefix) | yes | `SITE_FLAVOR` exists, no second schema |
 | `/rules`, `/help`, `/xmlns/nyaa`, `/trusted` info pages | yes | missing |
 
