@@ -1,0 +1,17 @@
+{% extends "layout.html" %}
+{% block title %}Edit Banner #{{ banner.id }} :: {{ config.site_name }}{% endblock %}
+{% block body %}
+<h3>Edit Banner #{{ banner.id }}</h3>
+<form method="POST" action="/admin/banners/{{ banner.id }}/edit">
+	<div class="form-group">
+		<label for="content">Content</label>
+		<textarea id="content" name="content" class="form-control" rows="4" maxlength="1024" required>{{ banner.content }}</textarea>
+	</div>
+	<p class="text-muted">
+		{% if banner.active %}<span class="label label-success">Active</span>{% else %}<span class="label label-default">Inactive</span>{% endif %}
+		Created <span data-timestamp="{{ banner.created_time | date(format="%s") }}">{{ banner.created_time | date(format="%Y-%m-%d %H:%M") }}</span>
+	</p>
+	<button type="submit" class="btn btn-primary">Save Banner</button>
+	<a href="/admin/banners" class="btn btn-default">Cancel</a>
+</form>
+{% endblock %}

@@ -40,26 +40,31 @@ pub struct BannerForm {
     pub content: String,
 }
 
+/// The trimmed content, or the reason it can't be saved.
+fn validate(content: &str) -> std::result::Result<&str, String> {
+    let content = content.trim();
+    if content.is_empty() {
+        return Err("The content is empty.".into());
+    }
+    if content.chars().count() > MAX_LENGTH {
+        return Err(format!("The content is longer than {} characters.", MAX_LENGTH));
+    }
+    Ok(content)
+}
+
 pub async fn create(
     Moderator(user): Moderator,
     session: Session,
     pool: web::Data<DbPool>,
     form: web::Form<BannerForm>,
 ) -> Result<HttpResponse> {
-    let content = form.content.trim();
-    if content.is_empty() {
-        flash::push(&session, "danger", "Banner not saved!", "The content is empty.");
-        return Ok(back_to_list());
-    }
-    if content.chars().count() > MAX_LENGTH {
-        flash::push(
-            &session,
-            "danger",
-            "Banner not saved!",
-            &format!("The content is longer than {} characters.", MAX_LENGTH),
-        );
-        return Ok(back_to_list());
-    }
+    let content = match validate(&form.content) {
+        Ok(content) => content,
+        Err(reason) => {
+            flash::push(&session, "danger", "Banner not saved!", &reason);
+            return Ok(back_to_list());
+        }
+    };
     let mut conn = pool.get().map_err(internal_error)?;
     conn.transaction::<_, diesel::result::Error, _>(|conn| {
         Banner::create(conn, content, user.id)?;
@@ -67,6 +72,59 @@ pub async fn create(
     })
     .map_err(internal_error)?;
     flash::push(&session, "success", "Banner created.", "");
+    Ok(back_to_list())
+}
+
+pub async fn edit_form(
+    Moderator(user): Moderator,
+    session: Session,
+    pool: web::Data<DbPool>,
+    tmpl: web::Data<Tera>,
+    cfg: web::Data<Config>,
+    path: web::Path<i32>,
+) -> Result<HttpResponse> {
+    let mut conn = pool.get().map_err(internal_error)?;
+    let banner = Banner::find(&mut conn, path.into_inner())
+        .map_err(internal_error)?
+        .ok_or_else(|| actix_web::error::ErrorNotFound("No such banner"))?;
+    let mut ctx = base_context(&cfg, Some(&user));
+    ctx.insert("flash_messages", &flash::take(&session));
+    ctx.insert("banner", &banner);
+    let html = tmpl.render("admin/banner_edit.html", &ctx).map_err(internal_error)?;
+    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+}
+
+pub async fn update(
+    Moderator(user): Moderator,
+    session: Session,
+    pool: web::Data<DbPool>,
+    path: web::Path<i32>,
+    form: web::Form<BannerForm>,
+) -> Result<HttpResponse> {
+    let id = path.into_inner();
+    let content = match validate(&form.content) {
+        Ok(content) => content,
+        Err(reason) => {
+            flash::push(&session, "danger", "Banner not saved!", &reason);
+            return Ok(HttpResponse::SeeOther()
+                .insert_header(("Location", format!("/admin/banners/{}/edit", id)))
+                .finish());
+        }
+    };
+    let mut conn = pool.get().map_err(internal_error)?;
+    let updated = conn
+        .transaction::<_, diesel::result::Error, _>(|conn| {
+            let updated = Banner::update_content(conn, id, content)?;
+            if updated {
+                AdminLog::add(conn, user.id, &format!("Edited banner #{}", id))?;
+            }
+            Ok(updated)
+        })
+        .map_err(internal_error)?;
+    if !updated {
+        return Err(actix_web::error::ErrorNotFound("No such banner"));
+    }
+    flash::push(&session, "success", &format!("Banner #{} updated.", id), "");
     Ok(back_to_list())
 }
 
@@ -178,6 +236,8 @@ mod tests {
                     .route("/", web::get().to(crate::handlers::home::home))
                     .route("/admin/banners", web::get().to(list))
                     .route("/admin/banners", web::post().to(create))
+                    .route("/admin/banners/{id}/edit", web::get().to(edit_form))
+                    .route("/admin/banners/{id}/edit", web::post().to(update))
                     .route("/admin/banners/{id}/toggle", web::post().to(toggle))
                     .route("/admin/banners/{id}/delete", web::post().to(delete)),
             )
@@ -289,5 +349,62 @@ mod tests {
         .unwrap();
         assert!(page.contains("The content is empty."), "{page}");
         assert!(page.contains("No banners."), "{page}");
+    }
+
+    #[actix_web::test]
+    async fn edit_banner() {
+        let pool = pool();
+        let (app, cookie) = app!(pool, Some(3));
+        let body = |b: actix_web::web::Bytes| String::from_utf8(b.to_vec()).unwrap();
+        test::call_service(&app, post("/admin/banners", &cookie, &[("content", "Old text")]).to_request()).await;
+
+        // Regular users and guests can't edit
+        for (user, status) in [(None, StatusCode::UNAUTHORIZED), (Some(1), StatusCode::FORBIDDEN)] {
+            let (other, c) = app!(pool, user);
+            let res = test::call_service(&other, get("/admin/banners/1/edit", &c).to_request()).await;
+            assert_eq!(res.status(), status, "{user:?}");
+            let res =
+                test::call_service(&other, post("/admin/banners/1/edit", &c, &[("content", "Hacked")]).to_request())
+                    .await;
+            assert_eq!(res.status(), status, "{user:?}");
+        }
+
+        let page = body(test::call_and_read_body(&app, get("/admin/banners", &cookie).to_request()).await);
+        assert!(page.contains("href=\"/admin/banners/1/edit\""), "{page}");
+        let form = body(test::call_and_read_body(&app, get("/admin/banners/1/edit", &cookie).to_request()).await);
+        assert!(form.contains(">Old text</textarea>"), "{form}");
+
+        let res =
+            test::call_service(&app, post("/admin/banners/1/edit", &cookie, &[("content", "   ")]).to_request()).await;
+        assert_eq!(res.headers().get("Location").unwrap(), "/admin/banners/1/edit");
+        let form = body(
+            test::call_and_read_body(&app, get("/admin/banners/1/edit", &next_cookie(&res, &cookie)).to_request())
+                .await,
+        );
+        assert!(form.contains("The content is empty."), "{form}");
+        assert!(form.contains(">Old text</textarea>"), "{form}");
+
+        let res = test::call_service(
+            &app,
+            post("/admin/banners/1/edit", &cookie, &[("content", "  New text  ")]).to_request(),
+        )
+        .await;
+        assert_eq!(res.headers().get("Location").unwrap(), "/admin/banners");
+        let page =
+            body(test::call_and_read_body(&app, get("/admin/banners", &next_cookie(&res, &cookie)).to_request()).await);
+        assert!(page.contains("Banner #1 updated."), "{page}");
+        let banner = Banner::find(&mut pool.get().unwrap(), 1).unwrap().unwrap();
+        assert_eq!(banner.content, "New text");
+        assert!(banner.active);
+
+        let res = test::call_service(&app, get("/admin/banners/9/edit", &cookie).to_request()).await;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        let res =
+            test::call_service(&app, post("/admin/banners/9/edit", &cookie, &[("content", "x")]).to_request()).await;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+        let (log, _) = AdminLog::page(&mut pool.get().unwrap(), 1, 10).unwrap();
+        let log: Vec<&str> = log.iter().rev().map(|e| e.entry.log.as_str()).collect();
+        assert_eq!(log, ["Created banner", "Edited banner #1"]);
     }
 }

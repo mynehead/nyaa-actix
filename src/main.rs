@@ -161,6 +161,8 @@ async fn main() -> std::io::Result<()> {
             .route("/admin/trusted/application/{id}", web::post().to(handlers::trusted::admin_trusted_application))
             .route("/admin/banners", web::get().to(handlers::banners::list))
             .route("/admin/banners", web::post().to(handlers::banners::create))
+            .route("/admin/banners/{id}/edit", web::get().to(handlers::banners::edit_form))
+            .route("/admin/banners/{id}/edit", web::post().to(handlers::banners::update))
             .route("/admin/banners/{id}/toggle", web::post().to(handlers::banners::toggle))
             .route("/admin/banners/{id}/delete", web::post().to(handlers::banners::delete))
     })
