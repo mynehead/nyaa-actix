@@ -52,6 +52,15 @@ impl Banner {
             .map(|_| ())
     }
 
+    pub fn find(conn: &mut DbConnection, id: i32) -> QueryResult<Option<Banner>> {
+        site_banners::table.find(id).select(Banner::as_select()).first(conn).optional()
+    }
+
+    /// Replaces the banner's text; returns whether it exists.
+    pub fn update_content(conn: &mut DbConnection, id: i32, content: &str) -> QueryResult<bool> {
+        Ok(diesel::update(site_banners::table.find(id)).set(site_banners::content.eq(content)).execute(conn)? > 0)
+    }
+
     /// Flips the banner on or off; returns its new state, or None if it does not exist.
     pub fn toggle(conn: &mut DbConnection, id: i32) -> QueryResult<Option<bool>> {
         let Some(active) = site_banners::table.find(id).select(site_banners::active).first::<bool>(conn).optional()?

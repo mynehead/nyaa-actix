@@ -22,7 +22,7 @@
 				<th class="text-center" style="width: 120px;">Status</th>
 				<th class="text-center" style="width: 170px;">Created</th>
 				<th class="text-center" style="width: 100px;">By</th>
-				<th class="text-center" style="width: 160px;">Actions</th>
+				<th class="text-center" style="width: 200px;">Actions</th>
 			</tr>
 		</thead>
 		<tbody>
@@ -36,6 +36,7 @@
 				<td class="text-center" data-timestamp="{{ banner.created_time | date(format="%s") }}">{{ banner.created_time | date(format="%Y-%m-%d %H:%M") }}</td>
 				<td class="text-center"><a href="/user/{{ banner.creator | urlencode }}">{{ banner.creator }}</a></td>
 				<td class="text-center">
+					<a href="/admin/banners/{{ banner.id }}/edit" class="btn btn-xs btn-default">Edit</a>
 					<form method="POST" action="/admin/banners/{{ banner.id }}/toggle" style="display: inline;">
 						{% if banner.active %}
 						<button type="submit" class="btn btn-xs btn-warning">Deactivate</button>
