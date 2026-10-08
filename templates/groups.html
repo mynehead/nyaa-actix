@@ -2,7 +2,7 @@
 {% block title %}Groups :: {{ config.site_name }}{% endblock %}
 {% block body %}
 <h3>Groups
-    {% if current_user and current_user.level >= 2 %}
+    {% if can.create_groups %}
     <a href="/groups/create" class="btn btn-success btn-sm pull-right">Create Group</a>
     {% endif %}
 </h3>

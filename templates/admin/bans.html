@@ -29,7 +29,7 @@
 					{% else %}
 					<td>-</td>
 					{% endif %}
-					{% if current_user.level >= 3 %}
+					{% if can.see_ips %}
 					<td>{{ ban.ip_string | default(value="") }}</td>
 					{% else %}
 					<td>hidden</td>

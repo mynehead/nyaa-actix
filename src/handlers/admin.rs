@@ -1,7 +1,7 @@
+use crate::auth::{Moderator, Permission};
 use crate::config::Config;
 use crate::db::schema::{bans, users};
 use crate::db::DbPool;
-use crate::middleware::auth::get_current_user;
 use crate::models::{hide_ips, AdminLog, Ban, User, UserStatus};
 use crate::utils::context::base_context;
 use crate::utils::pagination::Pagination;
@@ -28,27 +28,17 @@ impl PageParams {
 /// Upstream's admin lists show 20 rows a page.
 const ADMIN_PER_PAGE: i64 = 20;
 
-/// The signed-in moderator, or 401/403 as upstream's `is_moderator` check.
-fn require_moderator(session: &Session, pool: &DbPool) -> Result<User> {
-    let user = get_current_user(session, pool).ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
-    if !user.is_moderator() {
-        return Err(actix_web::error::ErrorForbidden("Not allowed"));
-    }
-    Ok(user)
-}
-
 /// /admin/log: moderator actions, newest first. Only superadmins see IPs, as upstream.
 pub async fn log(
-    session: Session,
+    Moderator(current_user): Moderator,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
     query: web::Query<PageParams>,
 ) -> Result<HttpResponse> {
-    let current_user = require_moderator(&session, &pool)?;
     let mut conn = pool.get().map_err(internal_error)?;
     let (mut logs, total) = AdminLog::page(&mut conn, query.page(), ADMIN_PER_PAGE).map_err(internal_error)?;
-    if !current_user.is_superadmin() {
+    if !current_user.can(Permission::SeeIps) {
         for entry in &mut logs {
             entry.entry.log = hide_ips(&entry.entry.log);
         }
@@ -62,13 +52,13 @@ pub async fn log(
 
 /// /admin/bans: every ban, newest first, each with an Unban button.
 pub async fn bans(
+    Moderator(current_user): Moderator,
     session: Session,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
     query: web::Query<PageParams>,
 ) -> Result<HttpResponse> {
-    let current_user = require_moderator(&session, &pool)?;
     let mut conn = pool.get().map_err(internal_error)?;
     let (bans, total) = Ban::page(&mut conn, query.page(), ADMIN_PER_PAGE).map_err(internal_error)?;
     let mut ctx = base_context(&cfg, Some(&current_user));
@@ -86,8 +76,12 @@ pub struct UnbanForm {
 }
 
 /// Lifts one ban, reactivates its user and logs it, as upstream's `view_adminbans` POST.
-pub async fn bans_post(session: Session, pool: web::Data<DbPool>, form: web::Form<UnbanForm>) -> Result<HttpResponse> {
-    let current_user = require_moderator(&session, &pool)?;
+pub async fn bans_post(
+    Moderator(current_user): Moderator,
+    session: Session,
+    pool: web::Data<DbPool>,
+    form: web::Form<UnbanForm>,
+) -> Result<HttpResponse> {
     let mut conn = pool.get().map_err(internal_error)?;
     let ban = Ban::by_id(&mut conn, form.submit)
         .map_err(internal_error)?

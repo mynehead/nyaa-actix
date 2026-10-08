@@ -4,11 +4,11 @@ use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use tera::Tera;
 
+use crate::auth::{CurrentUser, LoggedIn, Permission};
 use crate::config::Config;
 use crate::db::schema::group_members;
 use crate::db::schema::groups;
 use crate::db::{DbConnection, DbPool};
-use crate::middleware::auth::get_current_user;
 use crate::models::{Group, NewGroup, User};
 use crate::search::db::{with_stats, SearchQuery};
 use crate::search::search;
@@ -18,12 +18,11 @@ use crate::utils::pagination::Pagination;
 use crate::utils::{internal_error, sanitize_string, sanitize_text};
 
 pub async fn group_list(
-    session: Session,
+    CurrentUser(current_user): CurrentUser,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
 ) -> Result<HttpResponse> {
-    let current_user = get_current_user(&session, &pool);
     let mut conn = pool.get().map_err(internal_error)?;
     let all_groups = Group::all(&mut conn).map_err(internal_error)?;
 
@@ -143,33 +142,31 @@ fn render_group_form(
 }
 
 /// Only moderators and admins may create groups.
-fn group_creator(session: &Session, pool: &DbPool) -> Result<User> {
-    let user = get_current_user(session, pool).ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
-    if !user.is_moderator() {
+fn group_creator(user: User) -> Result<User> {
+    if !user.can(Permission::CreateGroups) {
         return Err(actix_web::error::ErrorForbidden("Only moderators and admins can create groups"));
     }
     Ok(user)
 }
 
 pub async fn create_group_get(
-    session: Session,
-    pool: web::Data<DbPool>,
+    LoggedIn(user): LoggedIn,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
 ) -> Result<HttpResponse> {
-    let current_user = group_creator(&session, &pool)?;
+    let current_user = group_creator(user)?;
     let html = render_group_form(&tmpl, &cfg, &current_user, "group_create.html", None, &GroupForm::default(), &[])?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
 pub async fn create_group_post(
-    session: Session,
+    LoggedIn(user): LoggedIn,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
     form: web::Form<GroupForm>,
 ) -> Result<HttpResponse> {
-    let current_user = group_creator(&session, &pool)?;
+    let current_user = group_creator(user)?;
     let mut conn = pool.get().map_err(internal_error)?;
 
     let form = form.cleaned();
@@ -203,6 +200,7 @@ pub struct GroupSearchParams {
 }
 
 pub async fn view_group(
+    CurrentUser(current_user): CurrentUser,
     session: Session,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
@@ -211,8 +209,7 @@ pub async fn view_group(
     params: web::Query<GroupSearchParams>,
 ) -> Result<HttpResponse> {
     let slug = path.into_inner();
-    let current_user = get_current_user(&session, &pool);
-    let is_admin = current_user.as_ref().map(|u| u.is_moderator()).unwrap_or(false);
+    let moderator = current_user.as_ref().is_some_and(|u| u.can(Permission::ModerateTorrents));
     let mut conn = pool.get().map_err(internal_error)?;
 
     let group = Group::by_slug(&mut conn, &slug)
@@ -229,7 +226,7 @@ pub async fn view_group(
         params.o.as_deref(),
         params.p,
         cfg.results_per_page,
-        is_admin,
+        moderator,
     );
 
     let result = search(&mut conn, cfg.meili.as_ref(), &q).map_err(internal_error)?;
@@ -254,14 +251,12 @@ pub async fn view_group(
 }
 
 pub async fn edit_group_get(
-    session: Session,
+    LoggedIn(current_user): LoggedIn,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
     path: web::Path<String>,
 ) -> Result<HttpResponse> {
-    let current_user =
-        get_current_user(&session, &pool).ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
     let mut conn = pool.get().map_err(internal_error)?;
     let group = Group::by_slug(&mut conn, &path.into_inner())
         .map_err(internal_error)?
@@ -275,15 +270,13 @@ pub async fn edit_group_get(
 }
 
 pub async fn edit_group_post(
-    session: Session,
+    LoggedIn(current_user): LoggedIn,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
     path: web::Path<String>,
     form: web::Form<GroupForm>,
 ) -> Result<HttpResponse> {
-    let current_user =
-        get_current_user(&session, &pool).ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
     let mut conn = pool.get().map_err(internal_error)?;
     let group = Group::by_slug(&mut conn, &path.into_inner())
         .map_err(internal_error)?
@@ -317,14 +310,12 @@ pub struct MemberForm {
 }
 
 pub async fn manage_members_get(
-    session: Session,
+    LoggedIn(current_user): LoggedIn,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
     path: web::Path<String>,
 ) -> Result<HttpResponse> {
-    let current_user =
-        get_current_user(&session, &pool).ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
     let mut conn = pool.get().map_err(internal_error)?;
     let group = Group::by_slug(&mut conn, &path.into_inner())
         .map_err(internal_error)?
@@ -355,13 +346,11 @@ pub async fn manage_members_get(
 }
 
 pub async fn manage_members_post(
-    session: Session,
+    LoggedIn(current_user): LoggedIn,
     pool: web::Data<DbPool>,
     path: web::Path<String>,
     form: web::Form<MemberForm>,
 ) -> Result<HttpResponse> {
-    let current_user =
-        get_current_user(&session, &pool).ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
     let mut conn = pool.get().map_err(internal_error)?;
     let group = Group::by_slug(&mut conn, &path.into_inner())
         .map_err(internal_error)?

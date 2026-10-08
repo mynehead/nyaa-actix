@@ -78,7 +78,7 @@
 					<span class="glyphicon glyphicon-unchecked"></span>
 					Complete
 				</label>
-				{% if current_user.level >= 1 %}
+				{% if can.set_trusted_flag %}
 				<label class="btn btn-success{% if form.is_trusted %} active{% endif %}" title="Mark torrent trusted">
 					<input id="is_trusted" name="is_trusted" type="checkbox" value="y"{% if form.is_trusted %} checked{% endif %}>
 					<span class="glyphicon glyphicon-check"></span>
@@ -86,7 +86,7 @@
 					Trusted
 				</label>
 				{% endif %}
-				{% if current_user.level >= 2 %}
+				{% if can.moderate_torrents %}
 				<label class="btn btn-default{% if form.is_comment_locked %} active{% endif %}" title="Lock comments">
 					<input id="is_comment_locked" name="is_comment_locked" type="checkbox" value="y"{% if form.is_comment_locked %} checked{% endif %}>
 					<span class="glyphicon glyphicon-check"></span>
@@ -184,7 +184,7 @@
 						You (or someone else) will be able to reupload the torrent.
 					</p>
 
-					{% if current_user.level >= 2 %}
+					{% if can.moderate_torrents %}
 					<hr>
 					<p class="lead">
 						Delete and ban torrent.

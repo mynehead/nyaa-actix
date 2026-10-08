@@ -9,11 +9,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tera::Tera;
 
+use crate::auth::policy::can_comment;
+use crate::auth::{CurrentUser, LoggedIn, Permission};
 use crate::config::Config;
 use crate::db::schema::{bans, nyaa_comments, nyaa_statistics, nyaa_torrents, users};
 use crate::db::DbConnection;
 use crate::db::DbPool;
-use crate::middleware::auth::get_current_user;
 use crate::models::{
     danger_action, edited_flags, torrent_link, user_link, AdminLog, Ban, DangerAction, EditFlags, NewBan, NewStatistic,
     NewTorrent, Torrent, TorrentFlags, User, UserStatus, MAX_BAN_REASON_LEN,
@@ -23,6 +24,7 @@ use crate::utils::context::base_context;
 use crate::utils::{client_ip, flash, internal_error, sanitize_string, sanitize_text, unpack_ip};
 
 pub async fn view_torrent(
+    CurrentUser(current_user): CurrentUser,
     session: Session,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
@@ -31,7 +33,6 @@ pub async fn view_torrent(
     path: web::Path<i32>,
 ) -> Result<HttpResponse> {
     let torrent_id = path.into_inner();
-    let current_user = get_current_user(&session, &pool);
     let mut conn = pool.get().map_err(internal_error)?;
 
     let torrent = Torrent::by_id(&mut conn, torrent_id)
@@ -65,14 +66,9 @@ pub struct CommentForm {
 const COMMENT_MIN_LEN: usize = 3;
 const COMMENT_MAX_LEN: usize = 2048;
 
-/// Upstream shows the comment form to logged-in users, and on locked torrents only to moderators.
-fn can_comment(torrent: &Torrent, user: Option<&User>) -> bool {
-    user.is_some_and(|u| !torrent.is_comment_locked() || u.is_moderator())
-}
-
 /// Posts a comment from the form on the view page, as upstream's POST /view/<id>.
 pub async fn post_comment(
-    session: Session,
+    CurrentUser(current_user): CurrentUser,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
@@ -81,7 +77,6 @@ pub async fn post_comment(
     form: web::Form<CommentForm>,
 ) -> Result<HttpResponse> {
     let torrent_id = path.into_inner();
-    let current_user = get_current_user(&session, &pool);
     let mut conn = pool.get().map_err(internal_error)?;
 
     let torrent = Torrent::by_id(&mut conn, torrent_id)
@@ -156,7 +151,9 @@ async fn render_view(
 
     // Anonymous uploads only name their uploader to that uploader and moderators
     let can_see_uploader = !torrent.is_anonymous()
-        || current_user.as_ref().map(|u| u.is_moderator() || Some(u.id) == torrent.uploader_id).unwrap_or(false);
+        || current_user
+            .as_ref()
+            .is_some_and(|u| u.can(Permission::ModerateTorrents) || Some(u.id) == torrent.uploader_id);
     let uploader: Option<User> = match torrent.uploader_id {
         Some(uid) if can_see_uploader => User::by_id(conn, uid).map_err(internal_error)?,
         _ => None,
@@ -200,7 +197,7 @@ async fn render_view(
     // Upstream shows the uploader's IP next to the submitter to administrators only
     let uploader_ip = current_user
         .as_ref()
-        .filter(|u| u.is_superadmin())
+        .filter(|u| u.can(Permission::SeeIps))
         .and(torrent.uploader_ip.as_deref())
         .and_then(unpack_ip)
         .map(|ip| ip.to_string());
@@ -241,22 +238,21 @@ const MAX_FILES_VIEW: usize = 1000;
 
 /// Deleted and banned torrents are only visible to moderators.
 fn check_visible(torrent: &Torrent, current_user: &Option<User>) -> Result<()> {
-    let is_admin = current_user.as_ref().map(|u| u.is_moderator()).unwrap_or(false);
-    if (torrent.is_deleted() || torrent.is_banned()) && !is_admin {
+    let moderator = current_user.as_ref().is_some_and(|u| u.can(Permission::ModerateTorrents));
+    if (torrent.is_deleted() || torrent.is_banned()) && !moderator {
         return Err(actix_web::error::ErrorNotFound("Torrent not found"));
     }
     Ok(())
 }
 
 pub async fn download_torrent(
-    session: Session,
+    CurrentUser(current_user): CurrentUser,
     pool: web::Data<DbPool>,
     cfg: web::Data<Config>,
     storage: web::Data<Storage>,
     path: web::Path<i32>,
 ) -> Result<HttpResponse> {
     let torrent_id = path.into_inner();
-    let current_user = get_current_user(&session, &pool);
     let mut conn = pool.get().map_err(internal_error)?;
 
     let torrent = Torrent::by_id(&mut conn, torrent_id)
@@ -319,13 +315,12 @@ pub async fn legacy_magnet_redirect(path: web::Path<i32>) -> HttpResponse {
 }
 
 pub async fn magnet_redirect(
-    session: Session,
+    CurrentUser(current_user): CurrentUser,
     pool: web::Data<DbPool>,
     cfg: web::Data<Config>,
     path: web::Path<i32>,
 ) -> Result<HttpResponse> {
     let torrent_id = path.into_inner();
-    let current_user = get_current_user(&session, &pool);
     let mut conn = pool.get().map_err(internal_error)?;
     let torrent = Torrent::by_id(&mut conn, torrent_id)
         .map_err(internal_error)?
@@ -336,17 +331,17 @@ pub async fn magnet_redirect(
 }
 
 pub async fn upload_get(
-    session: Session,
+    CurrentUser(user): CurrentUser,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
 ) -> Result<HttpResponse> {
-    let Some(user) = get_current_user(&session, &pool) else {
+    let Some(user) = user else {
         return Ok(HttpResponse::Found().insert_header(("Location", "/login")).finish());
     };
     let mut conn = pool.get().map_err(internal_error)?;
     // Trusted users' uploads start out marked trusted, as upstream
-    let form = EditForm { is_trusted: user.is_trusted(), ..Default::default() };
+    let form = EditForm { is_trusted: user.can(Permission::SetTrustedFlag), ..Default::default() };
     let html = render_upload(&mut conn, &tmpl, &cfg, &user, &form, None, &HashMap::new())?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
@@ -400,17 +395,14 @@ pub(crate) async fn read_field(field: &mut actix_multipart::Field, limit: usize)
 }
 
 pub async fn upload_post(
+    LoggedIn(user): LoggedIn,
     req: HttpRequest,
-    session: Session,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
     storage: web::Data<Storage>,
     mut payload: Multipart,
 ) -> Result<HttpResponse> {
-    let Some(user) = get_current_user(&session, &pool) else {
-        return Err(actix_web::error::ErrorUnauthorized("Login required"));
-    };
     let mut conn = pool.get().map_err(internal_error)?;
 
     let mut torrent_bytes: Option<Vec<u8>> = None;
@@ -506,7 +498,7 @@ pub async fn upload_post(
     flags.set(TorrentFlags::REMAKE, form.is_remake);
     flags.set(TorrentFlags::ANONYMOUS, form.is_anonymous);
     flags.set(TorrentFlags::COMPLETE, form.is_complete);
-    flags.set(TorrentFlags::TRUSTED, form.is_trusted && user.is_trusted());
+    flags.set(TorrentFlags::TRUSTED, form.is_trusted && user.can(Permission::SetTrustedFlag));
     let flags = flags.bits();
 
     let now = chrono::Utc::now().naive_utc();
@@ -744,7 +736,7 @@ fn editable_torrent(conn: &mut DbConnection, torrent_id: i32, editor: Option<&Us
     let torrent = Torrent::by_id(conn, torrent_id)
         .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))?;
-    let is_moderator = editor.map(|u| u.is_moderator()).unwrap_or(false);
+    let is_moderator = editor.is_some_and(|u| u.can(Permission::ModerateTorrents));
     if (torrent.is_deleted() || torrent.is_banned()) && !is_moderator {
         return Err(actix_web::error::ErrorNotFound("Torrent not found"));
     }
@@ -775,7 +767,7 @@ fn edited_group(
         return Ok(Ok(Some(gid)));
     }
     let allowed = match crate::models::Group::by_id(conn, gid)? {
-        Some(g) => editor.is_moderator() || g.can_upload(conn, editor.id),
+        Some(g) => editor.can(Permission::ModerateTorrents) || g.can_upload(conn, editor.id),
         None => false,
     };
     Ok(if allowed { Ok(Some(gid)) } else { Err("You may not release under this group".to_string()) })
@@ -800,7 +792,7 @@ fn render_edit(
     };
     // Groups the editor may release under (all of them for moderators), plus the
     // torrent's current group so keeping it is always possible
-    let is_moderator = editor.is_moderator();
+    let is_moderator = editor.can(Permission::ModerateTorrents);
     let groups: Vec<crate::models::Group> = crate::models::Group::all(conn)
         .map_err(internal_error)?
         .into_iter()
@@ -831,13 +823,13 @@ fn render_edit(
 }
 
 pub async fn edit_torrent_get(
+    CurrentUser(editor): CurrentUser,
     session: Session,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
     path: web::Path<i32>,
 ) -> Result<HttpResponse> {
-    let editor = get_current_user(&session, &pool);
     let mut conn = pool.get().map_err(internal_error)?;
     let torrent = editable_torrent(&mut conn, path.into_inner(), editor.as_ref())?;
     let editor = editor.expect("editable_torrent requires a user");
@@ -855,6 +847,7 @@ pub async fn edit_torrent_get(
 }
 
 pub async fn edit_torrent_post(
+    CurrentUser(editor): CurrentUser,
     session: Session,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
@@ -862,7 +855,6 @@ pub async fn edit_torrent_post(
     path: web::Path<i32>,
     form: web::Form<EditForm>,
 ) -> Result<HttpResponse> {
-    let editor = get_current_user(&session, &pool);
     let mut conn = pool.get().map_err(internal_error)?;
     let torrent = editable_torrent(&mut conn, path.into_inner(), editor.as_ref())?;
     let editor = editor.expect("editable_torrent requires a user");
@@ -954,7 +946,7 @@ pub async fn edit_torrent_post(
                     .execute(conn)?;
             }
             // Upstream logs moderator actions on other people's torrents
-            if editor.is_moderator() && torrent.uploader_id != Some(editor.id) {
+            if editor.can(Permission::ModerateTorrents) && torrent.uploader_id != Some(editor.id) {
                 AdminLog::add(conn, editor.id, &format!("Torrent {} has been {}", torrent_link(torrent.id), action))?;
             }
         }
@@ -965,7 +957,7 @@ pub async fn edit_torrent_post(
     })
     .map_err(actix_web::error::ErrorInternalServerError)?;
     // Only the torrent page shows flashes; owners deleting their own torrent go home
-    if let Some((_, action)) = torrent_action.filter(|_| editor.is_moderator()) {
+    if let Some((_, action)) = torrent_action.filter(|_| editor.can(Permission::ModerateTorrents)) {
         flash::push(&session, "success", "", &format!("Torrent has been successfully {}.", action));
     }
     if uploader_ban.is_some() {
@@ -974,7 +966,7 @@ pub async fn edit_torrent_post(
     crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), torrent.id);
 
     // Moderators go back to the torrent; owners deleting their own go home
-    Ok(redirect(if editor.is_moderator() { &view_url } else { "/" }))
+    Ok(redirect(if editor.can(Permission::ModerateTorrents) { &view_url } else { "/" }))
 }
 
 /// A torrent's uploader as the edit page's ban buttons see them (upstream `_delete_torrent`).
@@ -1013,7 +1005,7 @@ impl UploaderBanTarget {
 
     /// Moderators may ban uploaders ranked below them, and anonymous (account-less) uploads.
     fn can_be_banned_by(&self, editor: &User) -> bool {
-        editor.is_moderator() && self.uploader.as_ref().map(|u| u.level < editor.level).unwrap_or(true)
+        editor.can(Permission::BanUsers) && self.uploader.as_ref().is_none_or(|u| u.level() < editor.level())
     }
 
     fn ip_banned(&self) -> bool {

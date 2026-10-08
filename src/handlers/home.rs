@@ -1,11 +1,10 @@
-use actix_session::Session;
 use actix_web::{web, HttpResponse, Result};
 use serde::Deserialize;
 use tera::Tera;
 
+use crate::auth::{CurrentUser, Permission};
 use crate::config::Config;
 use crate::db::DbPool;
-use crate::middleware::auth::get_current_user;
 use crate::models::{Banner, Torrent};
 use crate::search::db::{with_stats, SearchQuery};
 use crate::search::search;
@@ -26,14 +25,13 @@ pub struct SearchParams {
 }
 
 pub async fn home(
-    session: Session,
+    CurrentUser(current_user): CurrentUser,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
     params: web::Query<SearchParams>,
 ) -> Result<HttpResponse> {
-    let current_user = get_current_user(&session, &pool);
-    let is_admin = current_user.as_ref().map(|u| u.is_moderator()).unwrap_or(false);
+    let moderator = current_user.as_ref().is_some_and(|u| u.can(Permission::ModerateTorrents));
 
     let mut q = SearchQuery::from_params(
         params.q.clone(),
@@ -45,7 +43,7 @@ pub async fn home(
         params.o.as_deref(),
         params.p,
         cfg.results_per_page,
-        is_admin,
+        moderator,
     );
     q.viewer_id = current_user.as_ref().map(|u| u.id);
 
@@ -55,7 +53,7 @@ pub async fn home(
     // for moderators, who are the only ones who could open them
     if let Some(hash) = params.q.as_deref().and_then(info_hash) {
         let torrent = Torrent::by_info_hash(&mut conn, &hash).map_err(internal_error)?;
-        if let Some(t) = torrent.filter(|t| is_admin || !(t.is_deleted() || t.is_banned())) {
+        if let Some(t) = torrent.filter(|t| moderator || !(t.is_deleted() || t.is_banned())) {
             return Ok(HttpResponse::Found().insert_header(("Location", format!("/view/{}", t.id))).finish());
         }
     }

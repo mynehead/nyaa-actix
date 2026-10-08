@@ -6,34 +6,26 @@ use diesel::Connection;
 use serde::Deserialize;
 use tera::Tera;
 
+use crate::auth::Moderator;
 use crate::config::Config;
 use crate::db::DbPool;
-use crate::middleware::auth::get_current_user;
-use crate::models::{AdminLog, Banner, User};
+use crate::models::{AdminLog, Banner};
 use crate::utils::context::base_context;
 use crate::utils::{flash, internal_error};
 
 const MAX_LENGTH: usize = 1024;
-
-fn require_moderator(session: &Session, pool: &DbPool) -> Result<User> {
-    let user = get_current_user(session, pool).ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
-    if !user.is_moderator() {
-        return Err(actix_web::error::ErrorForbidden("Not allowed"));
-    }
-    Ok(user)
-}
 
 fn back_to_list() -> HttpResponse {
     HttpResponse::SeeOther().insert_header(("Location", "/admin/banners")).finish()
 }
 
 pub async fn list(
+    Moderator(user): Moderator,
     session: Session,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
 ) -> Result<HttpResponse> {
-    let user = require_moderator(&session, &pool)?;
     let mut conn = pool.get().map_err(internal_error)?;
     let banners = Banner::all_with_creator(&mut conn).map_err(internal_error)?;
     let mut ctx = base_context(&cfg, Some(&user));
@@ -48,8 +40,12 @@ pub struct BannerForm {
     pub content: String,
 }
 
-pub async fn create(session: Session, pool: web::Data<DbPool>, form: web::Form<BannerForm>) -> Result<HttpResponse> {
-    let user = require_moderator(&session, &pool)?;
+pub async fn create(
+    Moderator(user): Moderator,
+    session: Session,
+    pool: web::Data<DbPool>,
+    form: web::Form<BannerForm>,
+) -> Result<HttpResponse> {
     let content = form.content.trim();
     if content.is_empty() {
         flash::push(&session, "danger", "Banner not saved!", "The content is empty.");
@@ -74,8 +70,12 @@ pub async fn create(session: Session, pool: web::Data<DbPool>, form: web::Form<B
     Ok(back_to_list())
 }
 
-pub async fn toggle(session: Session, pool: web::Data<DbPool>, path: web::Path<i32>) -> Result<HttpResponse> {
-    let user = require_moderator(&session, &pool)?;
+pub async fn toggle(
+    Moderator(user): Moderator,
+    session: Session,
+    pool: web::Data<DbPool>,
+    path: web::Path<i32>,
+) -> Result<HttpResponse> {
     let id = path.into_inner();
     let mut conn = pool.get().map_err(internal_error)?;
     let state = conn
@@ -91,8 +91,12 @@ pub async fn toggle(session: Session, pool: web::Data<DbPool>, path: web::Path<i
     Ok(back_to_list())
 }
 
-pub async fn delete(session: Session, pool: web::Data<DbPool>, path: web::Path<i32>) -> Result<HttpResponse> {
-    let user = require_moderator(&session, &pool)?;
+pub async fn delete(
+    Moderator(user): Moderator,
+    session: Session,
+    pool: web::Data<DbPool>,
+    path: web::Path<i32>,
+) -> Result<HttpResponse> {
     let id = path.into_inner();
     let mut conn = pool.get().map_err(internal_error)?;
     let deleted = conn

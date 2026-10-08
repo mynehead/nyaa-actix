@@ -3,10 +3,11 @@ use actix_web::{web, HttpResponse, Result};
 use serde::{Deserialize, Serialize};
 use tera::Tera;
 
+use crate::auth::policy::can_ban;
+use crate::auth::{CurrentUser, LoggedIn, Moderator, Permission};
 use crate::config::Config;
 use crate::db::schema::{bans, nyaa_comments, nyaa_statistics, nyaa_torrents, users};
 use crate::db::DbPool;
-use crate::middleware::auth::get_current_user;
 use crate::models::{
     user_link, AdminLog, Ban, Comment, NewBan, TorrentFlags, User, UserLevel, UserStatus, MAX_BAN_REASON_LEN,
 };
@@ -29,6 +30,7 @@ pub struct UserSearchParams {
 }
 
 pub async fn view_user(
+    CurrentUser(current_user): CurrentUser,
     session: Session,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
@@ -37,8 +39,7 @@ pub async fn view_user(
     params: web::Query<UserSearchParams>,
 ) -> Result<HttpResponse> {
     let username = path.into_inner();
-    let current_user = get_current_user(&session, &pool);
-    let is_admin = current_user.as_ref().map(|u| u.is_moderator()).unwrap_or(false);
+    let moderator = current_user.as_ref().is_some_and(|u| u.can(Permission::ModerateTorrents));
 
     let mut conn = pool.get().map_err(internal_error)?;
     let profile_user = User::by_username(&mut conn, &username)
@@ -55,13 +56,13 @@ pub async fn view_user(
         params.o.as_deref(),
         params.p,
         cfg.results_per_page,
-        is_admin,
+        moderator,
     );
     // Owners and moderators see everything on the profile; everyone else
     // sees neither hidden nor anonymous uploads.
     let is_owner = current_user.as_ref().map(|u| u.id == profile_user.id).unwrap_or(false);
-    q.include_hidden = is_admin || is_owner;
-    q.hide_anonymous = !(is_admin || is_owner);
+    q.include_hidden = moderator || is_owner;
+    q.hide_anonymous = !(moderator || is_owner);
 
     let result = search(&mut conn, cfg.meili.as_ref(), &q).map_err(internal_error)?;
     let pagination = Pagination::new(q.page, result.total, q.per_page);
@@ -88,7 +89,7 @@ pub async fn view_user(
         ctx.insert("ban_form", &true);
         ctx.insert("bans", &bans);
         ctx.insert("ip_banned", &ip_banned);
-        if moderator.is_superadmin() {
+        if moderator.can(Permission::SeeIps) {
             let ip = |b: &Option<Vec<u8>>| b.as_deref().and_then(unpack_ip).map(|ip| ip.to_string());
             ctx.insert("last_login_ip", &ip(&profile_user.last_login_ip));
             ctx.insert("registration_ip", &ip(&profile_user.registration_ip));
@@ -113,11 +114,6 @@ pub async fn avatar(storage: web::Data<crate::storage::Storage>, path: web::Path
         .body(data))
 }
 
-/// Upstream shows the user page's Danger Zone to moderators above the user's level.
-fn can_ban(moderator: &User, user: &User) -> bool {
-    moderator.is_moderator() && moderator.level > user.level
-}
-
 /// One option of the "Change User Class" menu.
 #[derive(Debug, Serialize)]
 struct UserClassChoice {
@@ -131,15 +127,15 @@ struct UserClassChoice {
 /// Moderator. Nobody can make another superadmin here.
 fn user_class_choices(moderator: &User, user: &User) -> (&'static str, Vec<UserClassChoice>) {
     let mut choices = vec![UserClassChoice { value: "regular", label: "Regular", level: UserLevel::Regular as i32 }];
-    if moderator.is_moderator() {
+    if moderator.can(Permission::ChangeUserClass) {
         choices.push(UserClassChoice { value: "trusted", label: "Trusted", level: UserLevel::Trusted as i32 });
     }
-    if moderator.is_superadmin() {
+    if moderator.can(Permission::GrantModerator) {
         choices.push(UserClassChoice { value: "moderator", label: "Moderator", level: UserLevel::Moderator as i32 });
     }
-    let default = if user.is_moderator() {
+    let default = if user.level() >= UserLevel::Moderator {
         "moderator"
-    } else if user.is_trusted() {
+    } else if user.level() >= UserLevel::Trusted {
         "trusted"
     } else {
         "regular"
@@ -205,13 +201,12 @@ fn change_user_class(
 
 /// Bans or unbans the user, as upstream's `view_user` POST.
 pub async fn ban_user_post(
+    LoggedIn(moderator): LoggedIn,
     session: Session,
     pool: web::Data<DbPool>,
     path: web::Path<String>,
     form: web::Form<BanForm>,
 ) -> Result<HttpResponse> {
-    let moderator =
-        get_current_user(&session, &pool).ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
     let mut conn = pool.get().map_err(internal_error)?;
     let user = User::by_username(&mut conn, &path.into_inner())
         .map_err(internal_error)?
@@ -311,16 +306,15 @@ pub async fn ban_user_post(
 
 /// The user behind a nuke request; superadmins only, and only on users below them.
 fn nuke_target(
-    session: &Session,
+    admin: User,
     pool: &DbPool,
     username: &str,
 ) -> Result<(User, User, diesel::r2d2::PooledConnection<crate::db::DbManager>)> {
-    let admin = get_current_user(session, pool).ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
     let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
     let user = User::by_username(&mut conn, username)
         .map_err(actix_web::error::ErrorInternalServerError)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("User not found"))?;
-    if !admin.is_superadmin() || !can_ban(&admin, &user) {
+    if !admin.can(Permission::NukeUsers) || !can_ban(&admin, &user) {
         return Err(actix_web::error::ErrorForbidden("Not allowed"));
     }
     Ok((admin, user, conn))
@@ -329,12 +323,13 @@ fn nuke_target(
 /// "Nuke Torrents": deletes and bans every torrent of the user, as upstream's
 /// `nuke_user_torrents`.
 pub async fn nuke_torrents_post(
+    LoggedIn(admin): LoggedIn,
     session: Session,
     pool: web::Data<DbPool>,
     cfg: web::Data<Config>,
     path: web::Path<String>,
 ) -> Result<HttpResponse> {
-    let (admin, user, mut conn) = nuke_target(&session, &pool, &path.into_inner())?;
+    let (admin, user, mut conn) = nuke_target(admin, &pool, &path.into_inner())?;
     let ids: Vec<i32> = conn
         .transaction::<_, diesel::result::Error, _>(|conn| {
             let torrents: Vec<(i32, i32)> = nyaa_torrents::table
@@ -370,12 +365,13 @@ pub async fn nuke_torrents_post(
 
 /// "Nuke Comments": deletes every comment of the user, as upstream's `nuke_user_comments`.
 pub async fn nuke_comments_post(
+    LoggedIn(admin): LoggedIn,
     session: Session,
     pool: web::Data<DbPool>,
     cfg: web::Data<Config>,
     path: web::Path<String>,
 ) -> Result<HttpResponse> {
-    let (admin, user, mut conn) = nuke_target(&session, &pool, &path.into_inner())?;
+    let (admin, user, mut conn) = nuke_target(admin, &pool, &path.into_inner())?;
     let torrent_ids: Vec<i32> = conn
         .transaction::<_, diesel::result::Error, _>(|conn| {
             let mut torrent_ids: Vec<i32> = nyaa_comments::table
@@ -417,16 +413,13 @@ const COMMENTS_PER_PAGE: i64 = 100;
 /// /user/{name}/comments: every comment the user wrote, newest first, as upstream's
 /// `view_user_comments`. Moderators only, as upstream ("for now").
 pub async fn view_user_comments(
-    session: Session,
+    Moderator(current_user): Moderator,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
     path: web::Path<String>,
     params: web::Query<CommentsParams>,
 ) -> Result<HttpResponse> {
-    let current_user = get_current_user(&session, &pool)
-        .filter(|u| u.is_moderator())
-        .ok_or_else(|| actix_web::error::ErrorForbidden("Not allowed"))?;
     let mut conn = pool.get().map_err(internal_error)?;
     let user = User::by_username(&mut conn, &path.into_inner())
         .map_err(internal_error)?
@@ -626,8 +619,9 @@ mod tests {
         let page = String::from_utf8(test::call_and_read_body(&app, req).await.to_vec()).unwrap();
         assert!(page.contains("hello there") && page.contains("Some torrent"), "{page}");
 
+        // alice is inactive, so she counts as a guest: 401, like the other moderator pages
         let (app, cookie) = app!(pool, 1);
         let req = test::TestRequest::get().uri("/user/alice/comments").cookie(cookie).to_request();
-        assert_eq!(test::call_service(&app, req).await.status(), StatusCode::FORBIDDEN);
+        assert_eq!(test::call_service(&app, req).await.status(), StatusCode::UNAUTHORIZED);
     }
 }
