@@ -1,5 +1,7 @@
 # File storage: local disk or S3
 
+To run the whole site with Docker (site, PostgreSQL, tracker, Meilisearch), see [DEPLOY.md](DEPLOY.md).
+
 nyaa-actix stores two kinds of files: the info dict of every uploaded torrent (the
 `.torrent` download is rebuilt from it) and uploaded avatars. `STORAGE_BACKEND` picks where:
 

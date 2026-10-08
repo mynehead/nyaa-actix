@@ -97,6 +97,22 @@
 			</div>
 		</div>
 	</div>
+	{% if groups | length > 0 %}
+	<div class="row">
+		<div class="col-md-6">
+			<div class="form-group{% if errors.group_id %} has-error{% endif %}">
+				<label class="control-label" for="group_id">Release under group</label>
+				<select class="form-control" id="group_id" name="group_id">
+					<option value="0">None (personal upload)</option>
+					{% for group in groups %}
+					<option value="{{ group.id }}"{% if group_id == group.id %} selected{% endif %}>[{{ group.tag }}] {{ group.name }}</option>
+					{% endfor %}
+				</select>
+				{% if errors.group_id %}<div class="help-block">{{ errors.group_id }}</div>{% endif %}
+			</div>
+		</div>
+	</div>
+	{% endif %}
 
 	<div class="row">
 		<div class="col-md-12">

@@ -76,3 +76,15 @@ jobs:
           NYAA_TEST_S3_ACCESS_KEY: GK0123456789abcdef01234567
           NYAA_TEST_S3_SECRET_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
         run: cargo test --locked "storage::"
+
+  # Keeps the Dockerfile building (docker/DEPLOY.md)
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t nyaa-actix .
+      - name: Check compose file
+        run: |
+          cp .env.example .env
+          POSTGRES_PASSWORD=ci TRACKER_API_KEY=ci docker compose --profile search config --quiet

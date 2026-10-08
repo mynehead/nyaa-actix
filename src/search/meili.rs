@@ -13,6 +13,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use super::db::{SearchOrder, SearchQuery, SearchSort};
+use super::syntax::{Resolved, Text};
 use crate::models::{Statistic, Torrent, TorrentFlags};
 
 /// How long a listing waits for Meilisearch before falling back to SQLite.
@@ -165,8 +166,28 @@ pub fn word_parts(name: &str) -> String {
 }
 
 /// The Meilisearch filter expression for a listing, mirroring `db::filtered`.
-pub fn filter(q: &SearchQuery) -> Vec<String> {
+pub fn filter(q: &SearchQuery, r: &Resolved) -> Vec<String> {
     let mut f = Vec::new();
+    for &(uid, reveals) in &r.users {
+        f.push(if reveals {
+            format!("uploader_id = {uid}")
+        } else {
+            format!("(uploader_id = {uid} AND anonymous = false)")
+        });
+    }
+    for &(uid, reveals) in &r.not_users {
+        f.push(if reveals {
+            format!("uploader_id != {uid}")
+        } else {
+            format!("NOT (uploader_id = {uid} AND anonymous = false)")
+        });
+    }
+    for &gid in &r.groups {
+        f.push(format!("group_id = {gid}"));
+    }
+    for &gid in &r.not_groups {
+        f.push(format!("group_id != {gid}"));
+    }
     if let Some(uid) = q.user_id {
         f.push(format!("uploader_id = {uid}"));
     }
@@ -222,11 +243,28 @@ pub fn sort(q: &SearchQuery) -> Vec<String> {
     s
 }
 
+/// The words and phrases of a search in Meilisearch's syntax: `"phrase"` for phrases and a
+/// leading `-` to leave a word or phrase out.
+pub fn query_text(r: &Resolved) -> String {
+    let quote = |t: &Text| {
+        // A quote inside would start or end a phrase; Meilisearch ignores it as a word anyway
+        let text = t.text.replace('"', " ");
+        if t.phrase {
+            format!("\"{text}\"")
+        } else {
+            text
+        }
+    };
+    let include = r.include.iter().map(|t| quote(t).trim_start_matches('-').to_string());
+    let exclude = r.exclude.iter().map(|t| format!("-{}", quote(t)));
+    include.chain(exclude).filter(|t| !t.is_empty()).collect::<Vec<_>>().join(" ")
+}
+
 /// The body of a search request for one page of a listing.
-pub fn search_body(q: &SearchQuery) -> Value {
+pub fn search_body(q: &SearchQuery, r: &Resolved) -> Value {
     json!({
-        "q": q.term.as_deref().unwrap_or(""),
-        "filter": filter(q),
+        "q": query_text(r),
+        "filter": filter(q, r),
         "sort": sort(q),
         "page": q.page,
         "hitsPerPage": q.per_page,
@@ -321,12 +359,12 @@ impl Meili {
     }
 
     /// Torrent ids for one page of a listing, in order, and the number of matches.
-    pub fn search(&self, q: &SearchQuery) -> MeiliResult<(Vec<i32>, i64)> {
+    pub fn search(&self, q: &SearchQuery, r: &Resolved) -> MeiliResult<(Vec<i32>, i64)> {
         // A page waits on this; past the timeout SQLite answers instead
         let r = self.call_within(
             "POST",
             &format!("/indexes/{}/search", self.index),
-            Some(&search_body(q)),
+            Some(&search_body(q, r)),
             Some(SEARCH_TIMEOUT),
         )?;
         let ids = r["hits"]
@@ -470,10 +508,15 @@ mod tests {
         )
     }
 
+    fn words(words: &[&str]) -> Resolved {
+        let include = words.iter().map(|w| Text { text: w.to_string(), phrase: false }).collect();
+        Resolved { include, ..Default::default() }
+    }
+
     #[test]
     fn search_body_carries_term_filters_sort_and_page() {
         assert_eq!(
-            search_body(&query()),
+            search_body(&query(), &words(&["show", "1080p"])),
             json!({
                 "q": "show 1080p",
                 "filter": ["main_category_id = 1", "sub_category_id = 2", "trusted = true AND complete = true",
@@ -495,7 +538,7 @@ mod tests {
         q.quality_filter = 1;
         q.hide_anonymous = true;
         assert_eq!(
-            filter(&q),
+            filter(&q, &Resolved::default()),
             [
                 "uploader_id = 4",
                 "group_id = 9",
@@ -508,15 +551,43 @@ mod tests {
         // The general listing adds the visitor's own hidden uploads
         let mut q = SearchQuery::new();
         q.viewer_id = Some(7);
-        assert_eq!(filter(&q), ["deleted = false", "(hidden = false OR uploader_id = 7)"]);
+        assert_eq!(filter(&q, &Resolved::default()), ["deleted = false", "(hidden = false OR uploader_id = 7)"]);
         // Moderators: nothing hidden
         let mut q = SearchQuery::new();
         q.include_deleted = true;
         q.include_hidden = true;
-        assert!(filter(&q).is_empty());
+        assert!(filter(&q, &Resolved::default()).is_empty());
         // A sub-category only counts with its main category
         let q = SearchQuery::from_params(None, None, None, Some("0_2"), None, None, None, None, 75, true);
-        assert!(filter(&q).is_empty());
+        assert!(filter(&q, &Resolved::default()).is_empty());
+    }
+
+    #[test]
+    fn operators_become_query_syntax_and_filters() {
+        let text = |t: &str, phrase| Text { text: t.into(), phrase };
+        let r = Resolved {
+            include: vec![text("dragon", false), text("show - 01", true), text("--", false), text("a\"b", false)],
+            exclude: vec![text("720p", false), text("sword tale", true)],
+            users: vec![(1, false), (2, true)],
+            not_users: vec![(3, false), (4, true)],
+            groups: vec![5],
+            not_groups: vec![6],
+            matches_nothing: false,
+        };
+        assert_eq!(query_text(&r), r#"dragon "show - 01" a b -720p -"sword tale""#);
+        assert_eq!(
+            filter(&SearchQuery::new(), &r),
+            [
+                "(uploader_id = 1 AND anonymous = false)",
+                "uploader_id = 2",
+                "NOT (uploader_id = 3 AND anonymous = false)",
+                "uploader_id != 4",
+                "group_id = 5",
+                "group_id != 6",
+                "deleted = false",
+                "hidden = false"
+            ]
+        );
     }
 
     #[test]

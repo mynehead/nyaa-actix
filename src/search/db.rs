@@ -1,6 +1,7 @@
 use diesel::prelude::*;
 use serde::Serialize;
 
+use super::syntax::Resolved;
 use crate::db::schema::{nyaa_statistics, nyaa_torrents};
 use crate::db::DbConnection;
 use crate::models::{Statistic, Torrent};
@@ -37,6 +38,8 @@ pub struct SearchQuery {
     pub hide_anonymous: bool,
     /// The logged-in visitor. In the general listing they also see their own hidden uploads.
     pub viewer_id: Option<i32>,
+    /// A moderator is looking: `user:` searches also find that user's anonymous uploads.
+    pub moderator: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -75,6 +78,7 @@ impl SearchQuery {
             include_hidden: false,
             hide_anonymous: false,
             viewer_id: None,
+            moderator: false,
         }
     }
 
@@ -121,6 +125,7 @@ impl SearchQuery {
             include_hidden: is_admin,
             hide_anonymous: false,
             viewer_id: None,
+            moderator: is_admin,
         }
     }
 }
@@ -132,6 +137,14 @@ impl SearchQuery {
             self.viewer_id
         } else {
             None
+        }
+    }
+
+    /// The search term with its operators looked up; see `syntax`.
+    pub fn resolve(&self, conn: &mut DbConnection) -> QueryResult<Resolved> {
+        match &self.term {
+            Some(term) => Resolved::new(conn, term, |uid| self.moderator || self.viewer_id == Some(uid)),
+            None => Ok(Resolved::default()),
         }
     }
 }
@@ -175,14 +188,37 @@ fn escape_like(term: &str) -> String {
 
 /// Builds the filtered (unsorted, unpaged) query. Used for both the count
 /// and the page so the two can't disagree on what is visible.
-fn filtered(q: &SearchQuery) -> nyaa_torrents::BoxedQuery<'static, crate::db::MultiBackend> {
+fn filtered(q: &SearchQuery, r: &Resolved) -> nyaa_torrents::BoxedQuery<'static, crate::db::MultiBackend> {
     let mut query = nyaa_torrents::table.into_boxed();
 
-    // Term search (case-insensitive LIKE on display_name)
-    if let Some(ref term) = q.term {
-        // `%` and `_` in the term are literal characters, not wildcards
-        let pattern = format!("%{}%", escape_like(term));
-        query = query.filter(lower(nyaa_torrents::display_name).like(lower(pattern)).escape('\\'));
+    // Words and phrases (case-insensitive substrings of display_name), every one required;
+    // `%` and `_` in them are literal characters, not wildcards
+    let like = |t: &str| lower(format!("%{}%", escape_like(t)));
+    for t in &r.include {
+        query = query.filter(lower(nyaa_torrents::display_name).like(like(&t.text)).escape('\\'));
+    }
+    for t in &r.exclude {
+        query = query.filter(lower(nyaa_torrents::display_name).not_like(like(&t.text)).escape('\\'));
+    }
+
+    // `user:` and `group:`. Anonymous uploads only count as the user's where `Resolved`
+    // allows it, so excluding a user can't reveal them either.
+    let anonymous = || nyaa_torrents::flags.bitand(TorrentFlags::ANONYMOUS.bits()).ne(0);
+    for &(uid, reveals) in &r.users {
+        query = query.filter(nyaa_torrents::uploader_id.eq(uid));
+        if !reveals {
+            query = query.filter(diesel::dsl::not(anonymous()));
+        }
+    }
+    for &(uid, reveals) in &r.not_users {
+        let other = nyaa_torrents::uploader_id.is_null().or(nyaa_torrents::uploader_id.ne(uid));
+        query = if reveals { query.filter(other) } else { query.filter(other.or(anonymous())) };
+    }
+    for &gid in &r.groups {
+        query = query.filter(nyaa_torrents::group_id.eq(gid));
+    }
+    for &gid in &r.not_groups {
+        query = query.filter(nyaa_torrents::group_id.is_null().or(nyaa_torrents::group_id.ne(gid)));
     }
 
     // User filter
@@ -246,9 +282,20 @@ fn filtered(q: &SearchQuery) -> nyaa_torrents::BoxedQuery<'static, crate::db::Mu
     query
 }
 
+/// One page of a listing from SQL alone (the tests; listings go through `search::search`).
+#[cfg(test)]
 pub fn search(conn: &mut DbConnection, q: &SearchQuery) -> QueryResult<SearchResult> {
-    let total: i64 = filtered(q).count().get_result(conn)?;
-    let query = filtered(q);
+    let r = q.resolve(conn)?;
+    search_resolved(conn, q, &r)
+}
+
+/// `search` with the term already resolved.
+pub fn search_resolved(conn: &mut DbConnection, q: &SearchQuery, r: &Resolved) -> QueryResult<SearchResult> {
+    if r.matches_nothing {
+        return Ok(SearchResult { torrents: vec![], total: 0 });
+    }
+    let total: i64 = filtered(q, r).count().get_result(conn)?;
+    let query = filtered(q, r);
 
     // Sort
     // `p` comes from the URL; a huge one must not overflow
@@ -292,10 +339,19 @@ pub struct ListedTorrent {
     pub seed_count: i32,
     pub leech_count: i32,
     pub download_count: i32,
+    /// The group it was released under, shown as a "[tag]" link before the name
+    pub group: Option<crate::models::Group>,
+    /// The display name, minus a leading "[tag]" the group link replaces
+    pub title: String,
 }
 
-/// Attaches stats to a page of torrents with one query.
+/// Attaches stats and groups to a page of torrents with one query each.
 pub fn with_stats(conn: &mut DbConnection, torrents: Vec<Torrent>) -> QueryResult<Vec<ListedTorrent>> {
+    let mut group_ids: Vec<i32> = torrents.iter().filter_map(|t| t.group_id).collect();
+    group_ids.sort_unstable();
+    group_ids.dedup();
+    let groups: std::collections::HashMap<i32, crate::models::Group> =
+        crate::models::Group::by_ids(conn, &group_ids)?.into_iter().map(|g| (g.id, g)).collect();
     let ids: Vec<i32> = torrents.iter().map(|t| t.id).collect();
     let stats: std::collections::HashMap<i32, Statistic> = nyaa_statistics::table
         .filter(nyaa_statistics::torrent_id.eq_any(&ids))
@@ -307,10 +363,17 @@ pub fn with_stats(conn: &mut DbConnection, torrents: Vec<Torrent>) -> QueryResul
         .into_iter()
         .map(|torrent| {
             let s = stats.get(&torrent.id);
+            let group = torrent.group_id.and_then(|gid| groups.get(&gid)).cloned();
+            let title = match &group {
+                Some(g) => g.strip_tag(&torrent.display_name).to_string(),
+                None => torrent.display_name.clone(),
+            };
             ListedTorrent {
                 seed_count: s.map_or(0, |s| s.seed_count),
                 leech_count: s.map_or(0, |s| s.leech_count),
                 download_count: s.map_or(0, |s| s.download_count),
+                group,
+                title,
                 torrent,
             }
         })
@@ -364,6 +427,27 @@ mod tests {
         q.hide_anonymous = false;
         q.include_hidden = true;
         assert_eq!(ids(&mut conn, &q), (vec![3, 2, 1], 3));
+    }
+
+    #[test]
+    fn listing_rows_carry_their_group_and_untagged_title() {
+        let mut conn = db_with(&[(1, TorrentFlags::empty()), (2, TorrentFlags::empty())]);
+        diesel::sql_query(
+            "INSERT INTO groups (id, name, tag, slug, created_time, owner_id) \
+             VALUES (1, 'Test Subs', 'Test', 'test', CURRENT_TIMESTAMP, 1)",
+        )
+        .execute(&mut conn)
+        .unwrap();
+        diesel::sql_query("UPDATE nyaa_torrents SET group_id = 1, display_name = '[Test] Show - 01' WHERE id = 2")
+            .execute(&mut conn)
+            .unwrap();
+        let page = search(&mut conn, &SearchQuery::new()).unwrap().torrents;
+        let rows = with_stats(&mut conn, page).unwrap();
+        let row = |id| rows.iter().find(|r| r.torrent.id == id).unwrap();
+        assert_eq!(row(2).group.as_ref().map(|g| g.slug.as_str()), Some("test"));
+        assert_eq!(row(2).title, "Show - 01");
+        assert!(row(1).group.is_none());
+        assert_eq!(row(1).title, "t");
     }
 
     #[test]
