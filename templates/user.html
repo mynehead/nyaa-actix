@@ -11,7 +11,7 @@
 {% endblock %}
 
 {% block body %}
-{% if current_user and current_user.level >= 2 %}
+{% if can.ban_users %}
 	<h2>User Information</h2><br>
 	<div class="row" style="margin-bottom: 20px;">
 		<div class="col-md-2" style="max-width: 150px;">
@@ -31,7 +31,7 @@
 						<dd>{{ profile_user | level_str }}</dd>
 						<dt>User status:</dt>
 						<dd>{{ profile_user | status_str }}</dd>
-						{%- if current_user.level >= 3 and ban_form -%}
+						{%- if can.see_ips and ban_form -%}
 						<dt>Last login IP:</dt>
 						<dd>{{ last_login_ip | default(value="") }}</dd>
 						<dt>Registration IP:</dt>

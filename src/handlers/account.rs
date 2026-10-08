@@ -10,10 +10,11 @@ use futures_util::StreamExt;
 use serde::Deserialize;
 use tera::Tera;
 
+use crate::auth::CurrentUser;
 use crate::config::Config;
 use crate::db::schema::users;
 use crate::db::{DbConnection, DbPool};
-use crate::middleware::auth::{get_current_user, login_user, logout_everywhere, logout_user};
+use crate::middleware::auth::{login_user, logout_everywhere, logout_user};
 use crate::models::{password_matches, Ban, NewUser, User};
 use crate::storage::{Kind, Storage};
 use crate::utils::context::base_context;
@@ -35,12 +36,10 @@ pub struct RegisterForm {
 }
 
 pub async fn login_get(
-    session: Session,
-    pool: web::Data<DbPool>,
+    CurrentUser(current_user): CurrentUser,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
 ) -> Result<HttpResponse> {
-    let current_user = get_current_user(&session, &pool);
     if current_user.is_some() {
         return Ok(HttpResponse::Found().insert_header(("Location", "/")).finish());
     }
@@ -114,12 +113,10 @@ pub async fn login_post(
 }
 
 pub async fn register_get(
-    session: Session,
-    pool: web::Data<DbPool>,
+    CurrentUser(current_user): CurrentUser,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
 ) -> Result<HttpResponse> {
-    let current_user = get_current_user(&session, &pool);
     if current_user.is_some() {
         return Ok(HttpResponse::Found().insert_header(("Location", "/")).finish());
     }
@@ -338,12 +335,13 @@ fn render_profile(
 }
 
 pub async fn profile(
+    CurrentUser(current_user): CurrentUser,
     session: Session,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
 ) -> Result<HttpResponse> {
-    let Some(current_user) = get_current_user(&session, &pool) else {
+    let Some(current_user) = current_user else {
         return Ok(redirect("/login"));
     };
     let mut conn = pool.get().map_err(internal_error)?;
@@ -353,6 +351,7 @@ pub async fn profile(
 /// Upstream `profile()` POST: email and password changes need the current password;
 /// preferences don't. Every outcome but a validation error redirects back with a flash.
 pub async fn profile_post(
+    CurrentUser(user): CurrentUser,
     req: HttpRequest,
     session: Session,
     pool: web::Data<DbPool>,
@@ -360,7 +359,7 @@ pub async fn profile_post(
     cfg: web::Data<Config>,
     form: web::Form<ProfileForm>,
 ) -> Result<HttpResponse> {
-    let Some(user) = get_current_user(&session, &pool) else {
+    let Some(user) = user else {
         return Ok(redirect("/login"));
     };
     let mut conn = pool.get().map_err(internal_error)?;
@@ -401,12 +400,13 @@ pub async fn profile_post(
 
 /// The "Change avatar" form on the Preferences tab (multipart, field `avatar`).
 pub async fn avatar_post(
+    CurrentUser(user): CurrentUser,
     session: Session,
     pool: web::Data<DbPool>,
     storage: web::Data<Storage>,
     mut payload: Multipart,
 ) -> Result<HttpResponse> {
-    let Some(user) = get_current_user(&session, &pool) else {
+    let Some(user) = user else {
         return Ok(redirect("/login"));
     };
     let fail = |text: &str| {

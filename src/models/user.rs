@@ -92,19 +92,7 @@ impl User {
         self.status == UserStatus::Banned as i32
     }
 
-    pub fn is_trusted(&self) -> bool {
-        self.level >= UserLevel::Trusted as i32
-    }
-
-    pub fn is_moderator(&self) -> bool {
-        self.level >= UserLevel::Moderator as i32
-    }
-
-    /// Admin-only actions upstream, such as seeing IPs, deciding trusted applications or
-    /// changing a user's level.
-    pub fn is_superadmin(&self) -> bool {
-        self.level == UserLevel::SuperAdmin as i32
-    }
+    // What a level may do is in `crate::auth`: `User::level` and `User::can`.
 
     /// Seconds since the account was created (upstream `User.age`).
     pub fn age_secs(&self) -> i64 {

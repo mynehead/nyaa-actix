@@ -7,9 +7,9 @@ use actix_web::{web, HttpResponse, Result};
 use serde::Deserialize;
 use tera::Tera;
 
+use crate::auth::{CurrentUser, Moderator, Permission};
 use crate::config::Config;
 use crate::db::DbPool;
-use crate::middleware::auth::get_current_user;
 use crate::models::{
     trusted_deny_reasons, TrustedApplication, TrustedApplicationStatus, TrustedListFilter, TrustedRecommendation, User,
 };
@@ -38,12 +38,11 @@ fn length_ok(s: &str, min: usize, max: usize) -> bool {
 
 /// GET /trusted: the trusted rules and a button to apply.
 pub async fn trusted_info(
+    CurrentUser(current_user): CurrentUser,
     session: Session,
-    pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
 ) -> Result<HttpResponse> {
-    let current_user = get_current_user(&session, &pool);
     let mut ctx = base_context(&cfg, current_user.as_ref());
     ctx.insert("active_page", "trusted");
     ctx.insert("flash_messages", &flash::take(&session));
@@ -60,13 +59,14 @@ pub struct TrustedForm {
 
 /// GET and POST /trusted/request: the application form, or why the user can't apply.
 pub async fn request_trusted(
+    CurrentUser(user): CurrentUser,
     session: Session,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
     form: Option<web::Form<TrustedForm>>,
 ) -> Result<HttpResponse> {
-    let Some(user) = get_current_user(&session, &pool) else {
+    let Some(user) = user else {
         return Ok(redirect("/login"));
     };
     let mut conn = pool.get().map_err(internal_error)?;
@@ -126,14 +126,6 @@ pub async fn request_trusted(
     Ok(html(render(&tmpl, "trusted_form.html", &ctx)?))
 }
 
-fn require_moderator(session: &Session, pool: &DbPool) -> Result<User> {
-    let user = get_current_user(session, pool).ok_or_else(|| actix_web::error::ErrorForbidden("Not allowed"))?;
-    if !user.is_moderator() {
-        return Err(actix_web::error::ErrorForbidden("Not allowed"));
-    }
-    Ok(user)
-}
-
 #[derive(Debug, Deserialize)]
 pub struct ListParams {
     pub p: Option<i64>,
@@ -141,6 +133,7 @@ pub struct ListParams {
 
 /// GET /admin/trusted and /admin/trusted/{new,reviewed,closed}.
 pub async fn admin_trusted(
+    Moderator(user): Moderator,
     session: Session,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
@@ -148,7 +141,6 @@ pub async fn admin_trusted(
     path: Option<web::Path<String>>,
     params: web::Query<ListParams>,
 ) -> Result<HttpResponse> {
-    let user = require_moderator(&session, &pool)?;
     let list_filter = path.map(|p| p.into_inner());
     let filter =
         TrustedListFilter::parse(list_filter.as_deref()).ok_or_else(|| actix_web::error::ErrorNotFound("Not found"))?;
@@ -188,6 +180,7 @@ pub struct ReviewForm {
 /// GET and POST /admin/trusted/application/{id}: the application, its reviews, the review
 /// form, and for superadmins the accept and reject buttons.
 pub async fn admin_trusted_application(
+    Moderator(user): Moderator,
     session: Session,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
@@ -195,13 +188,12 @@ pub async fn admin_trusted_application(
     path: web::Path<i32>,
     form: Option<web::Form<ReviewForm>>,
 ) -> Result<HttpResponse> {
-    let user = require_moderator(&session, &pool)?;
     let app_id = path.into_inner();
     let mut conn = pool.get().map_err(internal_error)?;
     let app = TrustedApplication::by_id(&mut conn, app_id)
         .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Not found"))?;
-    let can_decide = user.is_superadmin() && !app.is_closed();
+    let can_decide = user.can(Permission::DecideTrusted) && !app.is_closed();
     let here = format!("/admin/trusted/application/{app_id}");
 
     let mut comment_errors: Vec<&str> = Vec::new();
@@ -260,6 +252,7 @@ pub async fn admin_trusted_application(
 mod tests {
     use super::*;
     use crate::config::TrustedConfig;
+    use crate::models::UserLevel;
     use actix_session::{storage::CookieSessionStore, SessionMiddleware};
     use actix_web::{
         cookie::{Cookie, Key},
@@ -417,7 +410,7 @@ mod tests {
         assert!(page.contains("Review successfully posted.") && page.contains("Reviews - 1"), "{page}");
         assert!(page.contains("mod recommends to <strong>accept</strong> this application."), "{page}");
         assert!(page.contains("<dd>Reviewed</dd>"), "{page}");
-        assert!(!User::by_id(&mut pool.get().unwrap(), 1).unwrap().unwrap().is_trusted());
+        assert!(User::by_id(&mut pool.get().unwrap(), 1).unwrap().unwrap().level() < UserLevel::Trusted);
 
         // The superadmin accepts
         let (app, mut c) = app!(pool, 3);
@@ -427,7 +420,7 @@ mod tests {
         let (_, _, page) = send!(app, c, get("/admin/trusted/application/1"));
         assert!(page.contains("Application has been accepted.") && page.contains("<dd>Accepted</dd>"), "{page}");
         assert!(!page.contains("name=\"accept\""), "closed applications have no decision buttons");
-        assert!(User::by_id(&mut pool.get().unwrap(), 1).unwrap().unwrap().is_trusted());
+        assert!(User::by_id(&mut pool.get().unwrap(), 1).unwrap().unwrap().level() >= UserLevel::Trusted);
         let (_, _, page) = send!(app, c, get("/admin/trusted/closed"));
         assert!(page.contains("List of closed applications") && page.contains("Accepted"), "{page}");
     }
@@ -439,6 +432,6 @@ mod tests {
         let res = test::call_service(&app, get("/trusted/request").to_request()).await;
         assert_eq!(res.headers().get("Location").unwrap(), "/login");
         let res = test::call_service(&app, get("/admin/trusted").to_request()).await;
-        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     }
 }

@@ -93,7 +93,7 @@ impl SearchQuery {
         order: Option<&str>,
         page: Option<i64>,
         per_page: i64,
-        is_admin: bool,
+        moderator: bool,
     ) -> Self {
         let (main_cat, sub_cat) = parse_category(cat);
         let quality_filter = filter.and_then(|f| f.parse().ok()).unwrap_or(0);
@@ -121,11 +121,11 @@ impl SearchQuery {
             order,
             page: page.unwrap_or(1).max(1),
             per_page,
-            include_deleted: is_admin,
-            include_hidden: is_admin,
+            include_deleted: moderator,
+            include_hidden: moderator,
             hide_anonymous: false,
             viewer_id: None,
-            moderator: is_admin,
+            moderator,
         }
     }
 }

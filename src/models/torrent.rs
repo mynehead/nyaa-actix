@@ -2,6 +2,7 @@ use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::auth::Permission;
 use crate::db::schema::{nyaa_statistics, nyaa_torrents};
 use crate::db::DbConnection;
 use crate::models::User;
@@ -140,7 +141,7 @@ impl Torrent {
     /// may (upstream `edit_torrent` and the view page's `can_edit`).
     pub fn can_edit(&self, user: Option<&User>) -> bool {
         match user {
-            Some(u) if u.is_moderator() => true,
+            Some(u) if u.can(Permission::ModerateTorrents) => true,
             Some(u) => Some(u.id) == self.uploader_id && !self.is_deleted() && !self.is_banned(),
             None => false,
         }
@@ -167,10 +168,10 @@ pub fn edited_flags(old: i32, edit: &EditFlags, editor: &User) -> i32 {
     flags.set(TorrentFlags::REMAKE, edit.remake);
     flags.set(TorrentFlags::COMPLETE, edit.complete);
     flags.set(TorrentFlags::ANONYMOUS, edit.anonymous);
-    if editor.is_trusted() {
+    if editor.can(Permission::SetTrustedFlag) {
         flags.set(TorrentFlags::TRUSTED, edit.trusted);
     }
-    if editor.is_moderator() {
+    if editor.can(Permission::ModerateTorrents) {
         flags.set(TorrentFlags::COMMENT_LOCKED, edit.comment_locked);
     }
     flags.bits()
@@ -196,7 +197,7 @@ pub fn danger_action(old: i32, action: DangerAction, editor: &User) -> Option<(i
             flags.insert(TorrentFlags::DELETED);
             "deleted"
         }
-        DangerAction::Ban if !banned && editor.is_moderator() => {
+        DangerAction::Ban if !banned && editor.can(Permission::ModerateTorrents) => {
             flags.insert(TorrentFlags::DELETED | TorrentFlags::BANNED);
             if deleted {
                 "banned"
@@ -204,7 +205,7 @@ pub fn danger_action(old: i32, action: DangerAction, editor: &User) -> Option<(i
                 "deleted and banned"
             }
         }
-        DangerAction::Undelete if deleted && editor.is_moderator() => {
+        DangerAction::Undelete if deleted && editor.can(Permission::ModerateTorrents) => {
             flags.remove(TorrentFlags::DELETED | TorrentFlags::BANNED);
             if banned {
                 "undeleted and unbanned"
@@ -212,7 +213,7 @@ pub fn danger_action(old: i32, action: DangerAction, editor: &User) -> Option<(i
                 "undeleted"
             }
         }
-        DangerAction::Unban if banned && editor.is_moderator() => {
+        DangerAction::Unban if banned && editor.can(Permission::ModerateTorrents) => {
             flags.remove(TorrentFlags::BANNED);
             "unbanned"
         }

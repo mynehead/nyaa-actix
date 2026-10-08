@@ -101,6 +101,8 @@ impl SearchState {
 pub fn base_context(cfg: &Config, current_user: Option<&User>) -> tera::Context {
     let mut ctx = tera::Context::new();
     ctx.insert("current_user", &current_user);
+    // What the user may do, so templates never compare levels themselves
+    ctx.insert("can", &crate::auth::permission_map(current_user));
     ctx.insert(
         "config",
         &serde_json::json!({

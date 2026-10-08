@@ -179,6 +179,6 @@ mod tests {
         u.level = UserLevel::SuperAdmin as i32;
         diesel::insert_into(users::table).values(&u).execute(&mut conn).unwrap();
         let user = User::by_username(&mut conn, "admin").unwrap().unwrap();
-        assert!(user.verify_password("admin") && user.is_active() && user.is_superadmin());
+        assert!(user.verify_password("admin") && user.is_active() && user.level() == UserLevel::SuperAdmin);
     }
 }

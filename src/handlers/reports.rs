@@ -7,10 +7,10 @@ use diesel::prelude::*;
 use serde::Deserialize;
 use tera::Tera;
 
+use crate::auth::{CurrentUser, Moderator, Permission};
 use crate::config::Config;
 use crate::db::schema::nyaa_torrents;
 use crate::db::DbPool;
-use crate::middleware::auth::get_current_user;
 use crate::models::{
     torrent_link, user_link, validate_reason, AdminLog, Group, GroupReport, Report, Torrent, TorrentFlags, User,
     REPORTS_PER_PAGE, REPORT_INVALID, REPORT_VALID,
@@ -32,13 +32,13 @@ pub struct ReportForm {
 }
 
 pub async fn submit_torrent_report(
+    CurrentUser(user): CurrentUser,
     session: Session,
     pool: web::Data<DbPool>,
     cfg: web::Data<Config>,
     path: web::Path<i32>,
     form: web::Form<ReportForm>,
 ) -> Result<HttpResponse> {
-    let user = get_current_user(&session, &pool);
     if !can_report(user.as_ref(), &cfg) {
         return Err(actix_web::error::ErrorForbidden("You may not report torrents"));
     }
@@ -48,7 +48,7 @@ pub async fn submit_torrent_report(
         .map_err(crate::utils::internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))?;
     // Deleted torrents are 404 to everyone but moderators, and banned ones need no report
-    if torrent.is_banned() || (torrent.is_deleted() && !user.is_moderator()) {
+    if torrent.is_banned() || (torrent.is_deleted() && !user.can(Permission::ModerateTorrents)) {
         return Err(actix_web::error::ErrorNotFound("Torrent not found"));
     }
 
@@ -63,13 +63,13 @@ pub async fn submit_torrent_report(
 }
 
 pub async fn submit_group_report(
+    CurrentUser(user): CurrentUser,
     session: Session,
     pool: web::Data<DbPool>,
     cfg: web::Data<Config>,
     path: web::Path<String>,
     form: web::Form<ReportForm>,
 ) -> Result<HttpResponse> {
-    let user = get_current_user(&session, &pool);
     if !can_report(user.as_ref(), &cfg) {
         return Err(actix_web::error::ErrorForbidden("You may not report groups"));
     }
@@ -97,22 +97,14 @@ pub struct ReportsQuery {
     pub gp: Option<i64>,
 }
 
-fn require_moderator(session: &Session, pool: &DbPool) -> Result<User> {
-    let user = get_current_user(session, pool).ok_or_else(|| actix_web::error::ErrorForbidden("Not allowed"))?;
-    if !user.is_moderator() {
-        return Err(actix_web::error::ErrorForbidden("Not allowed"));
-    }
-    Ok(user)
-}
-
 pub async fn admin_reports(
+    Moderator(moderator): Moderator,
     session: Session,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
     query: web::Query<ReportsQuery>,
 ) -> Result<HttpResponse> {
-    let moderator = require_moderator(&session, &pool)?;
     let mut conn = pool.get().map_err(crate::utils::internal_error)?;
     let err = crate::utils::internal_error;
 
@@ -133,7 +125,7 @@ pub async fn admin_reports(
         let uploader_ip = torrent
             .uploader_ip
             .as_deref()
-            .filter(|_| moderator.is_superadmin())
+            .filter(|_| moderator.can(Permission::SeeIps))
             .and_then(crate::utils::unpack_ip)
             .map(|ip| ip.to_string());
         rows.push(serde_json::json!({
@@ -175,12 +167,12 @@ pub struct ReportActionForm {
 }
 
 pub async fn admin_reports_post(
+    Moderator(moderator): Moderator,
     session: Session,
     pool: web::Data<DbPool>,
     cfg: web::Data<Config>,
     form: web::Form<ReportActionForm>,
 ) -> Result<HttpResponse> {
-    let moderator = require_moderator(&session, &pool)?;
     let mut conn = pool.get().map_err(crate::utils::internal_error)?;
     let err = crate::utils::internal_error;
     let not_found = || actix_web::error::ErrorNotFound("Report not found");
@@ -445,13 +437,16 @@ mod tests {
     async fn queue_is_for_moderators_only() {
         let pool = pool();
         Report::create(&mut pool.get().unwrap(), 5, 2, "Fake release").unwrap();
-        for user in [None, Some(1), Some(2)] {
+        // Guests get 401 like on the other admin pages, logged-in non-moderators 403
+        for (user, expected) in
+            [(None, StatusCode::UNAUTHORIZED), (Some(1), StatusCode::FORBIDDEN), (Some(2), StatusCode::FORBIDDEN)]
+        {
             let (app, mut cookie) = app!(pool, user);
             let res = test::call_service(&app, get("/admin/reports", &cookie).to_request()).await;
-            assert_eq!(res.status(), StatusCode::FORBIDDEN, "{user:?}");
+            assert_eq!(res.status(), expected, "{user:?}");
             let status =
                 send!(app, post("/admin/reports", &cookie, &[("report", "1"), ("action", "delete")]), &mut cookie);
-            assert_eq!(status, StatusCode::FORBIDDEN, "{user:?}");
+            assert_eq!(status, expected, "{user:?}");
         }
         assert_eq!((statuses(&pool), flags(&pool)), (vec![REPORT_IN_REVIEW], 0));
     }

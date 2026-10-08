@@ -269,7 +269,7 @@ impl TrustedApplication {
 /// Why `user` may not apply for trusted status right now; empty when they may.
 pub fn trusted_deny_reasons(conn: &mut DbConnection, user: &User, cfg: &TrustedConfig) -> QueryResult<Vec<String>> {
     let mut reasons = Vec::new();
-    if user.is_trusted() {
+    if user.level() >= UserLevel::Trusted {
         reasons.push("You are already trusted.".to_string());
     }
     if !satisfies_trusted_reqs(conn, user.id, cfg)? {
@@ -391,7 +391,7 @@ mod tests {
         assert!(!app.decide(&mut conn, 2, false).unwrap(), "a closed application stays closed");
         assert_eq!(TrustedApplication::list(&mut conn, TrustedListFilter::Closed, 1, 20).unwrap().1, 1);
         let u = user(&mut conn, 1);
-        assert!(u.is_trusted());
+        assert_eq!(u.level(), UserLevel::Trusted);
         let (log, _) = AdminLog::page(&mut conn, 1, 10).unwrap();
         let log: Vec<&str> = log.iter().map(|e| e.entry.log.as_str()).collect();
         assert_eq!(
@@ -412,7 +412,7 @@ mod tests {
         let app = TrustedApplication::by_id(&mut conn, 1).unwrap().unwrap();
         assert!(app.decide(&mut conn, 2, false).unwrap());
         let u = user(&mut conn, 1);
-        assert!(!u.is_trusted());
+        assert_eq!(u.level(), UserLevel::Regular);
         assert_eq!(
             trusted_deny_reasons(&mut conn, &u, &cfg).unwrap(),
             vec!["Your last application was rejected less than 90 days ago."]

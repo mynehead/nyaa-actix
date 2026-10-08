@@ -3,10 +3,11 @@ use actix_web::{web, HttpResponse, Result};
 use serde::Deserialize;
 use tera::Tera;
 
+use crate::auth::policy::can_ban;
+use crate::auth::{CurrentUser, LoggedIn, Permission};
 use crate::config::Config;
 use crate::db::schema::{bans, users};
 use crate::db::DbPool;
-use crate::middleware::auth::get_current_user;
 use crate::models::{user_link, AdminLog, Ban, NewBan, User, UserStatus, MAX_BAN_REASON_LEN};
 use crate::search::db::{with_stats, SearchQuery};
 use crate::search::search;
@@ -27,6 +28,7 @@ pub struct UserSearchParams {
 }
 
 pub async fn view_user(
+    CurrentUser(current_user): CurrentUser,
     session: Session,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
@@ -35,8 +37,7 @@ pub async fn view_user(
     params: web::Query<UserSearchParams>,
 ) -> Result<HttpResponse> {
     let username = path.into_inner();
-    let current_user = get_current_user(&session, &pool);
-    let is_admin = current_user.as_ref().map(|u| u.is_moderator()).unwrap_or(false);
+    let moderator = current_user.as_ref().is_some_and(|u| u.can(Permission::ModerateTorrents));
 
     let mut conn = pool.get().map_err(internal_error)?;
     let profile_user = User::by_username(&mut conn, &username)
@@ -53,13 +54,13 @@ pub async fn view_user(
         params.o.as_deref(),
         params.p,
         cfg.results_per_page,
-        is_admin,
+        moderator,
     );
     // Owners and moderators see everything on the profile; everyone else
     // sees neither hidden nor anonymous uploads.
     let is_owner = current_user.as_ref().map(|u| u.id == profile_user.id).unwrap_or(false);
-    q.include_hidden = is_admin || is_owner;
-    q.hide_anonymous = !(is_admin || is_owner);
+    q.include_hidden = moderator || is_owner;
+    q.hide_anonymous = !(moderator || is_owner);
 
     let result = search(&mut conn, cfg.meili.as_ref(), &q).map_err(internal_error)?;
     let pagination = Pagination::new(q.page, result.total, q.per_page);
@@ -82,7 +83,7 @@ pub async fn view_user(
         ctx.insert("ban_form", &true);
         ctx.insert("bans", &bans);
         ctx.insert("ip_banned", &ip_banned);
-        if moderator.is_superadmin() {
+        if moderator.can(Permission::SeeIps) {
             let ip = |b: &Option<Vec<u8>>| b.as_deref().and_then(unpack_ip).map(|ip| ip.to_string());
             ctx.insert("last_login_ip", &ip(&profile_user.last_login_ip));
             ctx.insert("registration_ip", &ip(&profile_user.registration_ip));
@@ -107,11 +108,6 @@ pub async fn avatar(storage: web::Data<crate::storage::Storage>, path: web::Path
         .body(data))
 }
 
-/// Upstream shows the user page's Danger Zone to moderators above the user's level.
-fn can_ban(moderator: &User, user: &User) -> bool {
-    moderator.is_moderator() && moderator.level > user.level
-}
-
 /// The user page's Danger Zone form (upstream `BanForm`): one of the three buttons, and
 /// a reason for the bans.
 #[derive(Debug, Default, Deserialize)]
@@ -125,13 +121,12 @@ pub struct BanForm {
 
 /// Bans or unbans the user, as upstream's `view_user` POST.
 pub async fn ban_user_post(
+    LoggedIn(moderator): LoggedIn,
     session: Session,
     pool: web::Data<DbPool>,
     path: web::Path<String>,
     form: web::Form<BanForm>,
 ) -> Result<HttpResponse> {
-    let moderator =
-        get_current_user(&session, &pool).ok_or_else(|| actix_web::error::ErrorUnauthorized("Login required"))?;
     let mut conn = pool.get().map_err(internal_error)?;
     let user = User::by_username(&mut conn, &path.into_inner())
         .map_err(internal_error)?
