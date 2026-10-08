@@ -123,6 +123,8 @@ async fn main() -> std::io::Result<()> {
             // Users
             .route("/user/{username}", web::get().to(handlers::users::view_user))
             .route("/user/{username}", web::post().to(handlers::users::ban_user_post))
+            .route("/user/{username}/nuke/torrents", web::post().to(handlers::users::nuke_torrents_post))
+            .route("/user/{username}/nuke/comments", web::post().to(handlers::users::nuke_comments_post))
             .route("/user/{username}/comments", web::get().to(handlers::users::view_user_comments))
             // Account
             // Account pages sit at the root like upstream; /account/* redirects for old links
