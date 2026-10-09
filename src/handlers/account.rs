@@ -10,6 +10,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tera::Tera;
 
+use crate::auth::email_blacklist::BLACKLISTED;
 use crate::auth::mfa::UserMfa;
 use crate::auth::CurrentUser;
 use crate::config::Config;
@@ -104,9 +105,14 @@ pub async fn login_post(
                 None => "Your account has been banned.".to_string(),
             })
         }
-        Some(ref u) if password_ok && u.status == UserStatus::Inactive as i32 => {
-            Some("Your account is not activated yet. Open the link in the email we sent you.".to_string())
-        }
+        Some(ref u) if password_ok && u.status == UserStatus::Inactive as i32 => Some(
+            if cfg.mail.verification().is_some() && !cfg.raid_mode.limit_register {
+                "Your account is not activated yet. Open the link in the email we sent you."
+            } else {
+                "Your account is not activated yet. Ask a moderator to activate it."
+            }
+            .to_string(),
+        ),
         _ => Some("Invalid username or password.".to_string()),
     };
 
@@ -156,8 +162,14 @@ pub async fn register_post(
     if User::username_taken(&mut conn, username).map_err(internal_error)? {
         errors.push("Username is already taken.".into());
     }
-    if User::by_email(&mut conn, email).map_err(internal_error)?.is_some() {
+    // As upstream: the address blacklist goes before the in-use check, the mail server
+    // lookup (DNS) only when the form is otherwise fine
+    if cfg.email_blacklist.blocks_address(email) {
+        errors.push(BLACKLISTED.into());
+    } else if User::by_email(&mut conn, email).map_err(internal_error)?.is_some() {
         errors.push("Email is already in use.".into());
+    } else if errors.is_empty() && cfg.email_blacklist.blocks_server(email).await {
+        errors.push(BLACKLISTED.into());
     }
 
     let render_errors = |errors: &[String]| -> Result<HttpResponse> {
@@ -175,9 +187,11 @@ pub async fn register_post(
     let (name, mail, password) = (username.to_string(), email.to_string(), form.password.clone());
     let mut new_user = web::block(move || NewUser::new(&name, Some(&mail), &password)).await?;
     new_user.registration_ip = client_ip(&req);
-    // With email verification, the account waits for its activation link
-    let verification = cfg.mail.verification().cloned();
-    if verification.is_some() {
+    // In raid mode the account waits for a moderator; with email verification, for its
+    // activation link
+    let raid_mode = cfg.raid_mode.limit_register;
+    let verification = if raid_mode { None } else { cfg.mail.verification().cloned() };
+    if raid_mode || verification.is_some() {
         new_user.status = UserStatus::Inactive as i32;
     }
     // Two sign-ups for the same name or email at once: the second hits the UNIQUE index
@@ -191,6 +205,15 @@ pub async fn register_post(
     let user = User::by_username(&mut conn, username)
         .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorInternalServerError("Failed to fetch user"))?;
+
+    if raid_mode {
+        let mut ctx = base_context(&cfg, None);
+        ctx.insert("errors", &Vec::<String>::new());
+        ctx.insert("raid_message", &cfg.raid_mode.register_message);
+        ctx.insert("registered", &user.username);
+        let html = tmpl.render("register.html", &ctx).map_err(internal_error)?;
+        return Ok(HttpResponse::Ok().content_type("text/html").body(html));
+    }
 
     if let Some(mailer) = verification {
         let token = token::sign(&cfg.secret_key, ACTIVATE, &[user.id.into()]);
@@ -745,7 +768,7 @@ pub async fn avatar_post(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use actix_session::{storage::CookieSessionStore, SessionMiddleware};
     use actix_web::{
@@ -771,7 +794,7 @@ mod tests {
         pool
     }
 
-    fn config(test: &str) -> Config {
+    pub(crate) fn config(test: &str) -> Config {
         let avatars = std::env::temp_dir().join(format!("nyaa-avatar-test-{}-{}", std::process::id(), test));
         Config {
             database_url: String::new(),
@@ -788,7 +811,10 @@ mod tests {
             show_stats: true,
             max_files_view: 1000,
             required_announce_url: None,
+            gravatar_url: crate::config::DEFAULT_GRAVATAR_URL.into(),
+            gravatar_sha256: false,
             maintenance: Default::default(),
+            raid_mode: Default::default(),
             site_url: "http://localhost:8080".into(),
             tracker_urls: vec![],
             trusted_proxies: vec![],
@@ -802,6 +828,7 @@ mod tests {
             trusted: Default::default(),
             tickets: Default::default(),
             mfa: Default::default(),
+            email_blacklist: crate::auth::email_blacklist::EmailBlacklist::upstream_defaults(),
         }
     }
 
@@ -820,6 +847,7 @@ mod tests {
                         Storage::local(&$cfg.avatar_storage_path, &$cfg.avatar_storage_path).unwrap(),
                     ))
                     .app_data(web::Data::new(tera))
+                    .app_data(web::Data::new(crate::utils::gravatar::GravatarProxy::new()))
                     .wrap(SessionMiddleware::new(CookieSessionStore::default(), Key::from(&[7u8; 64])))
                     .route("/login/{id}", web::get().to(login_as))
                     .route("/login", web::post().to(login_post))
@@ -918,6 +946,9 @@ mod tests {
         let (status, page) = register("carl", "carl").await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(page.contains("Please enter a valid email address."), "{page}");
+        let (status, page) = register("dave", "Dave@Hotmail.com").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(page.contains("Blacklisted email provider"), "{page}");
         let (status, _) = register(" carl ", "carl@example.com").await;
         assert_eq!(status, StatusCode::FOUND);
         assert!(User::by_username(&mut pool.get().unwrap(), "carl").unwrap().is_some(), "stored trimmed");
@@ -1302,14 +1333,44 @@ mod tests {
         let mut user = User { avatar_time: None, ..User::by_id(&mut pool().get().unwrap(), 1).unwrap().unwrap() };
         assert_eq!(user.avatar_url(&cfg), "/static/img/avatar/default.png");
         cfg.enable_gravatar = true;
-        // md5("alice@example.com")
-        assert_eq!(
-            user.avatar_url(&cfg),
-            "https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060\
-            ?s=120&d=http%3A%2F%2Flocalhost%3A8080%2Fstatic%2Fimg%2Favatar%2Fdefault.png&r=pg"
-        );
+        // Served by the site itself; no hash in the page
+        assert_eq!(user.avatar_url(&cfg), "/avatar/1");
         user.avatar_time = Some(chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap().naive_utc());
         assert_eq!(user.avatar_url(&cfg), "/avatar/1?v=1700000000");
+    }
+
+    #[actix_web::test]
+    async fn gravatar_is_proxied_from_the_configured_service() {
+        let (pool, mut cfg) = (pool(), config("gravatar-proxy"));
+        cfg.enable_gravatar = true;
+        cfg.gravatar_sha256 = true;
+        let (base, paths, _) = crate::utils::gravatar::tests::fake_service("200 OK", "image/jpeg", b"jpg".to_vec());
+        cfg.gravatar_url = base;
+        let (app, _) = app!(pool, cfg);
+        let res = test::call_service(&app, test::TestRequest::get().uri("/avatar/1").to_request()).await;
+        assert_eq!(res.status(), 200);
+        assert_eq!(res.headers().get("content-type").unwrap(), "image/jpeg");
+        assert_eq!(test::read_body(res).await, "jpg");
+        // sha256("alice@example.com")
+        assert_eq!(
+            paths.lock().unwrap()[0],
+            "/avatar/ff8d9819fc0e12bf0d24892e45987e249a28dce836a85cad60e28eaaa8c6d976?s=120&d=404&r=pg"
+        );
+
+        // No Gravatar there: the default avatar
+        cfg.gravatar_url = crate::utils::gravatar::tests::fake_service("404 Not Found", "text/html", vec![]).0;
+        let (app, _) = app!(pool, cfg);
+        let res = test::call_service(&app, test::TestRequest::get().uri("/avatar/1").to_request()).await;
+        assert_eq!(res.status(), 302);
+        assert_eq!(res.headers().get("location").unwrap(), "/static/img/avatar/default.png");
+        // Unknown users and a disabled ENABLE_GRAVATAR stay a 404
+        let res = test::call_service(&app, test::TestRequest::get().uri("/avatar/999").to_request()).await;
+        assert_eq!(res.status(), 404);
+        cfg.enable_gravatar = false;
+        let (app, _) = app!(pool, cfg);
+        let res = test::call_service(&app, test::TestRequest::get().uri("/avatar/1").to_request()).await;
+        assert_eq!(res.status(), 404);
+        std::fs::remove_dir_all(&cfg.avatar_storage_path).ok();
     }
 
     #[::core::prelude::v1::test]
@@ -1322,10 +1383,15 @@ mod tests {
         }
     }
 
-    /// The account routes with mail on (`MAIL_BACKEND=log`); `verify` turns on email verification.
+    /// The account routes with mail on (`MAIL_BACKEND=log`); `verify` turns on email verification
+    /// and `raid` RAID_MODE_LIMIT_REGISTER.
     macro_rules! mail_app {
-        ($pool:expr, $verify:expr) => {{
+        ($pool:expr, $verify:expr) => {
+            mail_app!($pool, $verify, false)
+        };
+        ($pool:expr, $verify:expr, $raid:expr) => {{
             let mut cfg = config("mail");
+            cfg.raid_mode.limit_register = $raid;
             cfg.mail = crate::mail::MailConfig {
                 mailer: Some(crate::mail::Mailer::Log { from: "noreply@nyaa.test".parse().unwrap() }),
                 use_email_verification: $verify,
@@ -1403,6 +1469,33 @@ mod tests {
             .unwrap();
         test::call_service(&app, get(link)).await;
         assert!(User::by_id(&mut pool.get().unwrap(), carol.id).unwrap().unwrap().is_banned());
+    }
+
+    #[actix_web::test]
+    async fn raid_mode_leaves_new_accounts_for_a_moderator() {
+        let pool = pool();
+        // Even with email verification on, no activation mail goes out
+        let app = mail_app!(pool, true, true);
+        let form = [
+            ("username", "dave"),
+            ("email", "dave@example.com"),
+            ("password", PASSWORD),
+            ("password_confirm", PASSWORD),
+        ];
+        let res =
+            test::call_service(&app, test::TestRequest::post().uri("/register").set_form(form).to_request()).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(res.response().cookies().next().is_none(), "not logged in");
+        let page = body_of(test::read_body(res).await);
+        assert!(page.contains("Registration is currently being limited."), "{page}");
+        assert!(page.contains("manually activate your account <a href=\"/user/dave\">"), "{page}");
+        assert!(!page.contains("We sent an email"), "{page}");
+        let dave = User::by_username(&mut pool.get().unwrap(), "dave").unwrap().unwrap();
+        assert_eq!(dave.status, UserStatus::Inactive as i32);
+
+        let (status, page) = try_login!(app, "dave", PASSWORD);
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert!(page.contains("Ask a moderator to activate it."), "{page}");
     }
 
     #[actix_web::test]

@@ -88,7 +88,10 @@ mod tests {
             show_stats: true,
             max_files_view: 1000,
             required_announce_url: None,
+            gravatar_url: crate::config::DEFAULT_GRAVATAR_URL.into(),
+            gravatar_sha256: false,
             maintenance: Default::default(),
+            raid_mode: Default::default(),
             site_url: site_url.into(),
             tracker_urls: vec![],
             trusted_proxies: vec![],
@@ -102,6 +105,7 @@ mod tests {
             trusted: Default::default(),
             tickets: Default::default(),
             mfa: Default::default(),
+            email_blacklist: Default::default(),
         };
         let app = atest::init_service(
             App::new()

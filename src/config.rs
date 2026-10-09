@@ -1,5 +1,8 @@
 use std::env;
 
+/// Upstream's Gravatar endpoint, used unless GRAVATAR_URL points elsewhere.
+pub const DEFAULT_GRAVATAR_URL: &str = "https://www.gravatar.com/avatar";
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub database_url: String,
@@ -27,8 +30,15 @@ pub struct Config {
     /// Upstream ENFORCE_MAIN_ANNOUNCE_URL with MAIN_ANNOUNCE_URL: uploads must list this
     /// tracker. None accepts any trackers.
     pub required_announce_url: Option<String>,
+    /// GRAVATAR_URL: base of a Gravatar-compatible avatar service (gravatar.com, Libravatar
+    /// or a self-hosted instance), without the trailing slash; the hash is appended to it.
+    pub gravatar_url: String,
+    /// GRAVATAR_HASH=sha256: hash the email with SHA-256 instead of upstream's MD5.
+    pub gravatar_sha256: bool,
     /// Upstream MAINTENANCE_MODE and friends: a read-only site with a notice.
     pub maintenance: MaintenanceConfig,
+    /// Upstream RAID_MODE_LIMIT_REGISTER and RAID_MODE_REGISTER_MESSAGE.
+    pub raid_mode: RaidModeConfig,
     /// Public base URL of the site, used in the .torrent comment field.
     pub site_url: String,
     /// Announce URLs written into magnets and .torrent files, own tracker first.
@@ -58,6 +68,8 @@ pub struct Config {
     pub tickets: TicketConfig,
     /// Two-factor sign-in (MFA_REQUIRED_LEVEL, MFA_ISSUER_NAME).
     pub mfa: crate::auth::mfa::MfaConfig,
+    /// Upstream EMAIL_BLACKLIST and EMAIL_SERVER_BLACKLIST: email providers registration turns away.
+    pub email_blacklist: crate::auth::email_blacklist::EmailBlacklist,
 }
 
 /// Upstream's maintenance mode: every page still shows, with `message` on top, but nothing
@@ -91,6 +103,39 @@ impl MaintenanceConfig {
             enabled: flag("MAINTENANCE_MODE", d.enabled),
             message: env::var("MAINTENANCE_MODE_MESSAGE").ok().filter(|m| !m.trim().is_empty()).unwrap_or(d.message),
             logins: flag("MAINTENANCE_MODE_LOGINS", d.logins),
+        }
+    }
+}
+
+/// Upstream's raid mode for registration: sign-ups still create an account, but it stays
+/// inactive (no login, no verification mail) until a moderator activates it on the user's
+/// page. Upstream's RAID_MODE_LIMIT_UPLOADS is not here because uploads need an account.
+#[derive(Clone, Debug)]
+pub struct RaidModeConfig {
+    /// RAID_MODE_LIMIT_REGISTER
+    pub limit_register: bool,
+    /// RAID_MODE_REGISTER_MESSAGE, shown before the "ask a moderator" note.
+    pub register_message: String,
+}
+
+impl Default for RaidModeConfig {
+    fn default() -> Self {
+        RaidModeConfig { limit_register: false, register_message: "Registration is currently being limited.".into() }
+    }
+}
+
+impl RaidModeConfig {
+    fn from_env() -> Self {
+        let d = RaidModeConfig::default();
+        RaidModeConfig {
+            limit_register: env::var("RAID_MODE_LIMIT_REGISTER")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(d.limit_register),
+            register_message: env::var("RAID_MODE_REGISTER_MESSAGE")
+                .ok()
+                .filter(|m| !m.trim().is_empty())
+                .unwrap_or(d.register_message),
         }
     }
 }
@@ -227,7 +272,18 @@ impl Config {
             required_announce_url: flag("ENFORCE_MAIN_ANNOUNCE_URL", false)
                 .then(|| non_empty("MAIN_ANNOUNCE_URL").or_else(|| tracker_urls.first().cloned()))
                 .flatten(),
+            gravatar_url: env::var("GRAVATAR_URL")
+                .ok()
+                .map(|v| v.trim().trim_end_matches('/').to_string())
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| DEFAULT_GRAVATAR_URL.into()),
+            gravatar_sha256: match env::var("GRAVATAR_HASH").unwrap_or_default().trim().to_ascii_lowercase().as_str() {
+                "" | "md5" => false,
+                "sha256" => true,
+                other => panic!("GRAVATAR_HASH must be md5 or sha256, got {:?}", other),
+            },
             maintenance: MaintenanceConfig::from_env(),
+            raid_mode: RaidModeConfig::from_env(),
             site_url: env::var("SITE_URL")
                 .unwrap_or_else(|_| "http://localhost:8080".into())
                 .trim_end_matches('/')
@@ -249,6 +305,7 @@ impl Config {
             tracker: crate::tracker::Tracker::from_env(),
             trusted: TrustedConfig::from_env(),
             tickets: TicketConfig::from_env(),
+            email_blacklist: crate::auth::email_blacklist::EmailBlacklist::from_env(),
         }
     }
 
@@ -270,7 +327,10 @@ impl Config {
             show_stats: true,
             max_files_view: 1000,
             required_announce_url: None,
+            gravatar_url: crate::config::DEFAULT_GRAVATAR_URL.into(),
+            gravatar_sha256: false,
             maintenance: Default::default(),
+            raid_mode: Default::default(),
             site_url: String::new(),
             tracker_urls: vec![],
             trusted_proxies: vec![],
@@ -284,6 +344,7 @@ impl Config {
             trusted: Default::default(),
             tickets: Default::default(),
             mfa: Default::default(),
+            email_blacklist: Default::default(),
         }
     }
 

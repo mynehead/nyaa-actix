@@ -143,25 +143,15 @@ impl User {
         verify_hash(&self.password_hash, password)
     }
 
-    /// The uploaded avatar, else Gravatar when enabled (upstream `gravatar_url`), else the default.
+    /// The uploaded avatar, else Gravatar (or the GRAVATAR_URL service) when enabled (upstream
+    /// `gravatar_url`), else the default. Gravatars are fetched and served by `/avatar/{id}`
+    /// (see `utils::gravatar`), so pages never carry the email hash.
     pub fn avatar_url(&self, cfg: &Config) -> String {
         if let Some(t) = self.avatar_time {
             return format!("/avatar/{}?v={}", self.id, t.and_utc().timestamp());
         }
         match &self.email {
-            Some(email) if cfg.enable_gravatar => {
-                use md5::{Digest, Md5};
-                let hash = hex::encode(Md5::digest(email.to_lowercase().as_bytes()));
-                let default_url = format!("{}{}", cfg.site_url, DEFAULT_AVATAR);
-                // Nyaa: PG-rated, Sukebei: X-rated
-                let rating = if cfg.site_flavor == "nyaa" { "pg" } else { "x" };
-                format!(
-                    "https://www.gravatar.com/avatar/{}?s=120&d={}&r={}",
-                    hash,
-                    urlencoding::encode(&default_url),
-                    rating
-                )
-            }
+            Some(_) if cfg.enable_gravatar => format!("/avatar/{}", self.id),
             _ => DEFAULT_AVATAR.to_string(),
         }
     }

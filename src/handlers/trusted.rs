@@ -292,7 +292,10 @@ mod tests {
             show_stats: true,
             max_files_view: 1000,
             required_announce_url: None,
+            gravatar_url: crate::config::DEFAULT_GRAVATAR_URL.into(),
+            gravatar_sha256: false,
             maintenance: Default::default(),
+            raid_mode: Default::default(),
             site_url: String::new(),
             tracker_urls: vec![],
             trusted_proxies: vec![],
@@ -306,6 +309,7 @@ mod tests {
             trusted: TrustedConfig { min_uploads: 0, min_downloads: 0, reapply_cooldown_days: 90 },
             tickets: Default::default(),
             mfa: Default::default(),
+            email_blacklist: Default::default(),
         }
     }
 
