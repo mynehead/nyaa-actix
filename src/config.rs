@@ -29,6 +29,8 @@ pub struct Config {
     pub editing_time_limit: i64,
     /// Upstream's upload rate limit for accounts younger than RATELIMIT_ACCOUNT_AGE.
     pub upload_limit: UploadLimitConfig,
+    /// Account mails: MAIL_BACKEND, USE_EMAIL_VERIFICATION, ALLOW_PASSWORD_RESET and friends.
+    pub mail: crate::mail::MailConfig,
     /// Meilisearch for text search and stats sorts (MEILI_URL and friends); None keeps search on SQLite.
     pub meili: Option<crate::search::meili::Meili>,
     /// The tracker's management API (TRACKER_API_URL and TRACKER_API_KEY) for the whitelist
@@ -213,6 +215,7 @@ impl Config {
                 .unwrap_or(7 * 24 * 3600),
             editing_time_limit: env::var("EDITING_TIME_LIMIT").ok().and_then(|v| v.parse().ok()).unwrap_or(3600),
             upload_limit: UploadLimitConfig::from_env(),
+            mail: crate::mail::MailConfig::from_env(),
             meili: crate::search::meili::Meili::from_env(),
             tracker: crate::tracker::Tracker::from_env(),
             trusted: TrustedConfig::from_env(),
@@ -242,6 +245,7 @@ impl Config {
             ratelimit_account_age: 0,
             editing_time_limit: 0,
             upload_limit: Default::default(),
+            mail: Default::default(),
             trusted: Default::default(),
             tickets: Default::default(),
             mfa: Default::default(),

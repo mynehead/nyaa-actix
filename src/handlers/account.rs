@@ -16,11 +16,11 @@ use crate::config::Config;
 use crate::db::schema::users;
 use crate::db::{DbConnection, DbPool};
 use crate::middleware::auth::{login_user, logout_everywhere, logout_user, session_auth_method, AuthMethod};
-use crate::models::{password_matches, Ban, NewUser, User};
+use crate::models::{password_matches, Ban, NewUser, User, UserStatus};
 use crate::storage::{Kind, Storage};
 use crate::utils::context::base_context;
 use crate::utils::throttle::Throttle;
-use crate::utils::{avatar, client_addr, client_ip, flash, internal_error};
+use crate::utils::{avatar, client_addr, client_ip, flash, internal_error, token};
 
 #[derive(Debug, Deserialize)]
 pub struct LoginForm {
@@ -48,6 +48,8 @@ pub async fn login_get(
     let mut ctx = base_context(&cfg, None);
     ctx.insert("flash_messages", &flash::take(&session));
     ctx.insert("error", &Option::<String>::None);
+    // Activation and password reset land here with a message
+    ctx.insert("flash_messages", &flash::take(&session));
     let html = tmpl.render("login.html", &ctx).map_err(internal_error)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
@@ -101,6 +103,9 @@ pub async fn login_post(
                 ),
                 None => "Your account has been banned.".to_string(),
             })
+        }
+        Some(ref u) if password_ok && u.status == UserStatus::Inactive as i32 => {
+            Some("Your account is not activated yet. Open the link in the email we sent you.".to_string())
         }
         _ => Some("Invalid username or password.".to_string()),
     };
@@ -170,6 +175,11 @@ pub async fn register_post(
     let (name, mail, password) = (username.to_string(), email.to_string(), form.password.clone());
     let mut new_user = web::block(move || NewUser::new(&name, Some(&mail), &password)).await?;
     new_user.registration_ip = client_ip(&req);
+    // With email verification, the account waits for its activation link
+    let verification = cfg.mail.verification().cloned();
+    if verification.is_some() {
+        new_user.status = UserStatus::Inactive as i32;
+    }
     // Two sign-ups for the same name or email at once: the second hits the UNIQUE index
     match diesel::insert_into(users::table).values(&new_user).execute(&mut conn) {
         Err(diesel::result::Error::DatabaseError(diesel::result::DatabaseErrorKind::UniqueViolation, _)) => {
@@ -181,6 +191,17 @@ pub async fn register_post(
     let user = User::by_username(&mut conn, username)
         .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorInternalServerError("Failed to fetch user"))?;
+
+    if let Some(mailer) = verification {
+        let token = token::sign(&cfg.secret_key, ACTIVATE, &[user.id.into()]);
+        let link = format!("{}/user/activate/{token}", cfg.site_url);
+        let sent = web::block(mail_job(&tmpl, &cfg, mailer, email, "email/verify.txt", &link)?).await?;
+        let mut ctx = base_context(&cfg, None);
+        ctx.insert("email", email);
+        ctx.insert("sent", &sent);
+        let html = tmpl.render("waiting.html", &ctx).map_err(internal_error)?;
+        return Ok(HttpResponse::Ok().content_type("text/html").body(html));
+    }
 
     complete_login(&session, &mut conn, &user, client_ip(&req))
 }
@@ -226,6 +247,236 @@ pub(crate) fn complete_login(
     // Also records last_login_date and last_login_ip, which IP bans from the user page use
     login_user(session, conn, user.id, ip, AuthMethod::Password).map_err(internal_error)?;
     Ok(redirect("/"))
+}
+
+/// Token purposes for the mailed links.
+const ACTIVATE: &str = "activate";
+const RESET_PASSWORD: &str = "reset-password";
+/// Upstream's password reset links work for six hours.
+const RESET_LINK_SECS: i64 = 6 * 3600;
+
+/// Renders `template` (subject on its first line, then the body) with `link` and returns a
+/// blocking job that mails it, true if it went out; failures are logged, not shown.
+fn mail_job(
+    tmpl: &Tera,
+    cfg: &Config,
+    mailer: crate::mail::Mailer,
+    to: &str,
+    template: &'static str,
+    link: &str,
+) -> Result<impl FnOnce() -> bool + Send + 'static> {
+    let mut ctx = tera::Context::new();
+    ctx.insert("site_name", &cfg.site_name);
+    ctx.insert("link", link);
+    let text = tmpl.render(template, &ctx).map_err(internal_error)?;
+    let (subject, body) = text.split_once('\n').unwrap_or((&text, ""));
+    let (to, subject, body) = (to.to_string(), subject.trim().to_string(), body.trim_start().to_string());
+    Ok(move || match mailer.send(&to, &subject, body) {
+        Ok(()) => true,
+        Err(e) => {
+            log::error!("{template}: {e}");
+            false
+        }
+    })
+}
+
+/// Upstream's `/user/activate/<payload>`: the link mailed on registration activates the
+/// account. Only inactive accounts change, so an old link never lifts a ban.
+pub async fn activate(
+    session: Session,
+    pool: web::Data<DbPool>,
+    cfg: web::Data<Config>,
+    path: web::Path<String>,
+) -> Result<HttpResponse> {
+    let not_found = || actix_web::error::ErrorNotFound("Invalid activation link");
+    let fields = token::verify(&cfg.secret_key, ACTIVATE, &path).ok_or_else(not_found)?;
+    let user_id =
+        fields.first().and_then(|id| id.as_i64()).and_then(|id| i32::try_from(id).ok()).ok_or_else(not_found)?;
+    if cfg.maintenance.enabled {
+        flash::push(&session, "danger", "Activations are currently disabled.", &cfg.maintenance.message);
+        return Ok(redirect("/login"));
+    }
+    let mut conn = pool.get().map_err(internal_error)?;
+    let user = User::by_id(&mut conn, user_id).map_err(internal_error)?.ok_or_else(not_found)?;
+    diesel::update(users::table.find(user.id).filter(users::status.eq(UserStatus::Inactive as i32)))
+        .set(users::status.eq(UserStatus::Active as i32))
+        .execute(&mut conn)
+        .map_err(internal_error)?;
+    if !user.is_banned() {
+        flash::push(&session, "success", "Your account is now activated.", "You can log in.");
+    }
+    Ok(redirect("/login"))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PasswordResetRequestForm {
+    #[serde(default)]
+    pub email: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PasswordResetForm {
+    #[serde(default)]
+    pub password: String,
+    #[serde(default)]
+    pub password_confirm: String,
+}
+
+/// Reset requests per address per hour, so the form can't be used to flood inboxes.
+static RESET_REQUESTS_BY_IP: LazyLock<Throttle> = LazyLock::new(|| Throttle::new(10, Duration::from_secs(60 * 60)));
+
+/// The password reset pages exist only with ALLOW_PASSWORD_RESET and a mailer, and only for guests.
+fn reset_mailer(
+    cfg: &Config,
+    current_user: &Option<User>,
+) -> Result<std::result::Result<crate::mail::Mailer, HttpResponse>> {
+    let mailer = cfg.mail.password_reset().cloned().ok_or_else(|| actix_web::error::ErrorNotFound("Not found"))?;
+    Ok(if current_user.is_some() { Err(redirect("/")) } else { Ok(mailer) })
+}
+
+/// Upstream's GET /password-reset: asks for the account's email address.
+pub async fn password_reset_request_get(
+    CurrentUser(current_user): CurrentUser,
+    tmpl: web::Data<Tera>,
+    cfg: web::Data<Config>,
+) -> Result<HttpResponse> {
+    if let Err(response) = reset_mailer(&cfg, &current_user)? {
+        return Ok(response);
+    }
+    let html = tmpl.render("password_reset_request.html", &base_context(&cfg, None)).map_err(internal_error)?;
+    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+}
+
+/// Upstream's POST /password-reset: mails a reset link if an account has that address, and
+/// says the same either way, so the form doesn't tell which addresses have accounts.
+pub async fn password_reset_request_post(
+    CurrentUser(current_user): CurrentUser,
+    req: HttpRequest,
+    session: Session,
+    pool: web::Data<DbPool>,
+    tmpl: web::Data<Tera>,
+    cfg: web::Data<Config>,
+    form: web::Form<PasswordResetRequestForm>,
+) -> Result<HttpResponse> {
+    let mailer = match reset_mailer(&cfg, &current_user)? {
+        Ok(mailer) => mailer,
+        Err(response) => return Ok(response),
+    };
+    let ip = client_key(&req);
+    if RESET_REQUESTS_BY_IP.is_blocked(&ip) {
+        return Err(actix_web::error::ErrorTooManyRequests("Too many password reset requests. Try again later."));
+    }
+    RESET_REQUESTS_BY_IP.hit(&ip);
+
+    let email = form.email.trim();
+    let mut conn = pool.get().map_err(internal_error)?;
+    let user = match email {
+        "" => None,
+        email => User::by_email(&mut conn, email).map_err(internal_error)?,
+    };
+    if let Some(user) = user.filter(|u| !u.is_banned()) {
+        let now = chrono::Utc::now().timestamp();
+        let fields = [user.id.into(), now.into(), password_fingerprint(&user).into()];
+        let link = format!("{}/password-reset/{}", cfg.site_url, token::sign(&cfg.secret_key, RESET_PASSWORD, &fields));
+        // Sent in the background, so the answer takes as long whether or not the address is known
+        let job = mail_job(&tmpl, &cfg, mailer, email, "email/reset-request.txt", &link)?;
+        actix_web::rt::spawn(web::block(job));
+    }
+    flash::push(
+        &session,
+        "info",
+        "",
+        "A password reset request was sent to the provided email, if a matching account was found.",
+    );
+    Ok(redirect("/login"))
+}
+
+/// Ties a reset link to the password it was sent for, so it stops working once used.
+fn password_fingerprint(user: &User) -> String {
+    use sha2::Digest;
+    hex::encode(&sha2::Sha256::digest(user.password_hash.as_bytes())[..8])
+}
+
+/// The user a reset link is for, if it is genuine, under six hours old and still unused.
+fn reset_link_user(conn: &mut DbConnection, cfg: &Config, payload: &str) -> Result<User> {
+    let not_found = || actix_web::error::ErrorNotFound("Invalid or expired password reset link");
+    let fields = token::verify(&cfg.secret_key, RESET_PASSWORD, payload).ok_or_else(not_found)?;
+    let [id, time, fingerprint] = fields.as_slice() else {
+        return Err(not_found());
+    };
+    let (Some(id), Some(time), Some(fingerprint)) = (id.as_i64(), time.as_i64(), fingerprint.as_str()) else {
+        return Err(not_found());
+    };
+    if chrono::Utc::now().timestamp() - time > RESET_LINK_SECS {
+        return Err(not_found());
+    }
+    let user = User::by_id(conn, i32::try_from(id).map_err(|_| not_found())?).map_err(internal_error)?;
+    user.filter(|u| password_fingerprint(u) == fingerprint && !u.is_banned()).ok_or_else(not_found)
+}
+
+fn render_password_reset(tmpl: &Tera, cfg: &Config, errors: &[String]) -> Result<String> {
+    let mut ctx = base_context(cfg, None);
+    ctx.insert("errors", errors);
+    tmpl.render("password_reset.html", &ctx).map_err(internal_error)
+}
+
+/// Upstream's GET /password-reset/<payload>: the new password form.
+pub async fn password_reset_get(
+    CurrentUser(current_user): CurrentUser,
+    pool: web::Data<DbPool>,
+    tmpl: web::Data<Tera>,
+    cfg: web::Data<Config>,
+    path: web::Path<String>,
+) -> Result<HttpResponse> {
+    if let Err(response) = reset_mailer(&cfg, &current_user)? {
+        return Ok(response);
+    }
+    let mut conn = pool.get().map_err(internal_error)?;
+    reset_link_user(&mut conn, &cfg, &path)?;
+    let html = render_password_reset(&tmpl, &cfg, &[])?;
+    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+}
+
+/// Upstream's POST /password-reset/<payload>: sets the new password and signs the account
+/// out everywhere, as a password change does.
+pub async fn password_reset_post(
+    CurrentUser(current_user): CurrentUser,
+    session: Session,
+    pool: web::Data<DbPool>,
+    tmpl: web::Data<Tera>,
+    cfg: web::Data<Config>,
+    path: web::Path<String>,
+    form: web::Form<PasswordResetForm>,
+) -> Result<HttpResponse> {
+    if let Err(response) = reset_mailer(&cfg, &current_user)? {
+        return Ok(response);
+    }
+    let mut conn = pool.get().map_err(internal_error)?;
+    let user = reset_link_user(&mut conn, &cfg, &path)?;
+    let mut errors = Vec::new();
+    if form.password != form.password_confirm {
+        errors.push("Passwords do not match.".to_string());
+    }
+    if !(6..=1024).contains(&form.password.chars().count()) {
+        errors.push("Password must be 6–1024 characters.".to_string());
+    }
+    if !errors.is_empty() {
+        let html = render_password_reset(&tmpl, &cfg, &errors)?;
+        return Ok(HttpResponse::BadRequest().content_type("text/html").body(html));
+    }
+    drop(conn);
+    let password = form.password.clone();
+    let pool = pool.clone();
+    web::block(move || -> anyhow::Result<()> {
+        let mut conn = pool.get()?;
+        User::set_password(&mut conn, user.id, &password)?;
+        logout_everywhere(&mut conn, user.id)?;
+        Ok(())
+    })
+    .await?
+    .map_err(internal_error)?;
+    flash::push(&session, "info", "", "Your password was reset. Log in now.");
+    Ok(redirect("/login"))
 }
 
 /// Upstream's `RegisterForm` rules, counted in characters: usernames are 3 to 32 ASCII
@@ -540,6 +791,7 @@ mod tests {
             ratelimit_account_age: 0,
             editing_time_limit: 0,
             upload_limit: Default::default(),
+            mail: Default::default(),
             trusted: Default::default(),
             tickets: Default::default(),
             mfa: Default::default(),
@@ -1061,5 +1313,140 @@ mod tests {
         for bad in ["", "a@b", "@b.co", "a@@b.co", "a b@c.de", "a@b..c", "a@.b"] {
             assert!(!looks_like_email(bad), "{}", bad);
         }
+    }
+
+    /// The account routes with mail on (`MAIL_BACKEND=log`); `verify` turns on email verification.
+    macro_rules! mail_app {
+        ($pool:expr, $verify:expr) => {{
+            let mut cfg = config("mail");
+            cfg.mail = crate::mail::MailConfig {
+                mailer: Some(crate::mail::Mailer::Log { from: "noreply@nyaa.test".parse().unwrap() }),
+                use_email_verification: $verify,
+                allow_password_reset: true,
+            };
+            let mut tera = Tera::new("templates/**/*").unwrap();
+            crate::utils::tera_filters::register(&mut tera);
+            test::init_service(
+                App::new()
+                    .app_data(web::Data::new(cfg))
+                    .app_data(web::Data::new($pool.clone()))
+                    .app_data(web::Data::new(tera))
+                    .wrap(SessionMiddleware::new(CookieSessionStore::default(), Key::from(&[7u8; 64])))
+                    .route("/login", web::get().to(login_get))
+                    .route("/login", web::post().to(login_post))
+                    .route("/register", web::post().to(register_post))
+                    .route("/user/activate/{payload}", web::get().to(activate))
+                    .route("/password-reset", web::get().to(password_reset_request_get))
+                    .route("/password-reset", web::post().to(password_reset_request_post))
+                    .route("/password-reset/{payload}", web::get().to(password_reset_get))
+                    .route("/password-reset/{payload}", web::post().to(password_reset_post)),
+            )
+            .await
+        }};
+    }
+
+    fn body_of(bytes: actix_web::web::Bytes) -> String {
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    #[actix_web::test]
+    async fn email_verification_activates_new_accounts() {
+        let pool = pool();
+        let app = mail_app!(pool, true);
+        let form = [
+            ("username", "carol"),
+            ("email", "carol@example.com"),
+            ("password", PASSWORD),
+            ("password_confirm", PASSWORD),
+        ];
+        let res =
+            test::call_service(&app, test::TestRequest::post().uri("/register").set_form(form).to_request()).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(res.response().cookies().next().is_none(), "not logged in");
+        let page = body_of(test::read_body(res).await);
+        assert!(page.contains("We sent an email to <strong>carol@example.com</strong>"), "{page}");
+        let carol = User::by_username(&mut pool.get().unwrap(), "carol").unwrap().unwrap();
+        assert_eq!(carol.status, UserStatus::Inactive as i32);
+
+        let (status, page) = try_login!(app, "carol", PASSWORD);
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert!(page.contains("not activated yet"), "{page}");
+
+        let get = |uri: String| test::TestRequest::get().uri(&uri).to_request();
+        for bad in [
+            "nonsense".to_string(),
+            token::sign("other key", ACTIVATE, &[carol.id.into()]),
+            token::sign("", RESET_PASSWORD, &[carol.id.into()]),
+        ] {
+            let res = test::call_service(&app, get(format!("/user/activate/{bad}"))).await;
+            assert_eq!(res.status(), StatusCode::NOT_FOUND, "{bad}");
+        }
+        let link = format!("/user/activate/{}", token::sign("", ACTIVATE, &[carol.id.into()]));
+        let res = test::call_service(&app, get(link.clone())).await;
+        assert_eq!(res.headers().get("Location").unwrap(), "/login");
+        let carol = User::by_id(&mut pool.get().unwrap(), carol.id).unwrap().unwrap();
+        assert!(carol.is_active());
+        let (status, _) = try_login!(app, "carol", PASSWORD);
+        assert_eq!(status, StatusCode::FOUND);
+
+        // An old link never lifts a ban
+        diesel::update(users::table.find(carol.id))
+            .set(users::status.eq(UserStatus::Banned as i32))
+            .execute(&mut pool.get().unwrap())
+            .unwrap();
+        test::call_service(&app, get(link)).await;
+        assert!(User::by_id(&mut pool.get().unwrap(), carol.id).unwrap().unwrap().is_banned());
+    }
+
+    #[actix_web::test]
+    async fn password_reset_by_mailed_link() {
+        let pool = pool();
+        // Off without a mailer: a 404
+        let err = reset_mailer(&config("reset-off"), &None).unwrap_err();
+        assert_eq!(err.as_response_error().status_code(), StatusCode::NOT_FOUND);
+
+        let app = mail_app!(pool, false);
+        let page = body_of(test::call_and_read_body(&app, test::TestRequest::get().uri("/login").to_request()).await);
+        assert!(page.contains("href=\"/password-reset\""), "{page}");
+        let page =
+            body_of(test::call_and_read_body(&app, test::TestRequest::get().uri("/password-reset").to_request()).await);
+        assert!(page.contains("name=\"email\""), "{page}");
+
+        // Known and unknown addresses get the same answer
+        for email in ["alice@example.com", "nobody@example.com"] {
+            let req = test::TestRequest::post().uri("/password-reset").set_form([("email", email)]).to_request();
+            let res = test::call_service(&app, req).await;
+            assert_eq!(res.headers().get("Location").unwrap(), "/login", "{email}");
+        }
+
+        let before = alice(&pool);
+        let link = |time: i64, fingerprint: &str| {
+            format!(
+                "/password-reset/{}",
+                token::sign("", RESET_PASSWORD, &[before.id.into(), time.into(), fingerprint.into()])
+            )
+        };
+        let now = chrono::Utc::now().timestamp();
+        let good = link(now, &password_fingerprint(&before));
+        let get = |uri: &str| test::TestRequest::get().uri(uri).to_request();
+        assert_eq!(test::call_service(&app, get(&good)).await.status(), StatusCode::OK);
+        let expired = link(now - RESET_LINK_SECS - 1, &password_fingerprint(&before));
+        assert_eq!(test::call_service(&app, get(&expired)).await.status(), StatusCode::NOT_FOUND);
+        assert_eq!(test::call_service(&app, get(&link(now, "0000"))).await.status(), StatusCode::NOT_FOUND);
+
+        let reset = |password: &str, confirm: &str| {
+            test::TestRequest::post()
+                .uri(&good)
+                .set_form([("password", password), ("password_confirm", confirm)])
+                .to_request()
+        };
+        let res = test::call_service(&app, reset("newpass1", "newpass2")).await;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        assert!(body_of(test::read_body(res).await).contains("Passwords do not match."));
+        let res = test::call_service(&app, reset("newpass1", "newpass1")).await;
+        assert_eq!(res.headers().get("Location").unwrap(), "/login");
+        assert!(alice(&pool).verify_password("newpass1"));
+        // Used once, the link is dead
+        assert_eq!(test::call_service(&app, get(&good)).await.status(), StatusCode::NOT_FOUND);
     }
 }

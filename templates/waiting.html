@@ -1,0 +1,14 @@
+{% extends "layout.html" %}
+{% block title %}Verify your email :: {{ config.site_name }}{% endblock %}
+{% block body %}
+<h1>Almost there!</h1>
+{% if sent %}
+<p>We sent an email to <strong>{{ email }}</strong>. Click the link in it to activate your account, then log in.</p>
+<p>If it doesn't arrive in a few minutes, check your spam folder.</p>
+{% else %}
+<div class="alert alert-danger" role="alert">
+	Your account was created, but we couldn't send the activation email to <strong>{{ email }}</strong>.
+	Please contact the site staff to activate it.
+</div>
+{% endif %}
+{% endblock %}

@@ -3,6 +3,7 @@ mod cli;
 mod config;
 mod db;
 mod handlers;
+mod mail;
 mod middleware;
 mod models;
 mod search;
@@ -168,6 +169,11 @@ async fn main() -> std::io::Result<()> {
             .route("/register", web::get().to(handlers::account::register_get))
             .route("/register", web::post().to(handlers::account::register_post))
             .route("/logout", web::post().to(handlers::account::logout))
+            .route("/user/activate/{payload}", web::get().to(handlers::account::activate))
+            .route("/password-reset", web::get().to(handlers::account::password_reset_request_get))
+            .route("/password-reset", web::post().to(handlers::account::password_reset_request_post))
+            .route("/password-reset/{payload}", web::get().to(handlers::account::password_reset_get))
+            .route("/password-reset/{payload}", web::post().to(handlers::account::password_reset_post))
             .route("/profile", web::get().to(handlers::account::profile))
             .route("/profile", web::post().to(handlers::account::profile_post))
             .route("/profile/avatar", web::post().to(handlers::account::avatar_post))

@@ -231,6 +231,7 @@ mod tests {
             ratelimit_account_age: 0,
             editing_time_limit: 0,
             upload_limit: Default::default(),
+            mail: Default::default(),
             meili: None,
             tracker: None,
             trusted: Default::default(),

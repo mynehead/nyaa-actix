@@ -112,6 +112,7 @@ pub fn base_context(cfg: &Config, current_user: Option<&User>) -> tera::Context 
             "site_name": cfg.site_name,
             "site_flavor": cfg.site_flavor,
             "maintenance_message": cfg.maintenance.enabled.then_some(&cfg.maintenance.message),
+            "allow_password_reset": cfg.mail.password_reset().is_some(),
         }),
     );
     let cats = nav_categories(&cfg.site_flavor);

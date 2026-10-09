@@ -219,6 +219,7 @@ mod tests {
             ratelimit_account_age: 0,
             editing_time_limit: 0,
             upload_limit: Default::default(),
+            mail: Default::default(),
             trusted: Default::default(),
             tickets: Default::default(),
             mfa: Default::default(),

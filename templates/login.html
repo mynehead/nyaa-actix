@@ -30,6 +30,14 @@
 			</div>
 		</div>
 
+		{% if config.allow_password_reset %}
+		<div class="row">
+			<div class="form-group col-md-4">
+				<a href="/password-reset">Forgot your password?</a>
+			</div>
+		</div>
+		{% endif %}
+
 		<div class="row">
 			<div class="col-md-4">
 				<input type="submit" value="Login" class="btn btn-primary" tabindex="3">

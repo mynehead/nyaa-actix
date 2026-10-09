@@ -295,6 +295,7 @@ mod tests {
             ratelimit_account_age: account_age,
             editing_time_limit: 0,
             upload_limit: Default::default(),
+            mail: Default::default(),
             ..Config::for_tests()
         }
     }

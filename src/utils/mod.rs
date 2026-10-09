@@ -5,6 +5,7 @@ pub mod pagination;
 pub mod proxy;
 pub mod tera_filters;
 pub mod throttle;
+pub mod token;
 
 use std::net::IpAddr;
 
