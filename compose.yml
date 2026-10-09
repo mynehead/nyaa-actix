@@ -42,8 +42,8 @@ services:
       retries: 10
 
   # Announce and scrape. Peers are kept in memory, as the tracker design intends; the
-  # site manages the whitelist and reads counts through the API, and sends the whole
-  # whitelist again whenever the tracker restarts.
+  # site manages the whitelist and blacklist and reads counts through the API, and sends
+  # both whole lists again whenever the tracker restarts.
   tracker:
     image: power2all/torrust-actix:v4.2.23
     restart: unless-stopped
@@ -52,6 +52,8 @@ services:
       TRACKER__API_KEY: ${TRACKER_API_KEY:?set TRACKER_API_KEY in .env}
       # Only torrents uploaded to the site can be announced
       TRACKER__WHITELIST_ENABLED: "true"
+      # Deleted and banned torrents are refused
+      TRACKER__BLACKLIST_ENABLED: "true"
       TRACKER__SWAGGER: "false"
       DATABASE__PERSISTENT: "false"
       DATABASE__ENGINE: sqlite3
