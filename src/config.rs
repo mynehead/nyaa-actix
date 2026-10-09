@@ -1,5 +1,8 @@
 use std::env;
 
+/// Upstream's Gravatar endpoint, used unless GRAVATAR_URL points elsewhere.
+pub const DEFAULT_GRAVATAR_URL: &str = "https://www.gravatar.com/avatar";
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub database_url: String,
@@ -14,6 +17,11 @@ pub struct Config {
     pub avatar_storage_path: String,
     /// Upstream ENABLE_GRAVATAR: Gravatar for users without an uploaded avatar.
     pub enable_gravatar: bool,
+    /// GRAVATAR_URL: base of a Gravatar-compatible avatar service (gravatar.com, Libravatar
+    /// or a self-hosted instance), without the trailing slash; the hash is appended to it.
+    pub gravatar_url: String,
+    /// GRAVATAR_HASH=sha256: hash the email with SHA-256 instead of upstream's MD5.
+    pub gravatar_sha256: bool,
     /// Upstream MAINTENANCE_MODE and friends: a read-only site with a notice.
     pub maintenance: MaintenanceConfig,
     /// Upstream RAID_MODE_LIMIT_REGISTER and RAID_MODE_REGISTER_MESSAGE.
@@ -231,6 +239,16 @@ impl Config {
             torrent_storage_path: env::var("TORRENT_STORAGE_PATH").unwrap_or_else(|_| "./torrents".into()),
             avatar_storage_path: env::var("AVATAR_STORAGE_PATH").unwrap_or_else(|_| "./avatars".into()),
             enable_gravatar: env::var("ENABLE_GRAVATAR").ok().and_then(|v| v.parse().ok()).unwrap_or(false),
+            gravatar_url: env::var("GRAVATAR_URL")
+                .ok()
+                .map(|v| v.trim().trim_end_matches('/').to_string())
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| DEFAULT_GRAVATAR_URL.into()),
+            gravatar_sha256: match env::var("GRAVATAR_HASH").unwrap_or_default().trim().to_ascii_lowercase().as_str() {
+                "" | "md5" => false,
+                "sha256" => true,
+                other => panic!("GRAVATAR_HASH must be md5 or sha256, got {:?}", other),
+            },
             maintenance: MaintenanceConfig::from_env(),
             raid_mode: RaidModeConfig::from_env(),
             site_url: env::var("SITE_URL")
@@ -272,6 +290,8 @@ impl Config {
             torrent_storage_path: String::new(),
             avatar_storage_path: String::new(),
             enable_gravatar: false,
+            gravatar_url: crate::config::DEFAULT_GRAVATAR_URL.into(),
+            gravatar_sha256: false,
             maintenance: Default::default(),
             raid_mode: Default::default(),
             site_url: String::new(),

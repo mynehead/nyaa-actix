@@ -282,6 +282,8 @@ mod tests {
             torrent_storage_path: String::new(),
             avatar_storage_path: String::new(),
             enable_gravatar: false,
+            gravatar_url: crate::config::DEFAULT_GRAVATAR_URL.into(),
+            gravatar_sha256: false,
             maintenance: Default::default(),
             raid_mode: Default::default(),
             site_url: String::new(),

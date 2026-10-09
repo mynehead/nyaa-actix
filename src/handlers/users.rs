@@ -107,17 +107,42 @@ pub async fn view_user(
 }
 
 /// An uploaded avatar. Links carry `?v=` with the upload time, so a new one shows at once.
-pub async fn avatar(storage: web::Data<crate::storage::Storage>, path: web::Path<i32>) -> Result<HttpResponse> {
-    let data = storage
-        .get(crate::storage::Kind::Avatar, path.into_inner())
-        .await
+pub async fn avatar(
+    storage: web::Data<crate::storage::Storage>,
+    pool: web::Data<DbPool>,
+    cfg: web::Data<Config>,
+    gravatar: web::Data<crate::utils::gravatar::GravatarProxy>,
+    path: web::Path<i32>,
+) -> Result<HttpResponse> {
+    let id = path.into_inner();
+    if let Some(data) = storage.get(crate::storage::Kind::Avatar, id).await.map_err(internal_error)? {
+        return Ok(HttpResponse::Ok()
+            .content_type("image/png")
+            .insert_header(("Cache-Control", "public, max-age=86400"))
+            .insert_header(("X-Content-Type-Options", "nosniff"))
+            .body(data));
+    }
+    if !cfg.enable_gravatar {
+        return Err(actix_web::error::ErrorNotFound("No avatar"));
+    }
+    // No upload: the Gravatar, fetched by the server so the email hash stays private
+    let mut conn = pool.get().map_err(internal_error)?;
+    let email = User::by_id(&mut conn, id)
         .map_err(internal_error)?
+        .and_then(|u| u.email)
         .ok_or_else(|| actix_web::error::ErrorNotFound("No avatar"))?;
-    Ok(HttpResponse::Ok()
-        .content_type("image/png")
-        .insert_header(("Cache-Control", "public, max-age=86400"))
-        .insert_header(("X-Content-Type-Options", "nosniff"))
-        .body(data))
+    drop(conn);
+    Ok(match gravatar.fetch(&cfg, &email).await {
+        Some(image) => HttpResponse::Ok()
+            .content_type(image.content_type)
+            .insert_header(("Cache-Control", "public, max-age=3600"))
+            .insert_header(("X-Content-Type-Options", "nosniff"))
+            .body(image.body),
+        None => HttpResponse::Found()
+            .insert_header(("Location", crate::models::DEFAULT_AVATAR))
+            .insert_header(("Cache-Control", "public, max-age=3600"))
+            .finish(),
+    })
 }
 
 /// One option of the "Change User Class" menu.
@@ -518,6 +543,8 @@ mod tests {
             torrent_storage_path: String::new(),
             avatar_storage_path: String::new(),
             enable_gravatar: false,
+            gravatar_url: crate::config::DEFAULT_GRAVATAR_URL.into(),
+            gravatar_sha256: false,
             maintenance: Default::default(),
             raid_mode: Default::default(),
             site_url: String::new(),
