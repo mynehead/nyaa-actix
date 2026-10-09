@@ -1,0 +1,29 @@
+{#- Every value comes escaped for XML from feeds.rs, hence `safe` -#}
+<rss xmlns:atom="http://www.w3.org/2005/Atom" xmlns:nyaa="{{ site_url | safe }}/xmlns/nyaa" version="2.0">
+	<channel>
+		<title>{{ site_name | safe }} - {{ term | safe }} - {% if not magnet_links %}Torrent File{% else %}Magnet URI{% endif %} RSS</title>
+		<description>RSS Feed for {{ term | safe }}</description>
+		<link>{{ site_url | safe }}/</link>
+		<atom:link href="{{ site_url | safe }}/?page=rss" rel="self" type="application/rss+xml" />
+		{%- for item in items %}
+		<item>
+			<title>{{ item.title | safe }}</title>
+			<link>{{ item.link | safe }}</link>
+			<guid isPermaLink="true">{{ item.view_url | safe }}</guid>
+			<pubDate>{{ item.pub_date | safe }}</pubDate>
+
+			<nyaa:seeders>{{ item.seeders }}</nyaa:seeders>
+			<nyaa:leechers>{{ item.leechers }}</nyaa:leechers>
+			<nyaa:downloads>{{ item.downloads }}</nyaa:downloads>
+			<nyaa:infoHash>{{ item.info_hash | safe }}</nyaa:infoHash>
+			<nyaa:categoryId>{{ item.category_id | safe }}</nyaa:categoryId>
+			<nyaa:category>{{ item.category | safe }}</nyaa:category>
+			<nyaa:size>{{ item.size | safe }}</nyaa:size>
+			<nyaa:comments>{{ item.comments }}</nyaa:comments>
+			<nyaa:trusted>{{ item.trusted | safe }}</nyaa:trusted>
+			<nyaa:remake>{{ item.remake | safe }}</nyaa:remake>
+			<description><![CDATA[<a href="{{ item.view_url | safe }}">#{{ item.id }} | {{ item.title | safe }}</a> | {{ item.size | safe }} | {{ item.category | safe }} | {{ item.info_hash | upper | safe }}]]></description>
+		</item>
+		{%- endfor %}
+	</channel>
+</rss>

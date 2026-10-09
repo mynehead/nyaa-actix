@@ -6,6 +6,9 @@
 //!
 //! "This site" is the host the request was sent to, or the host in `SITE_URL` (for a
 //! reverse proxy that rewrites `Host`).
+//!
+//! `/api/` is left out: scripts call it without `Origin`, and it signs in with HTTP Basic
+//! auth only, never the session cookie, so a cross-site page has nothing to ride on.
 
 use actix_web::body::{BoxBody, MessageBody};
 use actix_web::dev::{ServiceRequest, ServiceResponse};
@@ -19,7 +22,7 @@ pub async fn reject_cross_site(
     req: ServiceRequest,
     next: Next<impl MessageBody + 'static>,
 ) -> Result<ServiceResponse<BoxBody>, Error> {
-    let safe = matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
+    let safe = matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS) || req.path().starts_with("/api/");
     if !safe && !from_this_site(&req) {
         log::warn!("Refused cross-site {} {} (origin {:?})", req.method(), req.path(), source(&req));
         let response = HttpResponse::Forbidden().body("This request didn't come from this site.");
@@ -135,6 +138,12 @@ mod tests {
             403
         );
         assert_eq!(status("", post()).await, 403);
+    }
+
+    #[actix_web::test]
+    async fn api_posts_need_no_origin() {
+        assert_eq!(status("", atest::TestRequest::post().uri("/api/upload")).await, 200);
+        assert_eq!(status("", atest::TestRequest::post().uri("/apiary")).await, 403);
     }
 
     #[actix_web::test]

@@ -1,6 +1,8 @@
 pub mod account;
 pub mod admin;
+pub mod api;
 pub mod banners;
+pub mod feeds;
 pub mod groups;
 pub mod home;
 pub mod reports;

@@ -374,7 +374,7 @@ fn render_upload(
 }
 
 /// nyaa's limit for .torrent files.
-const MAX_TORRENT_SIZE: usize = 10 * 1024 * 1024;
+pub(crate) const MAX_TORRENT_SIZE: usize = 10 * 1024 * 1024;
 /// Per text field (name, information, description, ...).
 const MAX_TEXT_FIELD_SIZE: usize = 64 * 1024;
 /// Well above what the upload form sends.
@@ -403,8 +403,6 @@ pub async fn upload_post(
     storage: web::Data<Storage>,
     mut payload: Multipart,
 ) -> Result<HttpResponse> {
-    let mut conn = pool.get().map_err(internal_error)?;
-
     let mut torrent_bytes: Option<Vec<u8>> = None;
     let mut form = EditForm::default();
     let mut group_id: Option<i32> = None;
@@ -436,9 +434,42 @@ pub async fn upload_post(
         }
     }
 
+    let upload = Upload { torrent_file: torrent_bytes, form, group_id };
+    match create_torrent(&pool, &cfg, &storage, &user, client_ip(&req), &upload).await? {
+        Ok(torrent) => Ok(HttpResponse::Found().insert_header(("Location", format!("/view/{}", torrent.id))).finish()),
+        Err(errors) => {
+            let mut conn = pool.get().map_err(internal_error)?;
+            let html = render_upload(&mut conn, &tmpl, &cfg, &user, &upload.form, upload.group_id, &errors)?;
+            Ok(HttpResponse::BadRequest().content_type("text/html").body(html))
+        }
+    }
+}
+
+/// An upload, from the web form or the API.
+pub(crate) struct Upload {
+    pub torrent_file: Option<Vec<u8>>,
+    pub form: EditForm,
+    pub group_id: Option<i32>,
+}
+
+/// Errors by upload form field (`torrent_file` for the file itself).
+pub(crate) type UploadErrors = HashMap<&'static str, String>;
+
+/// Checks an upload and stores it: the torrent row, its statistics and the info dict.
+/// Returns the new torrent, or every problem found by field.
+pub(crate) async fn create_torrent(
+    pool: &DbPool,
+    cfg: &Config,
+    storage: &Storage,
+    user: &User,
+    uploader_ip: Option<Vec<u8>>,
+    upload: &Upload,
+) -> Result<std::result::Result<Torrent, UploadErrors>> {
+    let mut conn = pool.get().map_err(internal_error)?;
+    let (form, group_id) = (&upload.form, upload.group_id);
     // The same checks as the edit form, plus the file's own; all are shown at once
     let mut errors = HashMap::new();
-    let meta = match torrent_bytes.as_deref().map(parse_torrent) {
+    let meta = match upload.torrent_file.as_deref().map(parse_torrent) {
         None => {
             errors.insert("torrent_file", "Please select a torrent file.".to_string());
             None
@@ -480,8 +511,7 @@ pub async fn upload_post(
         }
     };
     let (Some(meta), Some((main_cat, sub_cat)), true) = (meta, categories, errors.is_empty()) else {
-        let html = render_upload(&mut conn, &tmpl, &cfg, &user, &form, group_id, &errors)?;
-        return Ok(HttpResponse::BadRequest().content_type("text/html").body(html));
+        return Ok(Err(errors));
     };
 
     // Only groups the user may upload for; anything else is a personal upload
@@ -514,7 +544,7 @@ pub async fn upload_post(
         encoding: meta.encoding.clone(),
         flags,
         uploader_id: Some(user.id),
-        uploader_ip: client_ip(&req),
+        uploader_ip,
         has_torrent: 1,
         comment_count: 0,
         created_time: now,
@@ -573,8 +603,7 @@ pub async fn upload_post(
     }
     crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), inserted.id);
     crate::tracker::torrent_changed(cfg.tracker.as_ref(), inserted.id);
-
-    Ok(HttpResponse::Found().insert_header(("Location", format!("/view/{}", inserted.id))).finish())
+    Ok(Ok(inserted))
 }
 
 /// The edit page's two forms post here: "Save Changes" with the fields, or one

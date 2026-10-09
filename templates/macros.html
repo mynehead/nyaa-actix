@@ -1,6 +1,6 @@
 {# Query string for a listing link: the current search with sort, order and page set. #}
 {% macro query(search, s, o, p=1) -%}
-?{% if search.term %}q={{ search.term | urlencode }}&amp;{% endif %}{% if search.category != "0_0" %}c={{ search.category | urlencode }}&amp;{% endif %}{% if search.quality_filter != "0" %}f={{ search.quality_filter | urlencode }}&amp;{% endif %}{% if s != "id" or o != "desc" %}s={{ s | urlencode }}&amp;o={{ o | urlencode }}&amp;{% endif %}p={{ p }}
+?{% if search.term %}q={{ search.term | urlencode }}&amp;{% endif %}{% if search.category != "0_0" %}c={{ search.category | urlencode }}&amp;{% endif %}{% if search.quality_filter != "0" %}f={{ search.quality_filter | urlencode }}&amp;{% endif %}{% if search.user %}u={{ search.user | urlencode }}&amp;{% endif %}{% if s != "id" or o != "desc" %}s={{ s | urlencode }}&amp;o={{ o | urlencode }}&amp;{% endif %}p={{ p }}
 {%- endmacro query %}
 
 {# Sortable column header, as upstream's render_column_header. #}
