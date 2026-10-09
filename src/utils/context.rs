@@ -76,6 +76,8 @@ pub struct SearchState {
     pub quality_filter: String,
     pub sort: String,
     pub order: String,
+    /// The `u=` uploader filter, empty for none.
+    pub user: String,
 }
 
 impl SearchState {
@@ -93,6 +95,7 @@ impl SearchState {
             quality_filter: get(f, "0"),
             sort: get(s, "id"),
             order: get(o, "desc"),
+            user: String::new(),
         }
     }
 }

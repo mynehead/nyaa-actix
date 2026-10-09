@@ -1,0 +1,21 @@
+{% extends "layout.html" %}
+{% block title %}nyaa XML namespace :: {{ config.site_name }}{% endblock %}
+{% block body %}
+<div class="content">
+	<h1>The <code>nyaa</code> XML namespace</h1>
+	<p>The site's RSS feeds (<a href="/?page=rss">/?page=rss</a>, or <code>/rss</code>) add these elements to each item:</p>
+	<dl class="dl-horizontal">
+		<dt><code>nyaa:seeders</code></dt><dd>Seeders, as last reported by the tracker.</dd>
+		<dt><code>nyaa:leechers</code></dt><dd>Leechers, as last reported by the tracker.</dd>
+		<dt><code>nyaa:downloads</code></dt><dd>Completed downloads.</dd>
+		<dt><code>nyaa:infoHash</code></dt><dd>The torrent's info hash, in lowercase hex.</dd>
+		<dt><code>nyaa:categoryId</code></dt><dd>Category as <code>main_sub</code>, the value of the <code>c=</code> search parameter.</dd>
+		<dt><code>nyaa:category</code></dt><dd>Category name.</dd>
+		<dt><code>nyaa:size</code></dt><dd>Total size of the torrent's files, in binary units.</dd>
+		<dt><code>nyaa:comments</code></dt><dd>Number of comments.</dd>
+		<dt><code>nyaa:trusted</code></dt><dd><code>Yes</code> if uploaded by a trusted user.</dd>
+		<dt><code>nyaa:remake</code></dt><dd><code>Yes</code> if marked as a remake.</dd>
+	</dl>
+	<p>Feeds take the same parameters as the listing (<code>q</code>, <code>c</code>, <code>f</code>, <code>u</code>, <code>s</code>, <code>o</code>, <code>p</code>). Add <code>&amp;magnets</code> to link items to magnet URIs instead of <code>.torrent</code> files.</p>
+</div>
+{% endblock %}

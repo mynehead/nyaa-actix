@@ -210,13 +210,14 @@ fn register_errors(username: &str, email: &str, password: &str, password_confirm
 
 /// Failed logins allowed per address and per account name before a 15-minute pause.
 /// The per-address limit is high because users behind one NAT or proxy share it.
-static LOGIN_FAILURES_BY_IP: LazyLock<Throttle> = LazyLock::new(|| Throttle::new(50, Duration::from_secs(15 * 60)));
-static LOGIN_FAILURES_BY_ACCOUNT: LazyLock<Throttle> =
+pub(crate) static LOGIN_FAILURES_BY_IP: LazyLock<Throttle> =
+    LazyLock::new(|| Throttle::new(50, Duration::from_secs(15 * 60)));
+pub(crate) static LOGIN_FAILURES_BY_ACCOUNT: LazyLock<Throttle> =
     LazyLock::new(|| Throttle::new(10, Duration::from_secs(15 * 60)));
 /// Registration attempts per address per hour.
 static REGISTRATIONS_BY_IP: LazyLock<Throttle> = LazyLock::new(|| Throttle::new(20, Duration::from_secs(60 * 60)));
 
-fn client_key(req: &HttpRequest) -> String {
+pub(crate) fn client_key(req: &HttpRequest) -> String {
     format!("ip:{}", client_addr(req).map(|a| a.to_string()).unwrap_or_default())
 }
 

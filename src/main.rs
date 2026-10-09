@@ -103,6 +103,13 @@ async fn main() -> std::io::Result<()> {
             .service(fs::Files::new("/static", "./static"))
             // Home / search
             .route("/", web::get().to(handlers::home::home))
+            // RSS: also /?page=rss, as upstream; the feed's nyaa: namespace is described at /xmlns/nyaa
+            .route("/rss", web::get().to(handlers::home::rss))
+            .route("/xmlns/nyaa", web::get().to(handlers::feeds::xmlns_nyaa))
+            // JSON API (HTTP Basic auth); upstream serves its v2 upload at both URLs
+            .route("/api/info/{query}", web::get().to(handlers::api::info))
+            .route("/api/upload", web::post().to(handlers::api::upload))
+            .route("/api/v2/upload", web::post().to(handlers::api::upload))
             // Info pages
             .route("/rules", web::get().to(handlers::site::rules))
             .route("/help", web::get().to(handlers::site::help))

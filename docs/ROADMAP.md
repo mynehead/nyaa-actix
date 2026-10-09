@@ -80,17 +80,17 @@ Status of this repo as of the initial port. "Stub" = route exists but returns pl
 |---|---|---|
 | Home/search with category, filter, sort | yes | yes (SQL `LIKE`) |
 | Full-text search (Elasticsearch, MySQL fulltext) | yes | missing; SQLite FTS5 or Postgres `tsvector` is the natural replacement |
-| RSS feed (`/?page=rss`, `nyaa:` xmlns with seeders/leechers/infoHash) | yes | missing |
+| RSS feed (`/?page=rss`, `nyaa:` xmlns with seeders/leechers/infoHash) | yes | yes (`/?page=rss`, `/rss`, `&magnets`; see `docs/api.md`) |
 | Torrent file list on view page | yes (`torrents_filelist`) | missing; parse `info.files` at upload |
 | Seeders/leechers/downloads columns + sort | yes | yes, pulled from torrust-actix (`TRACKER_API_URL`, `src/tracker.rs`) |
 | Sukebei flavor (second category set, table prefix) | yes | `SITE_FLAVOR` exists, no second schema |
-| `/rules`, `/help`, `/xmlns/nyaa`, `/trusted` info pages | yes | missing |
+| `/rules`, `/help`, `/xmlns/nyaa`, `/trusted` info pages | yes | yes |
 
 ### Torrents
 | Feature | Upstream | Here |
 |---|---|---|
 | Upload (web) | yes | yes |
-| Upload API (`/api/upload`, `/api/v2/upload`) and info API (`/api/info/<id or hash>`) | yes | missing |
+| Upload API (`/api/upload`, `/api/v2/upload`) and info API (`/api/info/<id or hash>`) | yes | yes, login required (see `docs/api.md`) |
 | Edit torrent (`/view/<id>/edit`), delete/undelete, ban | yes | missing |
 | Download rebuilds .torrent with announce list | yes | yes, but empty tracker list |
 | Magnet link | yes | yes, but no `tr=` params |
