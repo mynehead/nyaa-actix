@@ -1,12 +1,22 @@
 {% extends "layout.html" %}
 {% macro filter_tab(name, label, list_filter) -%}
 	<li class="nav-item{% if list_filter == name %} active{% endif %}">
-		<a class="nav-link" href="/admin/tickets{% if name != "open" %}/{{ name }}{% endif %}">{{ label }}</a>
+		<a class="nav-link" href="/admin/tickets{% if name != "open" %}/{{ name }}{% endif %}{% if category %}?category={{ category }}{% endif %}">{{ label }}</a>
 	</li>
 {%- endmacro filter_tab %}
 {% block title %}Tickets :: {{ config.site_name }}{% endblock %}
 {% block body %}
 {% set page_url = "/admin/tickets" %}{% if list_filter != "open" %}{% set page_url = page_url ~ "/" ~ list_filter %}{% endif %}
+{% if category %}{% set page_query = "&category=" ~ category %}{% endif %}
+<form method="get" action="{{ page_url }}" class="form-inline pull-right ticket-category-filter">
+	<select class="form-control input-sm" name="category" aria-label="Category" onchange="this.form.submit()">
+		<option value="">All categories</option>
+		{% for cat in categories %}
+		<option value="{{ cat.key }}"{% if category == cat.key %} selected{% endif %}>{{ cat.title }}</option>
+		{% endfor %}
+	</select>
+	<noscript><button type="submit" class="btn btn-default btn-sm">Filter</button></noscript>
+</form>
 <ul class="nav nav-tabs" role="tablist">
 	{{ self::filter_tab(name="open", label="Open", list_filter=list_filter) }}
 	{{ self::filter_tab(name="closed", label="Closed", list_filter=list_filter) }}
@@ -18,6 +28,7 @@
 		<thead>
 			<tr>
 				<th scope="col">#</th>
+				<th scope="col">Category</th>
 				<th scope="col">Subject</th>
 				<th scope="col">User</th>
 				<th scope="col">Status</th>
@@ -28,6 +39,7 @@
 			{% for ticket in tickets %}
 			<tr class="reports-row">
 				<td>{{ ticket.id }}</td>
+				<td>{{ category_titles[ticket.category] | default(value="Other") }}</td>
 				<td><a href="/tickets/{{ ticket.id }}">{{ ticket.subject }}</a></td>
 				<td><a href="/user/{{ ticket.username | urlencode }}">{{ ticket.username }}</a></td>
 				<td>
@@ -38,7 +50,7 @@
 				<td data-timestamp="{{ ticket.updated_time | date(format="%s") }}">{{ ticket.updated_time | date(format="%Y-%m-%d %H:%M") }}</td>
 			</tr>
 			{% else %}
-			<tr><td colspan="5" class="text-center">No tickets.</td></tr>
+			<tr><td colspan="6" class="text-center">No tickets.</td></tr>
 			{% endfor %}
 		</tbody>
 	</table>

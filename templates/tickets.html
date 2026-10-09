@@ -12,6 +12,7 @@
 			<thead>
 			<tr>
 				<th>#</th>
+				<th>Category</th>
 				<th>Subject</th>
 				<th>Status</th>
 				<th>Last activity</th>
@@ -21,6 +22,7 @@
 			{% for ticket in tickets %}
 			<tr>
 				<td>{{ ticket.id }}</td>
+				<td>{{ category_titles[ticket.category] | default(value="Other") }}</td>
 				<td><a href="/tickets/{{ ticket.id }}">{{ ticket.subject }}</a></td>
 				<td>
 					{% if ticket.status == 1 %}<span class="label label-default">Closed</span>
@@ -30,7 +32,7 @@
 				<td data-timestamp="{{ ticket.updated_time | date(format="%s") }}">{{ ticket.updated_time | date(format="%Y-%m-%d %H:%M") }}</td>
 			</tr>
 			{% else %}
-			<tr><td colspan="4" class="text-center">You have no tickets.</td></tr>
+			<tr><td colspan="5" class="text-center">You have no tickets.</td></tr>
 			{% endfor %}
 			</tbody>
 		</table>

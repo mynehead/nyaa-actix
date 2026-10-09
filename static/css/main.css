@@ -790,3 +790,72 @@ body.dark .search-help code {
 .ticket-status-form {
 	margin-top: 10px;
 }
+
+/* New ticket form: categories as cards, like AniRena */
+.ticket-form-label {
+	text-transform: uppercase;
+	font-size: 12px;
+	letter-spacing: .05em;
+}
+
+.ticket-category {
+	display: block;
+	font-weight: normal;
+	cursor: pointer;
+}
+
+.ticket-category input {
+	position: absolute;
+	opacity: 0;
+}
+
+.ticket-category-card {
+	display: block;
+	min-height: 95px;
+	margin-bottom: 12px;
+	padding: 12px 14px;
+	border: 1px solid #ddd;
+	border-radius: 6px;
+}
+
+.ticket-category-card .fa {
+	display: block;
+	margin-bottom: 8px;
+	color: #d9534f;
+}
+
+.ticket-category-card strong,
+.ticket-category-card small {
+	display: block;
+}
+
+.ticket-category-card small {
+	margin-top: 2px;
+	color: #777;
+}
+
+.ticket-category:hover .ticket-category-card {
+	border-color: #aaa;
+}
+
+.ticket-category input:checked + .ticket-category-card {
+	border-color: #d9534f;
+	box-shadow: 0 0 0 1px #d9534f;
+}
+
+.ticket-category input:focus + .ticket-category-card {
+	outline: 2px solid #66afe9;
+}
+
+body.dark .ticket-category-card {
+	border-color: #3a3a3a;
+	background-color: #262626;
+}
+
+body.dark .ticket-category-card strong {
+	color: #e2e2e2;
+}
+
+body.dark .ticket-category-card small {
+	color: #999;
+}

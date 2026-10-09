@@ -9,11 +9,23 @@
 		{% else %}<span class="label label-warning">Waiting for staff</span>{% endif %}
 	</h2>
 	<p class="text-muted">
+		<i class="fa fa-{{ category.icon }} fa-fw"></i> {{ category.title }} &middot;
 		Ticket #{{ ticket.id }} opened by
 		{% if opener %}<a href="/user/{{ opener | urlencode }}">{{ opener }}</a>{% else %}[deleted user]{% endif %}
 		on <span data-timestamp="{{ ticket.created_time | date(format="%s") }}">{{ ticket.created_time | date(format="%Y-%m-%d %H:%M") }}</span>
 		&middot; {% if is_owner %}<a href="/tickets">Your tickets</a>{% else %}<a href="/admin/tickets">Ticket queue</a>{% endif %}
 	</p>
+
+	{% if torrents %}
+	<div class="panel panel-default">
+		<div class="panel-heading">Torrents ({{ torrents | length }})</div>
+		<ul class="list-group">
+			{% for t in torrents %}
+			<li class="list-group-item"><a href="/view/{{ t.id }}">#{{ t.id }} {{ t.display_name }}</a></li>
+			{% endfor %}
+		</ul>
+	</div>
+	{% endif %}
 
 	{% for row in messages %}
 	<div class="panel {% if row.from_staff %}panel-info{% else %}panel-default{% endif %}" id="message-{{ row.id }}">
@@ -34,7 +46,7 @@
 	<form method="POST" action="/tickets/{{ ticket.id }}">
 		<div class="form-group">
 			<label class="control-label" for="message">Reply</label>
-			<textarea class="form-control" id="message" name="message" rows="6" maxlength="10000" required>{{ message }}</textarea>
+			<textarea class="form-control" id="message" name="message" rows="6" maxlength="65535" required>{{ message }}</textarea>
 		</div>
 		<button type="submit" name="action" value="reply" class="btn btn-success">Send reply</button>
 	</form>

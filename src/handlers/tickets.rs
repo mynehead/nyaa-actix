@@ -12,8 +12,8 @@ use crate::auth::{CurrentUser, LoggedIn, Moderator, Permission};
 use crate::config::{Config, TicketConfig};
 use crate::db::{DbConnection, DbPool};
 use crate::models::{
-    user_link, validate_message, validate_subject, AdminLog, Ticket, TicketFilter, User, TICKETS_PER_PAGE,
-    TICKET_CLOSED, TICKET_OPEN,
+    parse_torrent_ids, user_link, validate_message, validate_subject, AdminLog, Ticket, TicketCategory, TicketFilter,
+    Torrent, User, TICKETS_PER_PAGE, TICKET_CATEGORIES, TICKET_CLOSED, TICKET_MAX_TORRENTS, TICKET_OPEN,
 };
 use crate::utils::context::base_context;
 use crate::utils::pagination::Pagination;
@@ -22,6 +22,11 @@ use crate::utils::{flash, internal_error};
 fn render(tmpl: &Tera, name: &str, ctx: &tera::Context, status: StatusCode) -> Result<HttpResponse> {
     let body = tmpl.render(name, ctx).map_err(internal_error)?;
     Ok(HttpResponse::build(status).content_type("text/html").body(body))
+}
+
+/// `{"torrent": "Torrent Report", ...}` for the ticket lists.
+fn category_titles() -> std::collections::HashMap<&'static str, &'static str> {
+    TICKET_CATEGORIES.iter().map(|c| (c.key, c.title)).collect()
 }
 
 fn redirect(location: &str) -> HttpResponse {
@@ -86,11 +91,18 @@ pub async fn my_tickets(
     let mut ctx = base_context(&cfg, Some(&user));
     ctx.insert("flash_messages", &flash::take(&session));
     ctx.insert("tickets", &tickets);
+    ctx.insert("category_titles", &category_titles());
     render(&tmpl, "tickets.html", &ctx, StatusCode::OK)
 }
 
 #[derive(Debug, Default, Deserialize)]
 pub struct NewTicketForm {
+    /// A [`TicketCategory`] key.
+    #[serde(default)]
+    pub category: String,
+    /// Torrent ids or links, for Torrent Reports.
+    #[serde(default)]
+    pub torrent_ids: String,
     #[serde(default)]
     pub subject: String,
     #[serde(default)]
@@ -107,23 +119,33 @@ fn new_ticket_page(
     status: StatusCode,
 ) -> Result<HttpResponse> {
     let mut ctx = base_context(cfg, Some(user));
-    ctx.insert("form", &serde_json::json!({ "subject": form.subject, "message": form.message }));
+    ctx.insert("categories", &TICKET_CATEGORIES);
+    ctx.insert("max_torrents", &TICKET_MAX_TORRENTS);
+    ctx.insert(
+        "form",
+        &serde_json::json!({
+            "category": form.category, "torrent_ids": form.torrent_ids,
+            "subject": form.subject, "message": form.message,
+        }),
+    );
     ctx.insert("errors", errors);
     ctx.insert("limit", &limit);
     render(tmpl, "ticket_new.html", &ctx, status)
 }
 
-/// GET /tickets/new: the form, or why the user has to wait.
+/// GET /tickets/new: the form, or why the user has to wait. Query parameters with the
+/// form's names fill it in, e.g. `?category=torrent&torrent_ids=5`.
 pub async fn new_ticket_get(
     CurrentUser(user): CurrentUser,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
+    prefill: web::Query<NewTicketForm>,
 ) -> Result<HttpResponse> {
     let Some(user) = user else { return Ok(redirect("/login")) };
     let mut conn = pool.get().map_err(internal_error)?;
     let limit = ticket_limit(&mut conn, &user, &cfg.tickets)?;
-    new_ticket_page(&tmpl, &cfg, &user, &NewTicketForm::default(), &serde_json::json!({}), limit, StatusCode::OK)
+    new_ticket_page(&tmpl, &cfg, &user, &prefill, &serde_json::json!({}), limit, StatusCode::OK)
 }
 
 /// POST /tickets/new
@@ -141,17 +163,46 @@ pub async fn new_ticket_post(
         let errors = serde_json::json!({});
         return new_ticket_page(&tmpl, &cfg, &user, &form, &errors, Some(limit), StatusCode::TOO_MANY_REQUESTS);
     }
-    match (validate_subject(&form.subject), validate_message(&form.message)) {
-        (Ok(subject), Ok(message)) => {
-            let id = Ticket::create(&mut conn, user.id, &subject, &message).map_err(internal_error)?;
+    let category = TicketCategory::parse(&form.category).ok_or("Please choose a category.");
+    let torrents = match category {
+        Ok(c) if c.key == "torrent" => validate_torrents(&mut conn, &user, &form.torrent_ids)?,
+        _ => Ok(vec![]),
+    };
+    match (category, torrents, validate_subject(&form.subject), validate_message(&form.message)) {
+        (Ok(category), Ok(torrents), Ok(subject), Ok(message)) => {
+            let id =
+                Ticket::create(&mut conn, user.id, category, &subject, &message, &torrents).map_err(internal_error)?;
             flash::push(&session, "success", "", "Your ticket has been sent. Staff will reply here.");
             Ok(redirect(&format!("/tickets/{id}")))
         }
-        (subject, message) => {
-            let errors = serde_json::json!({ "subject": subject.err(), "message": message.err() });
+        (category, torrents, subject, message) => {
+            let errors = serde_json::json!({
+                "category": category.err(), "torrent_ids": torrents.err(),
+                "subject": subject.err(), "message": message.err(),
+            });
             new_ticket_page(&tmpl, &cfg, &user, &form, &errors, None, StatusCode::OK)
         }
     }
+}
+
+/// The torrents a Torrent Report lists: at least one, each one the user can see.
+fn validate_torrents(conn: &mut DbConnection, user: &User, input: &str) -> Result<Result<Vec<i32>, String>> {
+    let ids = match parse_torrent_ids(input) {
+        Ok(ids) if ids.is_empty() => return Ok(Err("Please add the torrents this report is about.".into())),
+        Ok(ids) => ids,
+        Err(e) => return Ok(Err(e)),
+    };
+    let mut missing = Vec::new();
+    for &id in &ids {
+        let torrent = Torrent::by_id(conn, id).map_err(internal_error)?;
+        // Deleted torrents only exist for moderators, as on the torrent page
+        let visible =
+            torrent.is_some_and(|t| !(t.is_deleted() || t.is_banned()) || user.can(Permission::ModerateTorrents));
+        if !visible {
+            missing.push(format!("#{id}"));
+        }
+    }
+    Ok(if missing.is_empty() { Ok(ids) } else { Err(format!("Torrent not found: {}", missing.join(", "))) })
 }
 
 /// The ticket if `user` may see it: their own, or any for staff. Everyone else gets 404,
@@ -176,7 +227,10 @@ fn ticket_page(
 ) -> Result<HttpResponse> {
     let opener = User::by_id(conn, ticket.user_id).map_err(internal_error)?;
     let messages = ticket.messages(conn).map_err(internal_error)?;
+    let torrents = ticket.torrents(conn).map_err(internal_error)?;
     let mut ctx = base_context(cfg, Some(user));
+    ctx.insert("category", &TicketCategory::of(&ticket.category));
+    ctx.insert("torrents", &torrents);
     ctx.insert("flash_messages", &flash::take(session));
     ctx.insert("ticket", ticket);
     ctx.insert("opener", &opener.map(|u| u.username));
@@ -269,6 +323,8 @@ pub async fn ticket_post(
 #[derive(Debug, Deserialize)]
 pub struct QueueParams {
     pub p: Option<i64>,
+    /// A [`TicketCategory`] key; empty or missing for all.
+    pub category: Option<String>,
 }
 
 /// GET /admin/tickets and /admin/tickets/{closed,all}: the staff queue.
@@ -289,11 +345,18 @@ pub async fn admin_tickets(
         TicketFilter::parse(list_filter.as_deref()).ok_or_else(|| actix_web::error::ErrorNotFound("Not found"))?;
     let mut conn = pool.get().map_err(internal_error)?;
     let page = params.p.unwrap_or(1).max(1);
-    let (tickets, total) = Ticket::queue(&mut conn, filter, page).map_err(internal_error)?;
+    let category = match params.category.as_deref().filter(|c| !c.is_empty()) {
+        Some(key) => Some(TicketCategory::parse(key).ok_or_else(|| actix_web::error::ErrorNotFound("Not found"))?),
+        None => None,
+    };
+    let (tickets, total) = Ticket::queue(&mut conn, filter, category, page).map_err(internal_error)?;
     let mut ctx = base_context(&cfg, Some(&user));
     ctx.insert("flash_messages", &flash::take(&session));
     ctx.insert("tickets", &tickets);
     ctx.insert("list_filter", filter.name());
+    ctx.insert("categories", &TICKET_CATEGORIES);
+    ctx.insert("category_titles", &category_titles());
+    ctx.insert("category", &category.map(|c| c.key).unwrap_or_default());
     ctx.insert("pagination", &Pagination::new(page, total, TICKETS_PER_PAGE));
     render(&tmpl, "admin/tickets.html", &ctx, StatusCode::OK)
 }
@@ -319,6 +382,17 @@ mod tests {
             "INSERT INTO users (id, username, password_hash, status, level) VALUES \
              (1, 'alice', 'x', 1, 0), (2, 'bob', 'x', 1, 0), (3, 'mod', 'x', 1, 2)",
         )
+        .execute(&mut conn)
+        .unwrap();
+        // Torrent 6 is deleted (flag 32)
+        diesel::sql_query(format!(
+            "INSERT INTO nyaa_torrents (id, info_hash, display_name, torrent_name, information, description, \
+             flags, uploader_id, main_category_id, sub_category_id) VALUES \
+             (5, X'{}', 'Fake release', 'a.torrent', '', '', 0, 2, 1, 2), \
+             (6, X'{}', 'Gone', 'b.torrent', '', '', 32, 2, 1, 2)",
+            "ab".repeat(20),
+            "cd".repeat(20)
+        ))
         .execute(&mut conn)
         .unwrap();
         pool
@@ -421,20 +495,23 @@ mod tests {
         let pool = pool();
         let (app, mut cookie) = app!(pool, config(3, 20), Some(1));
         // Validation keeps what was typed
-        let (status, html) =
-            send!(app, post("/tickets/new", &[("subject", "ab"), ("message", "Some <text>")]), &mut cookie);
+        let (status, html) = send!(
+            app,
+            post("/tickets/new", &[("category", "user"), ("subject", "ab"), ("message", "Some <text>")]),
+            &mut cookie
+        );
         assert_eq!(status, StatusCode::OK);
         assert!(html.contains("Subject must be at least 3"), "{html}");
         assert!(html.contains("Some &lt;text&gt;"), "{html}");
         assert_eq!(count(&pool), (0, 0));
 
-        let form = [("subject", "Account question"), ("message", "Line one\r\nLine two")];
+        let form = [("category", "user"), ("subject", "Account question"), ("message", "Line one\r\nLine two")];
         let (status, _) = send!(app, post("/tickets/new", &form), &mut cookie);
         assert_eq!(status, StatusCode::FOUND);
         let (_, html) = send!(app, get("/tickets/1"), &mut cookie);
         assert!(html.contains("Your ticket has been sent"), "{html}");
         assert!(html.contains("Account question") && html.contains("Line one\nLine two"), "{html}");
-        assert!(html.contains("Waiting for staff"), "{html}");
+        assert!(html.contains("Waiting for staff") && html.contains("User Report"), "{html}");
         let (_, html) = send!(app, get("/tickets"), &mut cookie);
         assert!(html.contains("<a href=\"/tickets/1\">Account question</a>"), "{html}");
 
@@ -486,6 +563,58 @@ mod tests {
     }
 
     #[actix_web::test]
+    async fn torrent_reports_list_torrents() {
+        let pool = pool();
+        let (app, mut cookie) = app!(pool, config(3, 20), Some(1));
+        // The form offers every category; a link fills it in
+        let (_, html) = send!(app, get("/tickets/new?category=torrent&torrent_ids=5"), &mut cookie);
+        for title in ["Torrent Report", "Group Request or Report", "User Report", "Comment Report", "Other"] {
+            assert!(html.contains(title), "{title}: {html}");
+        }
+        assert!(html.contains("value=\"torrent\" required checked"), "{html}");
+        assert!(html.contains(">5</textarea>"), "{html}");
+
+        let report = |ids: &'static str| {
+            post(
+                "/tickets/new",
+                &[("category", "torrent"), ("torrent_ids", ids), ("subject", "Fakes"), ("message", "Mislabeled")],
+            )
+        };
+        for (ids, error) in [
+            ("", "Please add the torrents this report is about."),
+            ("5 6 99", "Torrent not found: #6, #99"),
+            ("5 nope", "&quot;nope&quot; is not a torrent ID or link."),
+        ] {
+            let (status, html) = send!(app, report(ids), &mut cookie);
+            assert_eq!(status, StatusCode::OK, "{ids}");
+            assert!(html.contains(error), "{ids}: {html}");
+        }
+        let (_, html) =
+            send!(app, post("/tickets/new", &[("subject", "Fakes"), ("message", "Mislabeled")]), &mut cookie);
+        assert!(html.contains("Please choose a category."), "{html}");
+        assert_eq!(count(&pool), (0, 0));
+
+        let (status, _) = send!(app, report("https://example.org/view/5 5"), &mut cookie);
+        assert_eq!(status, StatusCode::FOUND);
+        let (_, html) = send!(app, get("/tickets/1"), &mut cookie);
+        assert!(html.contains("Torrents (1)") && html.contains("<a href=\"/view/5\">#5 Fake release</a>"), "{html}");
+
+        // Torrent IDs are ignored for other categories
+        let form = [("category", "other"), ("torrent_ids", "5"), ("subject", "Hello"), ("message", "Question")];
+        send!(app, post("/tickets/new", &form), &mut cookie);
+        let (_, html) = send!(app, get("/tickets/2"), &mut cookie);
+        assert!(!html.contains("Torrents ("), "{html}");
+
+        // Staff filter the queue by category, and the tabs keep the filter
+        let (app, mut moder) = app!(pool, config(3, 20), Some(3));
+        let (_, html) = send!(app, get("/admin/tickets?category=torrent"), &mut moder);
+        assert!(html.contains("<a href=\"/tickets/1\">Fakes</a>") && !html.contains("Hello"), "{html}");
+        assert!(html.contains("href=\"/admin/tickets/closed?category=torrent\""), "{html}");
+        let (status, _) = send!(app, get("/admin/tickets?category=bogus"), &mut moder);
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[actix_web::test]
     async fn queue_is_for_staff_only() {
         let pool = pool();
         for (user, expected) in [(None, StatusCode::UNAUTHORIZED), (Some(1), StatusCode::FORBIDDEN)] {
@@ -503,12 +632,18 @@ mod tests {
         let pool = pool();
         let (app, mut cookie) = app!(pool, config(2, 1), Some(1));
         for n in 1..=2 {
-            let (status, _) =
-                send!(app, post("/tickets/new", &[("subject", "Question"), ("message", "Some message")]), &mut cookie);
+            let (status, _) = send!(
+                app,
+                post("/tickets/new", &[("category", "other"), ("subject", "Question"), ("message", "Some message")]),
+                &mut cookie
+            );
             assert_eq!(status, StatusCode::FOUND, "ticket {n}");
         }
-        let (status, html) =
-            send!(app, post("/tickets/new", &[("subject", "Question"), ("message", "Some message")]), &mut cookie);
+        let (status, html) = send!(
+            app,
+            post("/tickets/new", &[("category", "other"), ("subject", "Question"), ("message", "Some message")]),
+            &mut cookie
+        );
         assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
         assert!(html.contains("You can open 2 tickets per 24 hours."), "{html}");
         let (_, html) = send!(app, get("/tickets/new"), &mut cookie);

@@ -193,6 +193,7 @@ diesel::table! {
         id -> Integer,
         created_time -> Timestamp,
         updated_time -> Timestamp,
+        category -> Text,
         subject -> Text,
         status -> Integer,
         staff_replied -> Bool,
@@ -208,6 +209,13 @@ diesel::table! {
         from_staff -> Bool,
         ticket_id -> Integer,
         user_id -> Nullable<Integer>,
+    }
+}
+
+diesel::table! {
+    support_ticket_torrents (ticket_id, torrent_id) {
+        ticket_id -> Integer,
+        torrent_id -> Integer,
     }
 }
 
@@ -232,6 +240,8 @@ diesel::joinable!(group_reports -> users (user_id));
 diesel::joinable!(support_tickets -> users (user_id));
 diesel::joinable!(support_ticket_messages -> support_tickets (ticket_id));
 diesel::joinable!(support_ticket_messages -> users (user_id));
+diesel::joinable!(support_ticket_torrents -> support_tickets (ticket_id));
+diesel::joinable!(support_ticket_torrents -> nyaa_torrents (torrent_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     nyaa_reports,
@@ -253,4 +263,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     user_sessions,
     support_tickets,
     support_ticket_messages,
+    support_ticket_torrents,
 );
