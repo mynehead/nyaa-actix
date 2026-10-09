@@ -29,6 +29,8 @@ pub struct Config {
     /// Upstream EDITING_TIME_LIMIT, in seconds: how long after posting a comment its author may
     /// still edit or delete it (0 = no limit).
     pub editing_time_limit: i64,
+    /// Upstream's upload rate limit for accounts younger than RATELIMIT_ACCOUNT_AGE.
+    pub upload_limit: UploadLimitConfig,
     /// Meilisearch for text search and stats sorts (MEILI_URL and friends); None keeps search on SQLite.
     pub meili: Option<crate::search::meili::Meili>,
     /// The tracker's management API (TRACKER_API_URL and TRACKER_API_KEY) for the whitelist
@@ -38,6 +40,41 @@ pub struct Config {
     pub trusted: TrustedConfig,
     /// How many support tickets and replies a user may send.
     pub tickets: TicketConfig,
+}
+
+/// Upstream's upload rate limit: accounts younger than RATELIMIT_ACCOUNT_AGE that may not
+/// skip it ([`crate::auth::Permission::SkipUploadLimit`], Trusted and up) can upload
+/// `max_burst` torrents within `burst_secs`; after that, each upload must wait `timeout_secs`
+/// after the previous one. Uploads from the same IP address count too.
+#[derive(Clone, Debug)]
+pub struct UploadLimitConfig {
+    /// RATELIMIT_UPLOADS: false turns the limit off.
+    pub enabled: bool,
+    /// MAX_UPLOAD_BURST
+    pub max_burst: i64,
+    /// UPLOAD_BURST_DURATION, in seconds.
+    pub burst_secs: i64,
+    /// UPLOAD_TIMEOUT, in seconds.
+    pub timeout_secs: i64,
+}
+
+impl Default for UploadLimitConfig {
+    fn default() -> Self {
+        UploadLimitConfig { enabled: true, max_burst: 5, burst_secs: 45 * 60, timeout_secs: 15 * 60 }
+    }
+}
+
+impl UploadLimitConfig {
+    fn from_env() -> Self {
+        let num = |key: &str, default: i64| env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default);
+        let d = UploadLimitConfig::default();
+        UploadLimitConfig {
+            enabled: env::var("RATELIMIT_UPLOADS").ok().and_then(|v| v.parse().ok()).unwrap_or(d.enabled),
+            max_burst: num("MAX_UPLOAD_BURST", d.max_burst),
+            burst_secs: num("UPLOAD_BURST_DURATION", d.burst_secs),
+            timeout_secs: num("UPLOAD_TIMEOUT", d.timeout_secs),
+        }
+    }
 }
 
 /// Rate limits for support tickets. Staff (HandleTickets) are not limited. 0 turns a limit off.
@@ -137,7 +174,8 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(7 * 24 * 3600),
-            editing_time_limit: env::var("EDITING_TIME_LIMIT").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
+            editing_time_limit: env::var("EDITING_TIME_LIMIT").ok().and_then(|v| v.parse().ok()).unwrap_or(3600),
+            upload_limit: UploadLimitConfig::from_env(),
             meili: crate::search::meili::Meili::from_env(),
             tracker: crate::tracker::Tracker::from_env(),
             trusted: TrustedConfig::from_env(),
@@ -166,6 +204,7 @@ impl Config {
             tracker: None,
             ratelimit_account_age: 0,
             editing_time_limit: 0,
+            upload_limit: Default::default(),
             trusted: Default::default(),
             tickets: Default::default(),
         }

@@ -589,6 +589,37 @@ pub(crate) struct Upload {
 /// Errors by upload form field (`torrent_file` for the file itself).
 pub(crate) type UploadErrors = HashMap<&'static str, String>;
 
+/// Upstream's `check_uploader_ratelimit`: how long `user` must still wait before uploading,
+/// or None. Only accounts younger than RATELIMIT_ACCOUNT_AGE without
+/// [`Permission::SkipUploadLimit`] are limited; their uploads and any from the same IP count.
+fn upload_wait(
+    conn: &mut DbConnection,
+    cfg: &Config,
+    user: &User,
+    ip: Option<&[u8]>,
+) -> QueryResult<Option<chrono::Duration>> {
+    let limit = &cfg.upload_limit;
+    if !limit.enabled || user.can(Permission::SkipUploadLimit) || user.age_secs() >= cfg.ratelimit_account_age {
+        return Ok(None);
+    }
+    // No IP (no peer address) matches nothing: stored addresses are never empty
+    let ip = ip.unwrap_or_default().to_vec();
+    let mine = nyaa_torrents::uploader_id.eq(user.id).or(nyaa_torrents::uploader_ip.eq(ip));
+    let now = chrono::Utc::now().naive_utc();
+    let recent: i64 = nyaa_torrents::table
+        .filter(mine.clone())
+        .filter(nyaa_torrents::created_time.ge(now - chrono::Duration::seconds(limit.burst_secs)))
+        .count()
+        .get_result(conn)?;
+    if recent < limit.max_burst {
+        return Ok(None);
+    }
+    let last: Option<chrono::NaiveDateTime> =
+        nyaa_torrents::table.filter(mine).select(diesel::dsl::max(nyaa_torrents::created_time)).first(conn)?;
+    let next = last.map(|t| t + chrono::Duration::seconds(limit.timeout_secs));
+    Ok(next.filter(|&next| next > now).map(|next| next - now))
+}
+
 /// Checks an upload and stores it: the torrent row, its statistics and the info dict.
 /// Returns the new torrent, or every problem found by field.
 pub(crate) async fn create_torrent(
@@ -600,6 +631,14 @@ pub(crate) async fn create_torrent(
     upload: &Upload,
 ) -> Result<std::result::Result<Torrent, UploadErrors>> {
     let mut conn = pool.get().map_err(internal_error)?;
+    // Upstream checks the upload rate limit before anything else and reports only that
+    if let Some(wait) = upload_wait(&mut conn, cfg, user, uploader_ip.as_deref()).map_err(internal_error)? {
+        let minutes = (wait.num_seconds() + 59) / 60;
+        let plural = if minutes == 1 { "" } else { "s" };
+        let message =
+            format!("You've gone over the upload ratelimit. You can upload again in {minutes} minute{plural}.");
+        return Ok(Err(HashMap::from([("ratelimit", message)])));
+    }
     let (form, group_id) = (&upload.form, upload.group_id);
     // The same checks as the edit form, plus the file's own; all are shown at once
     let mut errors = HashMap::new();
@@ -1348,6 +1387,7 @@ mod tests {
                 tracker: None,
                 ratelimit_account_age: 0,
                 editing_time_limit: 0,
+                upload_limit: Default::default(),
                 trusted: Default::default(),
                 tickets: Default::default(),
             }
@@ -2081,6 +2121,72 @@ mod tests {
             let comments: i64 = nyaa_comments::table.count().get_result(&mut pool.get().unwrap()).unwrap();
             assert_eq!(comments, 0);
             std::fs::remove_dir_all(config().torrent_storage_path).ok();
+        }
+
+        #[actix_web::test]
+        async fn new_accounts_wait_after_an_upload_burst() {
+            let pool = pool();
+            let mut conn = pool.get().unwrap();
+            let mut cfg = config();
+            cfg.ratelimit_account_age = 3600;
+            cfg.upload_limit =
+                crate::config::UploadLimitConfig { enabled: true, max_burst: 2, burst_secs: 600, timeout_secs: 300 };
+            let user = |conn: &mut DbConnection, id| User::by_id(conn, id).unwrap().unwrap();
+            let ip = crate::utils::pack_ip("10.0.0.1".parse().unwrap());
+            // Torrent 5 is owner's (1); one more upload from another account on owner's IP
+            diesel::sql_query(format!(
+                "INSERT INTO nyaa_torrents (id, info_hash, display_name, torrent_name, information, description, \
+                 flags, uploader_id, uploader_ip, main_category_id, sub_category_id) \
+                 VALUES (6, X'{}', 'Second', 's.torrent', '', '', 0, 2, X'{}', 1, 2)",
+                "cd".repeat(20),
+                hex::encode(&ip)
+            ))
+            .execute(&mut conn)
+            .unwrap();
+            let wait = |conn: &mut DbConnection, cfg: &Config, id, ip: Option<&[u8]>| {
+                {
+                    let u = user(conn, id);
+                    upload_wait(conn, cfg, &u, ip).unwrap()
+                }
+                .map(|d| d.num_seconds())
+            };
+
+            // One upload of their own is under the burst; the same IP's makes two
+            assert_eq!(wait(&mut conn, &cfg, 1, None), None);
+            let secs = wait(&mut conn, &cfg, 1, Some(&ip)).expect("over the burst");
+            assert!((290..=300).contains(&secs), "{secs}");
+            // Trusted users (2) skip it, and so do accounts older than RATELIMIT_ACCOUNT_AGE
+            assert_eq!(wait(&mut conn, &cfg, 2, Some(&ip)), None);
+            diesel::sql_query("UPDATE users SET created_time = '2000-01-01 00:00:00' WHERE id = 1")
+                .execute(&mut conn)
+                .unwrap();
+            assert_eq!(wait(&mut conn, &cfg, 1, Some(&ip)), None);
+            diesel::sql_query("UPDATE users SET created_time = CURRENT_TIMESTAMP WHERE id = 1")
+                .execute(&mut conn)
+                .unwrap();
+            // The wait runs from the latest upload
+            diesel::sql_query("UPDATE nyaa_torrents SET created_time = datetime('now', '-6 minutes') WHERE id = 6")
+                .execute(&mut conn)
+                .unwrap();
+            assert_eq!(wait(&mut conn, &cfg, 1, Some(&ip)).map(|s| (290..=300).contains(&s)), Some(true));
+            diesel::sql_query("UPDATE nyaa_torrents SET created_time = datetime('now', '-6 minutes')")
+                .execute(&mut conn)
+                .unwrap();
+            assert_eq!(wait(&mut conn, &cfg, 1, Some(&ip)), None);
+            cfg.upload_limit.enabled = false;
+            diesel::sql_query("UPDATE nyaa_torrents SET created_time = CURRENT_TIMESTAMP").execute(&mut conn).unwrap();
+            assert_eq!(wait(&mut conn, &cfg, 1, Some(&ip)), None);
+
+            // The upload page shows the message above the form
+            let mut tera = Tera::new("templates/**/*").unwrap();
+            crate::utils::tera_filters::register(&mut tera);
+            let errors = HashMap::from([("ratelimit", "You've gone over the upload ratelimit.".to_string())]);
+            let owner = user(&mut conn, 1);
+            let page = render_upload(&mut conn, &tera, &cfg, &owner, &EditForm::default(), None, &errors).unwrap();
+            assert!(
+                page.contains("alert-danger\" role=\"alert\">You&#x27;ve gone over the upload ratelimit."),
+                "{page}"
+            );
         }
 
         /// Multipart upload body with `fields` and, when given, a .torrent file.

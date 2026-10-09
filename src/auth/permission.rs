@@ -32,10 +32,12 @@ pub enum Permission {
     HandleTickets,
     /// Delete other users' comments (upstream: superadmins only).
     DeleteComments,
+    /// Upload without the new-account upload rate limit (upstream: trusted users).
+    SkipUploadLimit,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 13] = [
+    pub const ALL: [Permission; 14] = [
         Permission::SetTrustedFlag,
         Permission::ModerateTorrents,
         Permission::BanUsers,
@@ -49,6 +51,7 @@ impl Permission {
         Permission::BanIpRanges,
         Permission::HandleTickets,
         Permission::DeleteComments,
+        Permission::SkipUploadLimit,
     ];
 }
 
@@ -57,7 +60,7 @@ impl UserLevel {
     pub fn grants(self, p: Permission) -> bool {
         use Permission::*;
         let needed = match p {
-            SetTrustedFlag => UserLevel::Trusted,
+            SetTrustedFlag | SkipUploadLimit => UserLevel::Trusted,
             ModerateTorrents | BanUsers | ViewAdminPages | CreateGroups | ChangeUserClass | HandleTickets => {
                 UserLevel::Moderator
             }
@@ -101,7 +104,7 @@ mod tests {
     #[test]
     fn levels_grant_what_upstream_allows() {
         assert_eq!(granted(UserLevel::Regular), vec![]);
-        assert_eq!(granted(UserLevel::Trusted), vec![SetTrustedFlag]);
+        assert_eq!(granted(UserLevel::Trusted), vec![SetTrustedFlag, SkipUploadLimit]);
         assert_eq!(
             granted(UserLevel::Moderator),
             vec![
@@ -111,7 +114,8 @@ mod tests {
                 ViewAdminPages,
                 CreateGroups,
                 ChangeUserClass,
-                HandleTickets
+                HandleTickets,
+                SkipUploadLimit
             ]
         );
         assert_eq!(granted(UserLevel::SuperAdmin), Permission::ALL.to_vec());
