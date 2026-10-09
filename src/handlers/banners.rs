@@ -217,6 +217,7 @@ mod tests {
             meili: None,
             tracker: None,
             ratelimit_account_age: 0,
+            editing_time_limit: 0,
             trusted: Default::default(),
             tickets: Default::default(),
         }

@@ -30,10 +30,12 @@ pub enum Permission {
     BanIpRanges,
     /// Read, answer, close and reopen every user's support tickets (/admin/tickets).
     HandleTickets,
+    /// Delete other users' comments (upstream: superadmins only).
+    DeleteComments,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 12] = [
+    pub const ALL: [Permission; 13] = [
         Permission::SetTrustedFlag,
         Permission::ModerateTorrents,
         Permission::BanUsers,
@@ -46,6 +48,7 @@ impl Permission {
         Permission::NukeUsers,
         Permission::BanIpRanges,
         Permission::HandleTickets,
+        Permission::DeleteComments,
     ];
 }
 
@@ -58,7 +61,7 @@ impl UserLevel {
             ModerateTorrents | BanUsers | ViewAdminPages | CreateGroups | ChangeUserClass | HandleTickets => {
                 UserLevel::Moderator
             }
-            SeeIps | DecideTrusted | GrantModerator | NukeUsers | BanIpRanges => UserLevel::SuperAdmin,
+            SeeIps | DecideTrusted | GrantModerator | NukeUsers | BanIpRanges | DeleteComments => UserLevel::SuperAdmin,
         };
         self >= needed
     }

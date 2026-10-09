@@ -26,6 +26,9 @@ pub struct Config {
     pub trusted_proxies: Vec<crate::utils::proxy::IpNet>,
     /// Upstream RATELIMIT_ACCOUNT_AGE, in seconds: accounts must be older than this to report torrents.
     pub ratelimit_account_age: i64,
+    /// Upstream EDITING_TIME_LIMIT, in seconds: how long after posting a comment its author may
+    /// still edit or delete it (0 = no limit).
+    pub editing_time_limit: i64,
     /// Meilisearch for text search and stats sorts (MEILI_URL and friends); None keeps search on SQLite.
     pub meili: Option<crate::search::meili::Meili>,
     /// The tracker's management API (TRACKER_API_URL and TRACKER_API_KEY) for the whitelist
@@ -134,6 +137,7 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(7 * 24 * 3600),
+            editing_time_limit: env::var("EDITING_TIME_LIMIT").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
             meili: crate::search::meili::Meili::from_env(),
             tracker: crate::tracker::Tracker::from_env(),
             trusted: TrustedConfig::from_env(),
@@ -161,6 +165,7 @@ impl Config {
             meili: None,
             tracker: None,
             ratelimit_account_age: 0,
+            editing_time_limit: 0,
             trusted: Default::default(),
             tickets: Default::default(),
         }
