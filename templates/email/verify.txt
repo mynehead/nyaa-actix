@@ -1,4 +1,4 @@
-{{ site_name }} Account Verification
+{{ global_site_name }} Account Verification
 {{ site_name }} Email verification
 
 Please click the link below to verify your email and activate your account.

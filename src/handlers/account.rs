@@ -267,6 +267,7 @@ fn mail_job(
 ) -> Result<impl FnOnce() -> bool + Send + 'static> {
     let mut ctx = tera::Context::new();
     ctx.insert("site_name", &cfg.site_name);
+    ctx.insert("global_site_name", &cfg.global_site_name);
     ctx.insert("link", link);
     let text = tmpl.render(template, &ctx).map_err(internal_error)?;
     let (subject, body) = text.split_once('\n').unwrap_or((&text, ""));
@@ -776,17 +777,23 @@ mod tests {
             database_url: String::new(),
             secret_key: String::new(),
             site_name: "Nyaa".into(),
+            global_site_name: "Nyaa".into(),
             site_flavor: "nyaa".into(),
+            sister_site_url: None,
             results_per_page: 75,
             max_pages: 0,
             torrent_storage_path: String::new(),
             avatar_storage_path: avatars.to_string_lossy().into_owned(),
             enable_gravatar: false,
+            show_stats: true,
+            max_files_view: 1000,
+            required_announce_url: None,
             maintenance: Default::default(),
             site_url: "http://localhost:8080".into(),
             tracker_urls: vec![],
             trusted_proxies: vec![],
             meili: None,
+            count_cache: None,
             tracker: None,
             ratelimit_account_age: 0,
             editing_time_limit: 0,

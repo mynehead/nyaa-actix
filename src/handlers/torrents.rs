@@ -347,7 +347,7 @@ async fn render_view(
     ctx.insert("stats", &stats);
     ctx.insert("files", &files);
     ctx.insert("file_count", &file_count);
-    ctx.insert("max_files_view", &MAX_FILES_VIEW);
+    ctx.insert("max_files_view", &cfg.max_files_view);
     ctx.insert("comments", &comments);
     // Upstream's "Hide comments by default" preference collapses the comments panel
     let hide_comments = match &current_user {
@@ -368,9 +368,6 @@ async fn render_view(
 
     tmpl.render("view.html", &ctx).map_err(internal_error)
 }
-
-/// Upstream MAX_FILES_VIEW: longer file lists are not rendered.
-const MAX_FILES_VIEW: usize = 1000;
 
 /// Deleted and banned torrents are only visible to moderators.
 fn check_visible(torrent: &Torrent, current_user: &Option<User>) -> Result<()> {
@@ -669,6 +666,14 @@ pub(crate) async fn create_torrent(
             }
             Some(t) => replaced_id = Some(t.id),
             None => {}
+        }
+    }
+    // Upstream ENFORCE_MAIN_ANNOUNCE_URL: the torrent must list the site's tracker
+    if let (Some(meta), Some(required)) = (&meta, &cfg.required_announce_url) {
+        if !meta.trackers.iter().any(|t| t == required) {
+            errors
+                .entry("torrent_file")
+                .or_insert_with(|| format!("Please include {required} in the trackers of the torrent"));
         }
     }
 
@@ -1375,17 +1380,23 @@ mod tests {
                 database_url: String::new(),
                 secret_key: String::new(),
                 site_name: "Nyaa".into(),
+                global_site_name: "Nyaa".into(),
                 site_flavor: "nyaa".into(),
+                sister_site_url: None,
                 results_per_page: 75,
                 max_pages: 0,
                 torrent_storage_path: storage.to_string_lossy().into_owned(),
                 avatar_storage_path: String::new(),
                 enable_gravatar: false,
+                show_stats: true,
+                max_files_view: 1000,
+                required_announce_url: None,
                 maintenance: Default::default(),
                 site_url: String::new(),
                 tracker_urls: vec![],
                 trusted_proxies: vec![],
                 meili: None,
+                count_cache: None,
                 tracker: None,
                 ratelimit_account_age: 0,
                 editing_time_limit: 0,
@@ -2074,6 +2085,33 @@ mod tests {
                 admin_logs(&pool),
                 [(4, "Comment by [mod](/user/mod) deleted on torrent [#5](/view/5)".to_string())]
             );
+        }
+
+        #[actix_web::test]
+        async fn enforced_announce_url_must_be_in_the_torrent() {
+            let pool = pool();
+            let mut cfg = config();
+            cfg.required_announce_url = Some("udp://ours/announce".into());
+            let user = crate::models::User::by_id(&mut pool.get().unwrap(), 2).unwrap().unwrap();
+            let upload = |announce: &str| {
+                let info = "d6:lengthi5e4:name5:b.txt12:piece lengthi16384e6:pieces20:BBBBBBBBBBBBBBBBBBBBe";
+                let file = format!("d8:announce{}:{announce}4:info{info}e", announce.len()).into_bytes();
+                Upload {
+                    torrent_file: Some(file),
+                    form: EditForm { category: "1_2".into(), ..Default::default() },
+                    group_id: None,
+                }
+            };
+            let (pool, storage) = (pool.clone(), storage());
+            let err = create_torrent(&pool, &cfg, &storage, &user, None, &upload("udp://other/announce"))
+                .await
+                .unwrap()
+                .unwrap_err();
+            assert_eq!(err["torrent_file"], "Please include udp://ours/announce in the trackers of the torrent");
+            assert!(create_torrent(&pool, &cfg, &storage, &user, None, &upload("udp://ours/announce"))
+                .await
+                .unwrap()
+                .is_ok());
         }
 
         /// The test row is given the hash of a real .torrent, so uploading that file collides with it.

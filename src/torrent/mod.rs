@@ -11,6 +11,8 @@ pub struct TorrentMeta {
     pub filesize: i64,
     pub encoding: String,
     pub bencoded_info: Vec<u8>,
+    /// The torrent's `announce` and `announce-list` URLs, in order.
+    pub trackers: Vec<String>,
 }
 
 pub fn parse_torrent(data: &[u8]) -> Result<TorrentMeta, bencode::BencodeError> {
@@ -42,7 +44,16 @@ pub fn parse_torrent(data: &[u8]) -> Result<TorrentMeta, bencode::BencodeError> 
         0
     };
 
-    Ok(TorrentMeta { info_hash, display_name: name, filesize, encoding, bencoded_info })
+    let announce_list = dict.get(b"announce-list".as_slice()).and_then(|v| v.as_list()).unwrap_or_default();
+    let trackers = dict
+        .get(b"announce".as_slice())
+        .into_iter()
+        .chain(announce_list.iter().flat_map(|tier| tier.as_list().unwrap_or_default()))
+        .filter_map(|v| v.as_str())
+        .map(str::to_string)
+        .collect();
+
+    Ok(TorrentMeta { info_hash, display_name: name, filesize, encoding, bencoded_info, trackers })
 }
 
 /// A file or folder in a torrent's file list. Folders have `size: None`.
@@ -180,6 +191,15 @@ pub(crate) mod tests {
         assert_eq!(meta.filesize, 5);
         assert_eq!(meta.encoding, "utf-8");
         assert_eq!(meta.bencoded_info, INFO);
+    }
+
+    #[test]
+    fn collects_announce_and_announce_list() {
+        let mut data = b"d8:announce3:t/113:announce-listll3:t/1el3:t/23:t/3ee4:info".to_vec();
+        data.extend_from_slice(INFO);
+        data.push(b'e');
+        assert_eq!(parse_torrent(&data).unwrap().trackers, ["t/1", "t/1", "t/2", "t/3"]);
+        assert_eq!(parse_torrent(&torrent_file(INFO)).unwrap().trackers, ["http://x/annou"]);
     }
 
     #[test]
