@@ -294,6 +294,7 @@ mod tests {
             torrent_storage_path: storage.to_string_lossy().into_owned(),
             ratelimit_account_age: account_age,
             editing_time_limit: 0,
+            upload_limit: Default::default(),
             ..Config::for_tests()
         }
     }
