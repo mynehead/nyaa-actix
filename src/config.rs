@@ -26,7 +26,7 @@ pub struct Config {
     /// Upstream RATELIMIT_ACCOUNT_AGE, in seconds: accounts must be older than this to report torrents.
     pub ratelimit_account_age: i64,
     /// Upstream EDITING_TIME_LIMIT, in seconds: how long after posting a comment its author may
-    /// still edit or delete it (0 = no limit).
+    /// still edit or delete it (0 = no limit). Moderators and admins have no limit.
     pub editing_time_limit: i64,
     /// Upstream's upload rate limit for accounts younger than RATELIMIT_ACCOUNT_AGE.
     pub upload_limit: UploadLimitConfig,
