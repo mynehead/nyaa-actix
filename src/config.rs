@@ -52,6 +52,8 @@ pub struct Config {
     pub tickets: TicketConfig,
     /// Two-factor sign-in (MFA_REQUIRED_LEVEL, MFA_ISSUER_NAME).
     pub mfa: crate::auth::mfa::MfaConfig,
+    /// Upstream EMAIL_BLACKLIST and EMAIL_SERVER_BLACKLIST: email providers registration turns away.
+    pub email_blacklist: crate::auth::email_blacklist::EmailBlacklist,
 }
 
 /// Upstream's maintenance mode: every page still shows, with `message` on top, but nothing
@@ -274,6 +276,7 @@ impl Config {
             tracker: crate::tracker::Tracker::from_env(),
             trusted: TrustedConfig::from_env(),
             tickets: TicketConfig::from_env(),
+            email_blacklist: crate::auth::email_blacklist::EmailBlacklist::from_env(),
         }
     }
 
@@ -306,6 +309,7 @@ impl Config {
             trusted: Default::default(),
             tickets: Default::default(),
             mfa: Default::default(),
+            email_blacklist: Default::default(),
         }
     }
 

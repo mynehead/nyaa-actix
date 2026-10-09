@@ -10,6 +10,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tera::Tera;
 
+use crate::auth::email_blacklist::BLACKLISTED;
 use crate::auth::mfa::UserMfa;
 use crate::auth::CurrentUser;
 use crate::config::Config;
@@ -161,8 +162,14 @@ pub async fn register_post(
     if User::username_taken(&mut conn, username).map_err(internal_error)? {
         errors.push("Username is already taken.".into());
     }
-    if User::by_email(&mut conn, email).map_err(internal_error)?.is_some() {
+    // As upstream: the address blacklist goes before the in-use check, the mail server
+    // lookup (DNS) only when the form is otherwise fine
+    if cfg.email_blacklist.blocks_address(email) {
+        errors.push(BLACKLISTED.into());
+    } else if User::by_email(&mut conn, email).map_err(internal_error)?.is_some() {
         errors.push("Email is already in use.".into());
+    } else if errors.is_empty() && cfg.email_blacklist.blocks_server(email).await {
+        errors.push(BLACKLISTED.into());
     }
 
     let render_errors = |errors: &[String]| -> Result<HttpResponse> {
@@ -814,6 +821,7 @@ pub(crate) mod tests {
             trusted: Default::default(),
             tickets: Default::default(),
             mfa: Default::default(),
+            email_blacklist: crate::auth::email_blacklist::EmailBlacklist::upstream_defaults(),
         }
     }
 
@@ -931,6 +939,9 @@ pub(crate) mod tests {
         let (status, page) = register("carl", "carl").await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(page.contains("Please enter a valid email address."), "{page}");
+        let (status, page) = register("dave", "Dave@Hotmail.com").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(page.contains("Blacklisted email provider"), "{page}");
         let (status, _) = register(" carl ", "carl@example.com").await;
         assert_eq!(status, StatusCode::FOUND);
         assert!(User::by_username(&mut pool.get().unwrap(), "carl").unwrap().is_some(), "stored trimmed");
