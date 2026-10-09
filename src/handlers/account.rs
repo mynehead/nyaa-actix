@@ -782,6 +782,8 @@ mod tests {
             torrent_storage_path: String::new(),
             avatar_storage_path: avatars.to_string_lossy().into_owned(),
             enable_gravatar: false,
+            gravatar_url: crate::config::DEFAULT_GRAVATAR_URL.into(),
+            gravatar_sha256: false,
             maintenance: Default::default(),
             site_url: "http://localhost:8080".into(),
             tracker_urls: vec![],
@@ -1303,6 +1305,31 @@ mod tests {
         );
         user.avatar_time = Some(chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap().naive_utc());
         assert_eq!(user.avatar_url(&cfg), "/avatar/1?v=1700000000");
+    }
+
+    #[::core::prelude::v1::test]
+    fn gravatar_self_hosted_url_and_sha256() {
+        let mut cfg = config("gravatar-self-hosted");
+        cfg.enable_gravatar = true;
+        cfg.gravatar_url = "https://avatars.example.org/avatar".into();
+        let user = User { avatar_time: None, ..User::by_id(&mut pool().get().unwrap(), 1).unwrap().unwrap() };
+        let url = user.avatar_url(&cfg);
+        assert!(
+            url.starts_with("https://avatars.example.org/avatar/c160f8cc69a4f0bf2b0362752353d060?s=120&d="),
+            "{}",
+            url
+        );
+        cfg.gravatar_sha256 = true;
+        // sha256("alice@example.com")
+        let url = user.avatar_url(&cfg);
+        assert!(
+            url.starts_with(
+                "https://avatars.example.org/avatar/ff8d9819fc0e12bf0d24892e45987e249a28dce836a85cad60e28eaaa8c6d976?"
+            ),
+            "{}",
+            url
+        );
+        assert!(!url.contains("alice"), "{}", url);
     }
 
     #[::core::prelude::v1::test]

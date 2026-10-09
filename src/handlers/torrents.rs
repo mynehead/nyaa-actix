@@ -1381,6 +1381,8 @@ mod tests {
                 torrent_storage_path: storage.to_string_lossy().into_owned(),
                 avatar_storage_path: String::new(),
                 enable_gravatar: false,
+                gravatar_url: crate::config::DEFAULT_GRAVATAR_URL.into(),
+                gravatar_sha256: false,
                 maintenance: Default::default(),
                 site_url: String::new(),
                 tracker_urls: vec![],
