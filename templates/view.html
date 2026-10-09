@@ -42,7 +42,7 @@
 			</div>
 
 			<div class="col-md-1">Seeders:</div>
-			<div class="col-md-5"><span style="color: green;">{% if stats %}{{ stats.seed_count }}{% else %}0{% endif %}</span></div>
+			<div class="col-md-5"><span class="text-seeders">{% if stats %}{{ stats.seed_count }}{% else %}0{% endif %}</span></div>
 		</div>
 
 		{% if group %}
@@ -63,7 +63,7 @@
 			</div>
 
 			<div class="col-md-1">Leechers:</div>
-			<div class="col-md-5"><span style="color: red;">{% if stats %}{{ stats.leech_count }}{% else %}0{% endif %}</span></div>
+			<div class="col-md-5"><span class="text-leechers">{% if stats %}{{ stats.leech_count }}{% else %}0{% endif %}</span></div>
 		</div>
 
 		<div class="row">
