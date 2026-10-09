@@ -481,16 +481,16 @@ pub(crate) async fn create_torrent(
         Some(Ok(meta)) => Some(meta),
     };
 
-    // A deleted (but not banned) torrent may be uploaded again; the new upload
-    // replaces it and keeps its id, as upstream.
+    // A banned hash can never be uploaded again (the tracker refuses it too). A deleted (but
+    // not banned) torrent may be; the new upload replaces it and keeps its id, as upstream.
     let mut replaced_id = None;
     if let Some(meta) = &meta {
         match Torrent::by_info_hash(&mut conn, &meta.info_hash).map_err(internal_error)? {
-            Some(t) if !t.is_deleted() => {
-                errors.insert("torrent_file", format!("This torrent already exists (#{})", t.id));
-            }
             Some(t) if t.is_banned() => {
                 errors.insert("torrent_file", "This torrent is banned".to_string());
+            }
+            Some(t) if !t.is_deleted() => {
+                errors.insert("torrent_file", format!("This torrent already exists (#{})", t.id));
             }
             Some(t) => replaced_id = Some(t.id),
             None => {}
@@ -1754,10 +1754,13 @@ mod tests {
             let page = String::from_utf8(test::read_body(res).await.to_vec()).unwrap();
             assert!(page.contains("This torrent already exists (#5)"), "{page}");
 
-            set_flags(TorrentFlags::DELETED | TorrentFlags::BANNED);
-            let res = test::call_service(&app, upload(&file)).await;
-            let page = String::from_utf8(test::read_body(res).await.to_vec()).unwrap();
-            assert!(page.contains("This torrent is banned"), "{page}");
+            // Banned, deleted or not
+            for flags in [TorrentFlags::BANNED, TorrentFlags::DELETED | TorrentFlags::BANNED] {
+                set_flags(flags);
+                let res = test::call_service(&app, upload(&file)).await;
+                let page = String::from_utf8(test::read_body(res).await.to_vec()).unwrap();
+                assert!(page.contains("This torrent is banned"), "{page}");
+            }
 
             set_flags(TorrentFlags::DELETED);
             diesel::sql_query("INSERT INTO nyaa_comments (torrent_id, user_id, text) VALUES (5, 1, 'old')")

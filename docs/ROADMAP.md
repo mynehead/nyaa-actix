@@ -35,9 +35,11 @@ port internal).
 
 Built (`src/tracker.rs`): instead of an outbox table, handlers queue the ids of changed
 torrents for a background thread, which sends them in batches. Whenever the tracker's
-start time changes (or a call failed) the thread sends the whole whitelist again, so an
-upload never fails because the tracker is briefly down, and deletes/bans/user nukes that
-happened meanwhile still reach it. Counts come from `GET /api/torrents` in batches of 200.
+start time changes (or a call failed) the thread sends the whole whitelist and blacklist
+again, so an upload never fails because the tracker is briefly down, and deletes/bans/user
+nukes that happened meanwhile still reach it. Deleted and banned torrents go off the
+whitelist and onto the blacklist (`/api/blacklists`, enforced with
+`TRACKER__BLACKLIST_ENABLED=true`); restoring one reverses both. Counts come from `GET /api/torrents` in batches of 200.
 
 Events that must enqueue: upload (`insert`), torrent delete or ban (`remove`), undelete/unban
 (`insert`), user nuke (`remove` for each torrent).
