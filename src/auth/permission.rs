@@ -26,10 +26,12 @@ pub enum Permission {
     GrantModerator,
     /// Delete and ban all torrents, or delete all comments, of a lower-ranked user.
     NukeUsers,
+    /// Read, answer, close and reopen every user's support tickets (/admin/tickets).
+    HandleTickets,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 10] = [
+    pub const ALL: [Permission; 11] = [
         Permission::SetTrustedFlag,
         Permission::ModerateTorrents,
         Permission::BanUsers,
@@ -40,6 +42,7 @@ impl Permission {
         Permission::ChangeUserClass,
         Permission::GrantModerator,
         Permission::NukeUsers,
+        Permission::HandleTickets,
     ];
 }
 
@@ -49,7 +52,9 @@ impl UserLevel {
         use Permission::*;
         let needed = match p {
             SetTrustedFlag => UserLevel::Trusted,
-            ModerateTorrents | BanUsers | ViewAdminPages | CreateGroups | ChangeUserClass => UserLevel::Moderator,
+            ModerateTorrents | BanUsers | ViewAdminPages | CreateGroups | ChangeUserClass | HandleTickets => {
+                UserLevel::Moderator
+            }
             SeeIps | DecideTrusted | GrantModerator | NukeUsers => UserLevel::SuperAdmin,
         };
         self >= needed
@@ -93,7 +98,15 @@ mod tests {
         assert_eq!(granted(UserLevel::Trusted), vec![SetTrustedFlag]);
         assert_eq!(
             granted(UserLevel::Moderator),
-            vec![SetTrustedFlag, ModerateTorrents, BanUsers, ViewAdminPages, CreateGroups, ChangeUserClass]
+            vec![
+                SetTrustedFlag,
+                ModerateTorrents,
+                BanUsers,
+                ViewAdminPages,
+                CreateGroups,
+                ChangeUserClass,
+                HandleTickets
+            ]
         );
         assert_eq!(granted(UserLevel::SuperAdmin), Permission::ALL.to_vec());
     }

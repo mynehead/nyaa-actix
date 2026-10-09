@@ -1,0 +1,47 @@
+{% extends "layout.html" %}
+{% macro filter_tab(name, label, list_filter) -%}
+	<li class="nav-item{% if list_filter == name %} active{% endif %}">
+		<a class="nav-link" href="/admin/tickets{% if name != "open" %}/{{ name }}{% endif %}">{{ label }}</a>
+	</li>
+{%- endmacro filter_tab %}
+{% block title %}Tickets :: {{ config.site_name }}{% endblock %}
+{% block body %}
+{% set page_url = "/admin/tickets" %}{% if list_filter != "open" %}{% set page_url = page_url ~ "/" ~ list_filter %}{% endif %}
+<ul class="nav nav-tabs" role="tablist">
+	{{ self::filter_tab(name="open", label="Open", list_filter=list_filter) }}
+	{{ self::filter_tab(name="closed", label="Closed", list_filter=list_filter) }}
+	{{ self::filter_tab(name="all", label="All", list_filter=list_filter) }}
+</ul>
+<div class="table">
+	<table class="table table-bordered table-hover table-striped table-condensed">
+		<caption>{{ pagination.total_items }} {{ list_filter }} ticket{% if pagination.total_items != 1 %}s{% endif %}{% if list_filter == "open" %}, waiting for staff first{% endif %}</caption>
+		<thead>
+			<tr>
+				<th scope="col">#</th>
+				<th scope="col">Subject</th>
+				<th scope="col">User</th>
+				<th scope="col">Status</th>
+				<th scope="col">Last activity</th>
+			</tr>
+		</thead>
+		<tbody>
+			{% for ticket in tickets %}
+			<tr class="reports-row">
+				<td>{{ ticket.id }}</td>
+				<td><a href="/tickets/{{ ticket.id }}">{{ ticket.subject }}</a></td>
+				<td><a href="/user/{{ ticket.username | urlencode }}">{{ ticket.username }}</a></td>
+				<td>
+					{% if ticket.status == 1 %}<span class="label label-default">Closed</span>
+					{% elif ticket.staff_replied %}<span class="label label-success">Answered</span>
+					{% else %}<span class="label label-warning">Waiting for staff</span>{% endif %}
+				</td>
+				<td data-timestamp="{{ ticket.updated_time | date(format="%s") }}">{{ ticket.updated_time | date(format="%Y-%m-%d %H:%M") }}</td>
+			</tr>
+			{% else %}
+			<tr><td colspan="5" class="text-center">No tickets.</td></tr>
+			{% endfor %}
+		</tbody>
+	</table>
+</div>
+{% include "admin/pagination.html" %}
+{% endblock %}

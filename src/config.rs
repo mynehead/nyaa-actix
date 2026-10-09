@@ -33,6 +33,40 @@ pub struct Config {
     pub tracker: Option<crate::tracker::Tracker>,
     /// Who may apply for trusted status (upstream's "Trusted Requirements").
     pub trusted: TrustedConfig,
+    /// How many support tickets and replies a user may send.
+    pub tickets: TicketConfig,
+}
+
+/// Rate limits for support tickets. Staff (HandleTickets) are not limited. 0 turns a limit off.
+#[derive(Clone, Debug)]
+pub struct TicketConfig {
+    /// TICKET_RATE_LIMIT: new tickets per user per TICKET_RATE_WINDOW.
+    pub max_tickets: i64,
+    /// TICKET_RATE_WINDOW, in seconds.
+    pub ticket_window_secs: i64,
+    /// TICKET_REPLY_RATE_LIMIT: replies per user per TICKET_REPLY_RATE_WINDOW.
+    pub max_replies: i64,
+    /// TICKET_REPLY_RATE_WINDOW, in seconds.
+    pub reply_window_secs: i64,
+}
+
+impl Default for TicketConfig {
+    fn default() -> Self {
+        TicketConfig { max_tickets: 3, ticket_window_secs: 24 * 3600, max_replies: 20, reply_window_secs: 3600 }
+    }
+}
+
+impl TicketConfig {
+    fn from_env() -> Self {
+        let num = |key: &str, default: i64| env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default);
+        let d = TicketConfig::default();
+        TicketConfig {
+            max_tickets: num("TICKET_RATE_LIMIT", d.max_tickets),
+            ticket_window_secs: num("TICKET_RATE_WINDOW", d.ticket_window_secs),
+            max_replies: num("TICKET_REPLY_RATE_LIMIT", d.max_replies),
+            reply_window_secs: num("TICKET_REPLY_RATE_WINDOW", d.reply_window_secs),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -103,6 +137,7 @@ impl Config {
             meili: crate::search::meili::Meili::from_env(),
             tracker: crate::tracker::Tracker::from_env(),
             trusted: TrustedConfig::from_env(),
+            tickets: TicketConfig::from_env(),
         }
     }
 
@@ -127,6 +162,7 @@ impl Config {
             tracker: None,
             ratelimit_account_age: 0,
             trusted: Default::default(),
+            tickets: Default::default(),
         }
     }
 

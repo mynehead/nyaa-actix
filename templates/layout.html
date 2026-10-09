@@ -80,6 +80,7 @@
 							</a>
 							<ul class="dropdown-menu">
 								<li><a href="/admin/reports">Reports</a></li>
+								{% if can.handle_tickets %}<li><a href="/admin/tickets">Tickets</a></li>{% endif %}
 								<li><a href="/admin/log">Log</a></li>
 								<li><a href="/admin/bans">Bans</a></li>
 								<li><a href="/admin/trusted">Trusted</a></li>
@@ -117,6 +118,12 @@
 									<a href="/profile">
 										<i class="fa fa-gear fa-fw"></i>
 										Profile
+									</a>
+								</li>
+								<li>
+									<a href="/tickets">
+										<i class="fa fa-life-ring fa-fw"></i>
+										Support
 									</a>
 								</li>
 								<li>

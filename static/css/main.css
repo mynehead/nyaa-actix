@@ -785,3 +785,8 @@ body.dark .search-help code {
 	width: auto;
 	margin: 6px 0;
 }
+
+/* Close/reopen button under the ticket reply form */
+.ticket-status-form {
+	margin-top: 10px;
+}

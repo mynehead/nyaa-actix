@@ -7,6 +7,7 @@ pub mod groups;
 pub mod home;
 pub mod reports;
 pub mod site;
+pub mod tickets;
 pub mod torrents;
 pub mod trusted;
 pub mod users;
