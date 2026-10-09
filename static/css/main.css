@@ -860,18 +860,13 @@ body.dark .ticket-category-card small {
 	color: #999;
 }
 
-/* nyaa-actix: readable links in the dark torrent list. Upstream's dark visited (#205c90) and
-   hover (#19578b) blues are darker than the normal link color, so on trusted (green) and
-   remake (red) rows they all but disappear, and the row hover lightens the background
-   under them. Lighter visited/hover colors and a softer row hover keep every row readable;
-   unvisited links keep upstream's #247fcc. */
+/* nyaa-actix: upstream's dark hover blue (#19578b) is darker than the normal link color and
+   the row hover lightens the background under it, so hovered links on trusted (green) and
+   remake (red) rows all but disappear. A lighter hover color and a softer row hover fix that;
+   unvisited (#247fcc) and visited (#205c90) links keep upstream's colors. */
 body.dark a:hover,
 body.dark a:focus {
 	color: #4d9ee0; /* upstream's dark .alert-info a:hover */
-}
-
-body.dark .torrent-list > tbody > tr > td a:not(.comments):visited {
-	color: #9b9fe6;
 }
 
 body.dark .torrent-list > tbody > tr > td a:not(.comments):hover,
