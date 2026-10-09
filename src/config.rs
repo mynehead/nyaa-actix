@@ -7,8 +7,7 @@ pub struct Config {
     pub site_name: String,
     pub site_flavor: String,
     pub results_per_page: i64,
-    /// Upstream MAX_PAGES: cap on how deep listings can be paged (0 = no cap). Not enforced yet.
-    #[allow(dead_code)]
+    /// Upstream MAX_PAGES: cap on how deep torrent listings can be paged (0 = no cap).
     pub max_pages: i64,
     pub torrent_storage_path: String,
     /// Where uploaded avatars are kept, as `{user_id}.png`.
