@@ -27,6 +27,8 @@ use crate::utils::{avatar, client_addr, client_ip, flash, internal_error, token}
 pub struct LoginForm {
     pub username: String,
     pub password: String,
+    #[serde(default, rename = "g-recaptcha-response")]
+    pub recaptcha: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,6 +82,15 @@ pub async fn login_post(
         ctx.insert("username", &form.username);
         let html = tmpl.render("login.html", &ctx).map_err(internal_error)?;
         return Ok(HttpResponse::TooManyRequests().content_type("text/html").body(html));
+    }
+    // The captcha before the password, so guessing passwords needs a solved captcha each time
+    let remote = client_addr(&req).map(|a| a.to_string());
+    if let Err(error) = crate::captcha::check_form(&cfg, &form.recaptcha, remote).await? {
+        let mut ctx = base_context(&cfg, None);
+        ctx.insert("error", &error);
+        ctx.insert("username", &form.username);
+        let html = tmpl.render("login.html", &ctx).map_err(internal_error)?;
+        return Ok(HttpResponse::BadRequest().content_type("text/html").body(html));
     }
 
     // Argon2 takes tens of milliseconds of CPU; keep it off the async workers
@@ -159,7 +170,7 @@ pub async fn register_post(
     REGISTRATIONS_BY_IP.hit(&ip);
     // Upstream's RegisterForm captcha, checked before any name or address is looked up
     let remote = client_addr(&req).map(|a| a.to_string());
-    if let Err(error) = crate::captcha::check_form(&cfg, |_| true, &form.recaptcha, remote).await? {
+    if let Err(error) = crate::captcha::check_form(&cfg, &form.recaptcha, remote).await? {
         let mut ctx = base_context(&cfg, None);
         ctx.insert("errors", &[error]);
         ctx.insert("username", &form.username);
@@ -348,8 +359,6 @@ pub async fn activate(
 pub struct PasswordResetRequestForm {
     #[serde(default)]
     pub email: String,
-    #[serde(default, rename = "g-recaptcha-response")]
-    pub recaptcha: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -405,11 +414,6 @@ pub async fn password_reset_request_post(
         return Err(actix_web::error::ErrorTooManyRequests("Too many password reset requests. Try again later."));
     }
     RESET_REQUESTS_BY_IP.hit(&ip);
-    let remote = client_addr(&req).map(|a| a.to_string());
-    if let Err(error) = crate::captcha::check_form(&cfg, |_| true, &form.recaptcha, remote).await? {
-        flash::push(&session, "danger", "", &error);
-        return Ok(redirect("/password-reset"));
-    }
 
     let email = form.email.trim();
     let mut conn = pool.get().map_err(internal_error)?;
@@ -975,9 +979,9 @@ pub(crate) mod tests {
     }
 
     #[actix_web::test]
-    async fn register_asks_for_the_captcha_first() {
+    async fn login_and_register_ask_for_the_captcha_first() {
         let (pool, mut cfg) = (pool(), config("register-captcha"));
-        cfg.recaptcha = Some(crate::captcha::Recaptcha::new("site-key".into(), "secret".into(), 0));
+        cfg.recaptcha = Some(crate::captcha::Recaptcha::new("site-key".into(), "secret".into()));
         let (app, _) = app!(pool, cfg);
         let req = test::TestRequest::post()
             .uri("/register")
@@ -995,6 +999,11 @@ pub(crate) mod tests {
         assert!(page.contains("Please complete the captcha."), "{page}");
         assert!(page.contains("data-sitekey=\"site-key\""), "{page}");
         assert!(User::by_username(&mut pool.get().unwrap(), "dave").unwrap().is_none());
+
+        // Login asks too, before the password is checked
+        let (status, page) = try_login!(app, "alice", PASSWORD);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(page.contains("Please complete the captcha.") && page.contains("data-sitekey=\"site-key\""), "{page}");
     }
 
     #[actix_web::test]

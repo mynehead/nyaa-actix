@@ -1,16 +1,10 @@
-//! Google reCAPTCHA (v2 checkbox), as upstream's USE_RECAPTCHA: on registration and password
-//! reset requests, and on uploads and comments from accounts younger than
-//! ACCOUNT_RECAPTCHA_AGE. Off unless both keys are set. The answer is checked server-side
-//! against Google's siteverify endpoint; if Google can't be reached the form is turned back.
+//! Google reCAPTCHA (v2 checkbox), upstream's USE_RECAPTCHA, on the login and registration
+//! forms. Off unless both keys are set. The answer is checked server-side against Google's
+//! siteverify endpoint; if Google can't be reached the form is turned back.
 
 use std::time::Duration;
 
 use serde::Deserialize;
-
-use crate::models::User;
-
-/// Name of the form field the widget fills in.
-pub const FIELD: &str = "g-recaptcha-response";
 
 const VERIFY_URL: &str = "https://www.google.com/recaptcha/api/siteverify";
 
@@ -20,14 +14,12 @@ pub struct Recaptcha {
     pub public_key: String,
     /// RECAPTCHA_PRIVATE_KEY: the secret, sent only to Google.
     private_key: String,
-    /// ACCOUNT_RECAPTCHA_AGE, in seconds: older accounts upload and comment without a captcha.
-    pub account_age: i64,
     agent: ureq::Agent,
 }
 
 impl std::fmt::Debug for Recaptcha {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Recaptcha({}, account age {})", self.public_key, self.account_age)
+        write!(f, "Recaptcha({})", self.public_key)
     }
 }
 
@@ -46,23 +38,16 @@ impl Recaptcha {
         let keys = var("RECAPTCHA_PUBLIC_KEY").zip(var("RECAPTCHA_PRIVATE_KEY"));
         let use_recaptcha = var("USE_RECAPTCHA")
             .map(|v| v.parse::<bool>().unwrap_or_else(|_| panic!("USE_RECAPTCHA: {v:?} is not true or false")));
-        let account_age = var("ACCOUNT_RECAPTCHA_AGE").and_then(|v| v.parse().ok()).unwrap_or(7 * 24 * 3600);
         match (use_recaptcha, keys) {
             (Some(false), _) => None,
             (Some(true), None) => panic!("USE_RECAPTCHA=true needs RECAPTCHA_PUBLIC_KEY and RECAPTCHA_PRIVATE_KEY"),
-            (_, keys) => keys.map(|(public_key, private_key)| Recaptcha::new(public_key, private_key, account_age)),
+            (_, keys) => keys.map(|(public_key, private_key)| Recaptcha::new(public_key, private_key)),
         }
     }
 
-    pub fn new(public_key: String, private_key: String, account_age: i64) -> Recaptcha {
+    pub fn new(public_key: String, private_key: String) -> Recaptcha {
         let agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(10))).build().into();
-        Recaptcha { public_key, private_key, account_age, agent }
-    }
-
-    /// Whether `user` gets a captcha on uploads and comments: accounts younger than
-    /// ACCOUNT_RECAPTCHA_AGE, as upstream (0 turns that off).
-    pub fn required_for(&self, user: &User) -> bool {
-        user.age_secs() < self.account_age
+        Recaptcha { public_key, private_key, agent }
     }
 
     /// Asks Google whether `response` (the widget's answer) is genuine. Blocking: call it
@@ -95,15 +80,13 @@ fn check(answer: &VerifyAnswer) -> Result<(), String> {
     Err("The captcha was not solved. Please try again.".into())
 }
 
-/// Checks the captcha when one is `required`, off the async runtime. Err holds the message
-/// for the form.
+/// Checks the captcha when it is on, off the async runtime. Err holds the message for the form.
 pub async fn check_form(
     cfg: &crate::config::Config,
-    required: impl FnOnce(&Recaptcha) -> bool,
     response: &str,
     remote_ip: Option<String>,
 ) -> actix_web::Result<Result<(), String>> {
-    let Some(recaptcha) = cfg.recaptcha.clone().filter(|r| required(r)) else {
+    let Some(recaptcha) = cfg.recaptcha.clone() else {
         return Ok(Ok(()));
     };
     let response = response.to_string();
@@ -124,7 +107,7 @@ mod tests {
 
     #[test]
     fn empty_answer_is_rejected_without_asking_google() {
-        let recaptcha = Recaptcha::new("site".into(), "secret".into(), 0);
+        let recaptcha = Recaptcha::new("site".into(), "secret".into());
         assert_eq!(recaptcha.verify("  ", None), Err("Please complete the captcha.".into()));
     }
 }

@@ -21,7 +21,7 @@ use crate::models::{
 };
 use crate::torrent::{parse_torrent, rebuild_torrent};
 use crate::utils::context::base_context;
-use crate::utils::{client_addr, client_ip, flash, internal_error, sanitize_string, sanitize_text, unpack_ip};
+use crate::utils::{client_ip, flash, internal_error, sanitize_string, sanitize_text, unpack_ip};
 
 pub async fn view_torrent(
     CurrentUser(current_user): CurrentUser,
@@ -60,8 +60,6 @@ pub async fn view_torrent(
 pub struct CommentForm {
     #[serde(default)]
     pub comment: String,
-    #[serde(default, rename = "g-recaptcha-response")]
-    pub recaptcha: String,
 }
 
 /// Upstream CommentForm limits.
@@ -69,10 +67,8 @@ const COMMENT_MIN_LEN: usize = 3;
 const COMMENT_MAX_LEN: usize = 2048;
 
 /// Posts a comment from the form on the view page, as upstream's POST /view/<id>.
-#[allow(clippy::too_many_arguments)]
 pub async fn post_comment(
     CurrentUser(current_user): CurrentUser,
-    req: HttpRequest,
     pool: web::Data<DbPool>,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
@@ -94,14 +90,9 @@ pub async fn post_comment(
 
     let text = sanitize_text(form.comment.trim());
     let len = text.chars().count();
-    let error = if !(COMMENT_MIN_LEN..=COMMENT_MAX_LEN).contains(&len) {
-        Some(format!("Comment must be at least {COMMENT_MIN_LEN} characters long and {COMMENT_MAX_LEN} at most."))
-    } else {
-        // Upstream asks accounts younger than ACCOUNT_RECAPTCHA_AGE for a captcha
-        let remote = client_addr(&req).map(|a| a.to_string());
-        crate::captcha::check_form(&cfg, |r| r.required_for(&user), &form.recaptcha, remote).await?.err()
-    };
-    if let Some(error) = error {
+    if !(COMMENT_MIN_LEN..=COMMENT_MAX_LEN).contains(&len) {
+        let error =
+            format!("Comment must be at least {COMMENT_MIN_LEN} characters long and {COMMENT_MAX_LEN} at most.");
         let html =
             render_view(&mut conn, &tmpl, &cfg, &storage, &torrent, Some(&user), &form.comment, Some(&error), &[])
                 .await?;
@@ -203,10 +194,6 @@ pub async fn edit_comment(
         return Ok(fail(format!(
             "Comment must be at least {COMMENT_MIN_LEN} characters long and {COMMENT_MAX_LEN} at most."
         )));
-    }
-    let remote = client_addr(&req).map(|a| a.to_string());
-    if let Err(error) = crate::captcha::check_form(&cfg, |r| r.required_for(&user), &form.recaptcha, remote).await? {
-        return Ok(fail(error));
     }
 
     diesel::update(nyaa_comments::table.find(comment_id))
@@ -552,7 +539,6 @@ pub async fn upload_post(
     let mut torrent_bytes: Option<Vec<u8>> = None;
     let mut form = EditForm::default();
     let mut group_id: Option<i32> = None;
-    let mut recaptcha = String::new();
 
     let mut field_count = 0;
     while let Some(item) = payload.next().await {
@@ -577,20 +563,11 @@ pub async fn upload_post(
             "is_anonymous" => form.is_anonymous = !data.is_empty(),
             "is_complete" => form.is_complete = !data.is_empty(),
             "is_trusted" => form.is_trusted = !data.is_empty(),
-            crate::captcha::FIELD => recaptcha = text(),
             _ => {}
         }
     }
 
     let upload = Upload { torrent_file: torrent_bytes, form, group_id };
-    // Upstream asks accounts younger than ACCOUNT_RECAPTCHA_AGE for a captcha
-    let remote = client_addr(&req).map(|a| a.to_string());
-    if let Err(error) = crate::captcha::check_form(&cfg, |r| r.required_for(&user), &recaptcha, remote).await? {
-        let mut conn = pool.get().map_err(internal_error)?;
-        let errors = HashMap::from([("recaptcha", error)]);
-        let html = render_upload(&mut conn, &tmpl, &cfg, &user, &upload.form, upload.group_id, &errors)?;
-        return Ok(HttpResponse::BadRequest().content_type("text/html").body(html));
-    }
     match create_torrent(&pool, &cfg, &storage, &user, client_ip(&req), &upload).await? {
         Ok(torrent) => Ok(HttpResponse::Found().insert_header(("Location", format!("/view/{}", torrent.id))).finish()),
         Err(errors) => {
@@ -1448,15 +1425,12 @@ mod tests {
             ($pool:expr, $user:expr) => {
                 app!($pool, $user, storage())
             };
-            ($pool:expr, $user:expr, $storage:expr) => {
-                app!($pool, $user, $storage, config())
-            };
-            ($pool:expr, $user:expr, $storage:expr, $cfg:expr) => {{
+            ($pool:expr, $user:expr, $storage:expr) => {{
                 let mut tera = Tera::new("templates/**/*").unwrap();
                 crate::utils::tera_filters::register(&mut tera);
                 let app = test::init_service(
                     App::new()
-                        .app_data(web::Data::new($cfg))
+                        .app_data(web::Data::new(config()))
                         .app_data(web::Data::new($pool.clone()))
                         .app_data(web::Data::new($storage))
                         .app_data(web::Data::new(tera))
@@ -1872,53 +1846,6 @@ mod tests {
             test::call_service(&app, post("/view/5/edit", &cookie, &[("delete", "Delete")]).to_request()).await;
             assert!(torrent(&pool).is_deleted());
             assert_eq!(admin_logs(&pool).len(), 2, "owners deleting their own torrent leave no log");
-        }
-
-        #[actix_web::test]
-        async fn new_accounts_solve_a_captcha_to_comment_and_upload() {
-            let pool = pool();
-            let mut cfg = config();
-            cfg.recaptcha = Some(crate::captcha::Recaptcha::new("site-key".into(), "secret".into(), 3600));
-            let (app, cookie) = app!(pool, Some(2), storage(), cfg.clone());
-
-            // The view page shows the widget to a new account, and a post without it is refused
-            let page =
-                String::from_utf8(test::call_and_read_body(&app, get("/view/5", &cookie).to_request()).await.to_vec())
-                    .unwrap();
-            assert!(page.contains("class=\"g-recaptcha\" data-sitekey=\"site-key\""), "{page}");
-            assert!(page.contains("https://www.google.com/recaptcha/api.js"), "{page}");
-            let res = test::call_service(&app, post("/view/5", &cookie, &[("comment", "first!")]).to_request()).await;
-            assert_eq!(res.status(), StatusCode::BAD_REQUEST);
-            let page = String::from_utf8(test::read_body(res).await.to_vec()).unwrap();
-            assert!(page.contains("Please complete the captcha."), "{page}");
-            let comments: i64 = nyaa_comments::table.count().get_result(&mut pool.get().unwrap()).unwrap();
-            assert_eq!(comments, 0);
-
-            // Uploads too
-            let res = test::call_service(
-                &app,
-                test::TestRequest::post()
-                    .uri("/upload")
-                    .cookie(cookie.clone().unwrap())
-                    .insert_header(("Content-Type", "multipart/form-data; boundary=XX"))
-                    .set_payload(upload_body(&[("display_name", "x")], None))
-                    .to_request(),
-            )
-            .await;
-            assert_eq!(res.status(), StatusCode::BAD_REQUEST);
-            let page = String::from_utf8(test::read_body(res).await.to_vec()).unwrap();
-            assert!(page.contains("Please complete the captcha."), "{page}");
-
-            // Accounts older than ACCOUNT_RECAPTCHA_AGE are not asked
-            diesel::sql_query("UPDATE users SET created_time = '2000-01-01 00:00:00' WHERE id = 2")
-                .execute(&mut pool.get().unwrap())
-                .unwrap();
-            let page =
-                String::from_utf8(test::call_and_read_body(&app, get("/view/5", &cookie).to_request()).await.to_vec())
-                    .unwrap();
-            assert!(!page.contains("g-recaptcha"), "{page}");
-            let res = test::call_service(&app, post("/view/5", &cookie, &[("comment", "first!")]).to_request()).await;
-            assert_eq!(res.status(), StatusCode::FOUND);
         }
 
         #[actix_web::test]
