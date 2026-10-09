@@ -2,7 +2,9 @@ use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::Serialize;
 
-use crate::db::schema::{nyaa_torrents, support_ticket_messages, support_ticket_torrents, support_tickets, users};
+use crate::db::schema::{
+    nyaa_torrents, support_ticket_messages, support_ticket_torrents, support_ticket_users, support_tickets, users,
+};
 use crate::db::DbConnection;
 
 /// `status` of a support ticket.
@@ -15,6 +17,8 @@ pub const TICKET_MESSAGE_MIN: usize = 3;
 pub const TICKET_MESSAGE_MAX: usize = 65_535;
 /// Most torrents one Torrent Report may list.
 pub const TICKET_MAX_TORRENTS: usize = 50;
+/// Most accounts one User Report may list.
+pub const TICKET_MAX_USERS: usize = 20;
 
 /// What a ticket is about, as AniRena's new-ticket form offers it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -92,6 +96,32 @@ pub fn parse_torrent_ids(input: &str) -> Result<Vec<i32>, String> {
         return Err(format!("You can list at most {TICKET_MAX_TORRENTS} torrents."));
     }
     Ok(ids)
+}
+
+/// Usernames from what the user pasted: names, `@name` or profile links (`/user/name`),
+/// separated by spaces, commas or new lines. Duplicates (ignoring case) are dropped and the
+/// order kept.
+pub fn parse_usernames(input: &str) -> Result<Vec<String>, String> {
+    let mut names: Vec<String> = Vec::new();
+    for token in input.split(|c: char| c.is_whitespace() || c == ',').filter(|t| !t.is_empty()) {
+        let name = match token.find("/user/") {
+            Some(at) => token[at + 6..].split(['/', '?', '#']).next().unwrap_or(""),
+            None => token.trim_start_matches('@'),
+        };
+        // Registration's rules: 3 to 32 ASCII letters, digits, _ or -
+        let valid =
+            (3..=32).contains(&name.len()) && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+        if !valid {
+            return Err(format!("\"{token}\" is not a username or profile link."));
+        }
+        if !names.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+            names.push(name.to_string());
+        }
+    }
+    if names.len() > TICKET_MAX_USERS {
+        return Err(format!("You can list at most {TICKET_MAX_USERS} users."));
+    }
+    Ok(names)
 }
 
 pub const TICKETS_PER_PAGE: i64 = 25;
@@ -210,6 +240,7 @@ impl Ticket {
         subject: &str,
         body: &str,
         torrent_ids: &[i32],
+        user_ids: &[i32],
     ) -> QueryResult<i32> {
         conn.transaction(|conn| {
             let now = now();
@@ -236,6 +267,11 @@ impl Ticket {
                         support_ticket_torrents::ticket_id.eq(id),
                         support_ticket_torrents::torrent_id.eq(torrent_id),
                     ))
+                    .execute(conn)?;
+            }
+            for &reported in user_ids {
+                diesel::insert_into(support_ticket_users::table)
+                    .values((support_ticket_users::ticket_id.eq(id), support_ticket_users::user_id.eq(reported)))
                     .execute(conn)?;
             }
             Ok(id)
@@ -300,6 +336,16 @@ impl Ticket {
             .filter(support_ticket_torrents::ticket_id.eq(self.id))
             .order(support_ticket_torrents::torrent_id.asc())
             .select((nyaa_torrents::id, nyaa_torrents::display_name))
+            .load(conn)
+    }
+
+    /// Names of the accounts the ticket lists, alphabetically.
+    pub fn users(&self, conn: &mut DbConnection) -> QueryResult<Vec<String>> {
+        support_ticket_users::table
+            .inner_join(users::table)
+            .filter(support_ticket_users::ticket_id.eq(self.id))
+            .order(users::username.asc())
+            .select(users::username)
             .load(conn)
     }
 
@@ -399,6 +445,19 @@ mod tests {
         assert!(parse_torrent_ids("0").is_err());
         let many: Vec<String> = (1..=51).map(|i| i.to_string()).collect();
         assert!(parse_torrent_ids(&many.join(" ")).unwrap_err().contains("at most 50"));
+    }
+
+    #[test]
+    fn usernames_from_names_and_links() {
+        assert_eq!(
+            parse_usernames("bob, @Alice\nhttps://nyaa.example/user/carol_1/ /user/dave-x?p=2 BOB"),
+            Ok(vec!["bob".into(), "Alice".into(), "carol_1".into(), "dave-x".into()])
+        );
+        assert_eq!(parse_usernames(" "), Ok(vec![]));
+        assert!(parse_usernames("bob a").unwrap_err().contains("\"a\""));
+        assert!(parse_usernames("bad!name").is_err());
+        let many: Vec<String> = (1..=21).map(|i| format!("user{i}")).collect();
+        assert!(parse_usernames(&many.join(" ")).unwrap_err().contains("at most 20"));
     }
 
     #[test]

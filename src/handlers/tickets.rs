@@ -12,8 +12,9 @@ use crate::auth::{CurrentUser, LoggedIn, Moderator, Permission};
 use crate::config::{Config, TicketConfig};
 use crate::db::{DbConnection, DbPool};
 use crate::models::{
-    parse_torrent_ids, user_link, validate_message, validate_subject, AdminLog, Ticket, TicketCategory, TicketFilter,
-    Torrent, User, TICKETS_PER_PAGE, TICKET_CATEGORIES, TICKET_CLOSED, TICKET_MAX_TORRENTS, TICKET_OPEN,
+    parse_torrent_ids, parse_usernames, user_link, validate_message, validate_subject, AdminLog, Ticket,
+    TicketCategory, TicketFilter, Torrent, User, TICKETS_PER_PAGE, TICKET_CATEGORIES, TICKET_CLOSED,
+    TICKET_MAX_TORRENTS, TICKET_MAX_USERS, TICKET_OPEN,
 };
 use crate::utils::context::base_context;
 use crate::utils::pagination::Pagination;
@@ -103,6 +104,9 @@ pub struct NewTicketForm {
     /// Torrent ids or links, for Torrent Reports.
     #[serde(default)]
     pub torrent_ids: String,
+    /// Usernames or profile links, for User Reports.
+    #[serde(default)]
+    pub user_names: String,
     #[serde(default)]
     pub subject: String,
     #[serde(default)]
@@ -121,10 +125,11 @@ fn new_ticket_page(
     let mut ctx = base_context(cfg, Some(user));
     ctx.insert("categories", &TICKET_CATEGORIES);
     ctx.insert("max_torrents", &TICKET_MAX_TORRENTS);
+    ctx.insert("max_users", &TICKET_MAX_USERS);
     ctx.insert(
         "form",
         &serde_json::json!({
-            "category": form.category, "torrent_ids": form.torrent_ids,
+            "category": form.category, "torrent_ids": form.torrent_ids, "user_names": form.user_names,
             "subject": form.subject, "message": form.message,
         }),
     );
@@ -134,7 +139,8 @@ fn new_ticket_page(
 }
 
 /// GET /tickets/new: the form, or why the user has to wait. Query parameters with the
-/// form's names fill it in, e.g. `?category=torrent&torrent_ids=5`.
+/// form's names fill it in, e.g. `?category=torrent&torrent_ids=5` or
+/// `?category=user&user_names=bob`.
 pub async fn new_ticket_get(
     CurrentUser(user): CurrentUser,
     pool: web::Data<DbPool>,
@@ -168,16 +174,21 @@ pub async fn new_ticket_post(
         Ok(c) if c.key == "torrent" => validate_torrents(&mut conn, &user, &form.torrent_ids)?,
         _ => Ok(vec![]),
     };
-    match (category, torrents, validate_subject(&form.subject), validate_message(&form.message)) {
-        (Ok(category), Ok(torrents), Ok(subject), Ok(message)) => {
-            let id =
-                Ticket::create(&mut conn, user.id, category, &subject, &message, &torrents).map_err(internal_error)?;
+    let users = match category {
+        Ok(c) if c.key == "user" => validate_users(&mut conn, &form.user_names)?,
+        _ => Ok(vec![]),
+    };
+    let fields = (validate_subject(&form.subject), validate_message(&form.message));
+    match (category, torrents, users, fields) {
+        (Ok(category), Ok(torrents), Ok(users), (Ok(subject), Ok(message))) => {
+            let id = Ticket::create(&mut conn, user.id, category, &subject, &message, &torrents, &users)
+                .map_err(internal_error)?;
             flash::push(&session, "success", "", "Your ticket has been sent. Staff will reply here.");
             Ok(redirect(&format!("/tickets/{id}")))
         }
-        (category, torrents, subject, message) => {
+        (category, torrents, users, (subject, message)) => {
             let errors = serde_json::json!({
-                "category": category.err(), "torrent_ids": torrents.err(),
+                "category": category.err(), "torrent_ids": torrents.err(), "user_names": users.err(),
                 "subject": subject.err(), "message": message.err(),
             });
             new_ticket_page(&tmpl, &cfg, &user, &form, &errors, None, StatusCode::OK)
@@ -205,6 +216,24 @@ fn validate_torrents(conn: &mut DbConnection, user: &User, input: &str) -> Resul
     Ok(if missing.is_empty() { Ok(ids) } else { Err(format!("Torrent not found: {}", missing.join(", "))) })
 }
 
+/// The accounts a User Report lists: at least one, each one existing.
+fn validate_users(conn: &mut DbConnection, input: &str) -> Result<Result<Vec<i32>, String>> {
+    let names = match parse_usernames(input) {
+        Ok(names) if names.is_empty() => return Ok(Err("Please add the users this report is about.".into())),
+        Ok(names) => names,
+        Err(e) => return Ok(Err(e)),
+    };
+    let (mut ids, mut missing) = (Vec::new(), Vec::new());
+    for name in names {
+        match User::by_username_ignoring_case(conn, &name).map_err(internal_error)? {
+            Some(u) if !ids.contains(&u.id) => ids.push(u.id),
+            Some(_) => {}
+            None => missing.push(name),
+        }
+    }
+    Ok(if missing.is_empty() { Ok(ids) } else { Err(format!("User not found: {}", missing.join(", "))) })
+}
+
 /// The ticket if `user` may see it: their own, or any for staff. Everyone else gets 404,
 /// so ticket numbers don't reveal anything.
 fn load_ticket(conn: &mut DbConnection, user: &User, id: i32) -> Result<Ticket> {
@@ -228,9 +257,11 @@ fn ticket_page(
     let opener = User::by_id(conn, ticket.user_id).map_err(internal_error)?;
     let messages = ticket.messages(conn).map_err(internal_error)?;
     let torrents = ticket.torrents(conn).map_err(internal_error)?;
+    let reported_users = ticket.users(conn).map_err(internal_error)?;
     let mut ctx = base_context(cfg, Some(user));
     ctx.insert("category", &TicketCategory::of(&ticket.category));
     ctx.insert("torrents", &torrents);
+    ctx.insert("reported_users", &reported_users);
     ctx.insert("flash_messages", &flash::take(session));
     ctx.insert("ticket", ticket);
     ctx.insert("opener", &opener.map(|u| u.username));
@@ -505,13 +536,13 @@ mod tests {
         assert!(html.contains("Some &lt;text&gt;"), "{html}");
         assert_eq!(count(&pool), (0, 0));
 
-        let form = [("category", "user"), ("subject", "Account question"), ("message", "Line one\r\nLine two")];
+        let form = [("category", "comment"), ("subject", "Account question"), ("message", "Line one\r\nLine two")];
         let (status, _) = send!(app, post("/tickets/new", &form), &mut cookie);
         assert_eq!(status, StatusCode::FOUND);
         let (_, html) = send!(app, get("/tickets/1"), &mut cookie);
         assert!(html.contains("Your ticket has been sent"), "{html}");
         assert!(html.contains("Account question") && html.contains("Line one\nLine two"), "{html}");
-        assert!(html.contains("Waiting for staff") && html.contains("User Report"), "{html}");
+        assert!(html.contains("Waiting for staff") && html.contains("Comment Report"), "{html}");
         let (_, html) = send!(app, get("/tickets"), &mut cookie);
         assert!(html.contains("<a href=\"/tickets/1\">Account question</a>"), "{html}");
 
@@ -612,6 +643,47 @@ mod tests {
         assert!(html.contains("href=\"/admin/tickets/closed?category=torrent\""), "{html}");
         let (status, _) = send!(app, get("/admin/tickets?category=bogus"), &mut moder);
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[actix_web::test]
+    async fn user_reports_list_users() {
+        let pool = pool();
+        let (app, mut cookie) = app!(pool, config(3, 20), Some(1));
+        let (_, html) = send!(app, get("/tickets/new?category=user&user_names=bob"), &mut cookie);
+        assert!(html.contains("value=\"user\" required checked") && html.contains(">bob</textarea>"), "{html}");
+
+        let report = |names: &'static str| {
+            post(
+                "/tickets/new",
+                &[("category", "user"), ("user_names", names), ("subject", "Spammer"), ("message", "Spams comments")],
+            )
+        };
+        for (names, error) in [
+            ("", "Please add the users this report is about."),
+            ("bob nobody", "User not found: nobody"),
+            ("bob x", "&quot;x&quot; is not a username or profile link."),
+        ] {
+            let (status, html) = send!(app, report(names), &mut cookie);
+            assert_eq!(status, StatusCode::OK, "{names}");
+            assert!(html.contains(error), "{names}: {html}");
+        }
+        assert_eq!(count(&pool), (0, 0));
+
+        // Names match ignoring case, and links work
+        let (status, _) = send!(app, report("BOB https://example.org/user/mod"), &mut cookie);
+        assert_eq!(status, StatusCode::FOUND);
+        let (_, html) = send!(app, get("/tickets/1"), &mut cookie);
+        assert!(html.contains("Users (2)"), "{html}");
+        assert!(
+            html.contains("<a href=\"/user/bob\">bob</a>") && html.contains("<a href=\"/user/mod\">mod</a>"),
+            "{html}"
+        );
+
+        // Ignored for other categories
+        let form = [("category", "other"), ("user_names", "bob"), ("subject", "Hello"), ("message", "Question")];
+        send!(app, post("/tickets/new", &form), &mut cookie);
+        let (_, html) = send!(app, get("/tickets/2"), &mut cookie);
+        assert!(!html.contains("Users ("), "{html}");
     }
 
     #[actix_web::test]

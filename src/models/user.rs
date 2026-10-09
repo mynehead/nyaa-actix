@@ -204,6 +204,12 @@ impl User {
         users::table.filter(users::username.eq(name)).first(conn).optional()
     }
 
+    /// The user with this name, ignoring case.
+    pub fn by_username_ignoring_case(conn: &mut DbConnection, name: &str) -> QueryResult<Option<User>> {
+        use crate::search::db::lower;
+        users::table.filter(lower(users::username).eq(name.to_lowercase())).first(conn).optional()
+    }
+
     /// Whether a user with this name exists, ignoring case, so nobody can register a
     /// look-alike of an existing name ("Admin" next to "admin").
     pub fn username_taken(conn: &mut DbConnection, name: &str) -> QueryResult<bool> {
