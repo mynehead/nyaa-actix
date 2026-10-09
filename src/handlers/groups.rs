@@ -229,8 +229,9 @@ pub async fn view_group(
         moderator,
     );
 
+    crate::utils::pagination::check_max_pages(q.page, cfg.max_pages)?;
     let result = search(&mut conn, cfg.meili.as_ref(), &q).map_err(internal_error)?;
-    let pagination = Pagination::new(q.page, result.total, q.per_page);
+    let pagination = Pagination::capped(q.page, result.total, q.per_page, cfg.max_pages);
 
     let owner = User::by_id(&mut conn, group.owner_id).map_err(internal_error)?;
 

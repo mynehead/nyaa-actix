@@ -131,6 +131,7 @@ async fn listing(
         }
     }
 
+    crate::utils::pagination::check_max_pages(q.page, cfg.max_pages)?;
     let result = search(&mut conn, cfg.meili.as_ref(), &q).map_err(internal_error)?;
     let torrents = with_stats(&mut conn, result.torrents).map_err(internal_error)?;
 
@@ -147,7 +148,7 @@ async fn listing(
             .body(xml));
     }
 
-    let pagination = Pagination::new(q.page, result.total, q.per_page);
+    let pagination = Pagination::capped(q.page, result.total, q.per_page, cfg.max_pages);
 
     let mut ctx = base_context(&cfg, current_user.as_ref());
     ctx.insert("torrents", &torrents);
@@ -206,7 +207,9 @@ mod tests {
                 "INSERT INTO nyaa_torrents (id, info_hash, display_name, torrent_name, flags, uploader_id, \
                  main_category_id, sub_category_id) VALUES \
                  (1, X'0123456789abcdef0123456789abcdef01234567', 'One', 't', 0, 1, 1, 1), \
-                 (2, X'00000000000000000000000000000000000000ff', 'Two', 't', 32, 1, 1, 1)",
+                 (2, X'00000000000000000000000000000000000000ff', 'Two', 't', 32, 1, 1, 1), \
+                 (3, X'00000000000000000000000000000000000000aa', 'Three', 't', 0, 1, 1, 1), \
+                 (4, X'00000000000000000000000000000000000000bb', 'Four', 't', 0, 1, 1, 1)",
             )
             .execute(&mut conn)
             .unwrap();
@@ -216,8 +219,8 @@ mod tests {
             secret_key: String::new(),
             site_name: "Nyaa".into(),
             site_flavor: "nyaa".into(),
-            results_per_page: 75,
-            max_pages: 0,
+            results_per_page: 1,
+            max_pages: 2,
             torrent_storage_path: String::new(),
             avatar_storage_path: String::new(),
             enable_gravatar: false,
@@ -259,5 +262,12 @@ mod tests {
             let resp = test::call_service(&app, get(q)).await;
             assert_eq!(resp.status(), StatusCode::OK, "{q}");
         }
+
+        // MAX_PAGES (2 here): three torrents at one a page, but only two pages are linked
+        let page = |p: u32| test::TestRequest::get().uri(&format!("/?f=0&p={p}")).to_request();
+        let body = String::from_utf8(test::call_and_read_body(&app, page(1)).await.to_vec()).unwrap();
+        assert!(body.contains("p=2") && !body.contains("p=3"), "{body}");
+        assert_eq!(test::call_service(&app, page(2)).await.status(), StatusCode::OK);
+        assert_eq!(test::call_service(&app, page(3)).await.status(), StatusCode::NOT_FOUND);
     }
 }

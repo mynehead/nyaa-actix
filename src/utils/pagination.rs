@@ -18,9 +18,24 @@ pub struct PageItem {
     pub is_ellipsis: bool,
 }
 
+/// Upstream MAX_PAGES (`max_pages`, 0 = no cap): listings can't be paged deeper than this,
+/// so asking for a later page is a 404 rather than a deep, slow query.
+pub fn check_max_pages(page: i64, max_pages: i64) -> actix_web::Result<()> {
+    if max_pages > 0 && page > max_pages {
+        return Err(actix_web::error::ErrorNotFound("Page not found"));
+    }
+    Ok(())
+}
+
 impl Pagination {
     pub fn new(current: i64, total_items: i64, per_page: i64) -> Self {
+        Self::capped(current, total_items, per_page, 0)
+    }
+
+    /// Like [`Pagination::new`], with no page links past `max_pages` (0 = no cap).
+    pub fn capped(current: i64, total_items: i64, per_page: i64, max_pages: i64) -> Self {
         let total_pages = ((total_items as f64) / (per_page as f64)).ceil() as i64;
+        let total_pages = if max_pages > 0 { total_pages.min(max_pages) } else { total_pages };
         let total_pages = total_pages.max(1);
         let current = current.clamp(1, total_pages);
 
@@ -70,6 +85,17 @@ mod tests {
 
     fn nums(p: &Pagination) -> Vec<i64> {
         p.pages.iter().map(|i| i.num).collect()
+    }
+
+    #[test]
+    fn max_pages_caps_links_and_requests() {
+        let p = Pagination::capped(3, 10_000, 75, 5);
+        assert_eq!((p.total_pages, p.has_next), (5, true));
+        assert_eq!(nums(&p), [1, 2, 3, 4, 5]);
+        assert!(!Pagination::capped(5, 10_000, 75, 5).has_next);
+        assert_eq!(Pagination::capped(3, 10_000, 75, 0).total_pages, 134);
+        assert!(check_max_pages(5, 5).is_ok() && check_max_pages(500, 0).is_ok());
+        assert!(check_max_pages(6, 5).is_err());
     }
 
     #[test]

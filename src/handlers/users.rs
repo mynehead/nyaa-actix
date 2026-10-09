@@ -64,8 +64,9 @@ pub async fn view_user(
     q.include_hidden = moderator || is_owner;
     q.hide_anonymous = !(moderator || is_owner);
 
+    crate::utils::pagination::check_max_pages(q.page, cfg.max_pages)?;
     let result = search(&mut conn, cfg.meili.as_ref(), &q).map_err(internal_error)?;
-    let pagination = Pagination::new(q.page, result.total, q.per_page);
+    let pagination = Pagination::capped(q.page, result.total, q.per_page, cfg.max_pages);
 
     let mut ctx = base_context(&cfg, current_user.as_ref());
     ctx.insert("profile_user", &profile_user);
