@@ -1,0 +1,8 @@
+{{ site_name }} password reset request
+{{ site_name }} password reset request
+
+A password reset request was made for this account. Click the following link to reset your password:
+
+{{ link }}
+
+The link works for six hours. If you did not request a password reset, you can ignore this email.

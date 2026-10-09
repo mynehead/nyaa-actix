@@ -58,6 +58,10 @@ qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 chacha20poly1305 = "0.11"
 hkdf = "0.13"
 sha2 = "0.11"
+# Account mails (verification, password reset) over SMTP; rustls with ring, as above
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "builder", "hostname", "rustls", "ring", "webpki-roots"] }
+# Signed links in those mails
+hmac = "0.13"
 
 # Optimize dependencies even in debug builds: argon2 (login, register) and Tera rendering
 # are many times slower unoptimized. Only the first debug build pays for it; this crate
