@@ -58,12 +58,10 @@
 	</div>
 {%- endmacro form_field %}
 
-{# Google's reCAPTCHA checkbox, as Flask-WTF's RecaptchaField: the script once per page, then a
-   widget in each form that needs one. It fills in a g-recaptcha-response field. #}
-{% macro recaptcha_script() -%}
-<script src="https://www.google.com/recaptcha/api.js" async defer></script>
-{%- endmacro recaptcha_script %}
-
-{% macro recaptcha(site_key) -%}
-<div class="g-recaptcha" data-sitekey="{{ site_key }}"></div>
-{%- endmacro recaptcha %}
+{# The ALTCHA captcha (static/altcha), self-hosted: the widget fetches a challenge from
+   /captcha/challenge, solves it and puts the solution in an "altcha" form field. #}
+{% macro captcha() -%}
+<link rel="stylesheet" href="/static/altcha/altcha.css">
+<script type="module" src="/static/altcha/setup.js"></script>
+<altcha-widget challenge="/captcha/challenge" name="altcha"></altcha-widget>
+{%- endmacro captcha %}

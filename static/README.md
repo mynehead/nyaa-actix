@@ -12,3 +12,8 @@ Copied from [nyaadevs/nyaa](https://github.com/nyaadevs/nyaa) at commit
 
 jQuery, Bootstrap's JS, markdown-it, Font Awesome and bootstrap-select's CSS load from cdnjs,
 as upstream does (see `templates/layout.html`).
+
+`altcha/`: the [ALTCHA](https://altcha.org) captcha widget 3.2.3 (MIT, `LICENSE.txt`), from the
+npm package's `dist/external` build (`altcha.min.js`, `altcha.css`) and `dist/workers/sha.js`, so
+it needs no inline workers or third-party hosts. `setup.js` is ours: it loads the widget and
+registers the worker.

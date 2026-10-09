@@ -27,8 +27,8 @@ use crate::utils::{avatar, client_addr, client_ip, flash, internal_error, token}
 pub struct LoginForm {
     pub username: String,
     pub password: String,
-    #[serde(default, rename = "g-recaptcha-response")]
-    pub recaptcha: String,
+    #[serde(default)]
+    pub altcha: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -37,8 +37,8 @@ pub struct RegisterForm {
     pub email: String,
     pub password: String,
     pub password_confirm: String,
-    #[serde(default, rename = "g-recaptcha-response")]
-    pub recaptcha: String,
+    #[serde(default)]
+    pub altcha: String,
 }
 
 pub async fn login_get(
@@ -84,8 +84,7 @@ pub async fn login_post(
         return Ok(HttpResponse::TooManyRequests().content_type("text/html").body(html));
     }
     // The captcha before the password, so guessing passwords needs a solved captcha each time
-    let remote = client_addr(&req).map(|a| a.to_string());
-    if let Err(error) = crate::captcha::check_form(&cfg, &form.recaptcha, remote).await? {
+    if let Err(error) = crate::captcha::check_form(&cfg, &form.altcha) {
         let mut ctx = base_context(&cfg, None);
         ctx.insert("error", &error);
         ctx.insert("username", &form.username);
@@ -169,8 +168,7 @@ pub async fn register_post(
     }
     REGISTRATIONS_BY_IP.hit(&ip);
     // Upstream's RegisterForm captcha, checked before any name or address is looked up
-    let remote = client_addr(&req).map(|a| a.to_string());
-    if let Err(error) = crate::captcha::check_form(&cfg, &form.recaptcha, remote).await? {
+    if let Err(error) = crate::captcha::check_form(&cfg, &form.altcha) {
         let mut ctx = base_context(&cfg, None);
         ctx.insert("errors", &[error]);
         ctx.insert("username", &form.username);
@@ -851,7 +849,7 @@ pub(crate) mod tests {
             trusted: Default::default(),
             tickets: Default::default(),
             mfa: Default::default(),
-            recaptcha: None,
+            captcha: None,
             email_blacklist: crate::auth::email_blacklist::EmailBlacklist::upstream_defaults(),
         }
     }
@@ -981,29 +979,39 @@ pub(crate) mod tests {
     #[actix_web::test]
     async fn login_and_register_ask_for_the_captcha_first() {
         let (pool, mut cfg) = (pool(), config("register-captcha"));
-        cfg.recaptcha = Some(crate::captcha::Recaptcha::new("site-key".into(), "secret".into()));
+        let captcha = crate::captcha::Captcha::new("secret", 1000);
+        cfg.captcha = Some(captcha.clone());
         let (app, _) = app!(pool, cfg);
-        let req = test::TestRequest::post()
-            .uri("/register")
-            .peer_addr("10.9.9.9:1234".parse().unwrap())
-            .set_form([
-                ("username", "dave"),
-                ("email", "dave@example.com"),
-                ("password", PASSWORD),
-                ("password_confirm", PASSWORD),
-            ])
-            .to_request();
-        let res = test::call_service(&app, req).await;
+        let register = |altcha: String| {
+            test::TestRequest::post()
+                .uri("/register")
+                .peer_addr("10.9.9.9:1234".parse().unwrap())
+                .set_form([
+                    ("username", "dave".to_string()),
+                    ("email", "dave@example.com".to_string()),
+                    ("password", PASSWORD.to_string()),
+                    ("password_confirm", PASSWORD.to_string()),
+                    ("altcha", altcha),
+                ])
+                .to_request()
+        };
+        let res = test::call_service(&app, register(String::new())).await;
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
         let page = String::from_utf8(test::read_body(res).await.to_vec()).unwrap();
         assert!(page.contains("Please complete the captcha."), "{page}");
-        assert!(page.contains("data-sitekey=\"site-key\""), "{page}");
+        assert!(page.contains("<altcha-widget challenge=\"/captcha/challenge\""), "{page}");
         assert!(User::by_username(&mut pool.get().unwrap(), "dave").unwrap().is_none());
 
         // Login asks too, before the password is checked
         let (status, page) = try_login!(app, "alice", PASSWORD);
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert!(page.contains("Please complete the captcha.") && page.contains("data-sitekey=\"site-key\""), "{page}");
+        assert!(page.contains("Please complete the captcha.") && page.contains("<altcha-widget"), "{page}");
+
+        // A solved challenge goes through
+        let solved = crate::captcha::solve(&captcha.challenge());
+        let res = test::call_service(&app, register(solved)).await;
+        assert_eq!(res.status(), StatusCode::FOUND);
+        assert!(User::by_username(&mut pool.get().unwrap(), "dave").unwrap().is_some());
     }
 
     #[actix_web::test]
