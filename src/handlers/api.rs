@@ -33,8 +33,9 @@ fn error(status: StatusCode, errors: serde_json::Value) -> HttpResponse {
 
 /// The user named by the request's Basic auth, or the error to answer with. Failed
 /// passwords count towards the same limits as the login form.
-async fn api_user(req: &HttpRequest, pool: &DbPool) -> std::result::Result<User, HttpResponse> {
-    let bad = || error(StatusCode::FORBIDDEN, json!(["Bad authorization"]));
+/// The error response is boxed: `HttpResponse` is large.
+async fn api_user(req: &HttpRequest, pool: &DbPool) -> std::result::Result<User, Box<HttpResponse>> {
+    let bad = || Box::new(error(StatusCode::FORBIDDEN, json!(["Bad authorization"])));
     let credentials = req
         .headers()
         .get(header::AUTHORIZATION)
@@ -46,9 +47,9 @@ async fn api_user(req: &HttpRequest, pool: &DbPool) -> std::result::Result<User,
         return Err(bad());
     };
 
-    let mut conn = pool.get().map_err(|e| HttpResponse::from_error(internal_error(e)))?;
-    let user =
-        User::by_username_or_email(&mut conn, username).map_err(|e| HttpResponse::from_error(internal_error(e)))?;
+    let mut conn = pool.get().map_err(|e| Box::new(HttpResponse::from_error(internal_error(e))))?;
+    let user = User::by_username_or_email(&mut conn, username)
+        .map_err(|e| Box::new(HttpResponse::from_error(internal_error(e))))?;
     drop(conn);
 
     let ip = crate::handlers::account::client_key(req);
@@ -57,22 +58,22 @@ async fn api_user(req: &HttpRequest, pool: &DbPool) -> std::result::Result<User,
         None => format!("name:{}", username.trim().to_lowercase()),
     };
     if LOGIN_FAILURES_BY_IP.is_blocked(&ip) || LOGIN_FAILURES_BY_ACCOUNT.is_blocked(&account) {
-        return Err(error(
+        return Err(Box::new(error(
             StatusCode::TOO_MANY_REQUESTS,
             json!(["Too many failed login attempts. Try again in 15 minutes."]),
-        ));
+        )));
     }
     let (checked, password) = (user.clone(), password.to_string());
     let password_ok = web::block(move || password_matches(checked.as_ref(), &password))
         .await
-        .map_err(|e| HttpResponse::from_error(internal_error(e)))?;
+        .map_err(|e| Box::new(HttpResponse::from_error(internal_error(e))))?;
     match user {
         Some(u) if password_ok => {
             LOGIN_FAILURES_BY_ACCOUNT.clear(&account);
             if u.is_banned() {
-                Err(error(StatusCode::FORBIDDEN, json!(["Your account has been banned."])))
+                Err(Box::new(error(StatusCode::FORBIDDEN, json!(["Your account has been banned."]))))
             } else if !u.is_active() {
-                Err(error(StatusCode::FORBIDDEN, json!(["Your account is not active."])))
+                Err(Box::new(error(StatusCode::FORBIDDEN, json!(["Your account is not active."]))))
             } else {
                 Ok(u)
             }
@@ -80,7 +81,7 @@ async fn api_user(req: &HttpRequest, pool: &DbPool) -> std::result::Result<User,
         _ => {
             LOGIN_FAILURES_BY_IP.hit(&ip);
             LOGIN_FAILURES_BY_ACCOUNT.hit(&account);
-            Err(error(StatusCode::FORBIDDEN, json!(["Incorrect username or password"])))
+            Err(Box::new(error(StatusCode::FORBIDDEN, json!(["Incorrect username or password"]))))
         }
     }
 }
@@ -90,7 +91,7 @@ macro_rules! api_user {
     ($req:expr, $pool:expr) => {
         match api_user($req, $pool).await {
             Ok(user) => user,
-            Err(response) => return Ok(response),
+            Err(response) => return Ok(*response),
         }
     };
 }
