@@ -115,6 +115,7 @@ pub fn base_context(cfg: &Config, current_user: Option<&User>) -> tera::Context 
             "show_stats": cfg.show_stats,
             "maintenance_message": cfg.maintenance.enabled.then_some(&cfg.maintenance.message),
             "allow_password_reset": cfg.mail.password_reset().is_some(),
+            "recaptcha_public_key": cfg.recaptcha.as_ref().map(|r| &r.public_key),
         }),
     );
     let cats = nav_categories(&cfg.site_flavor);

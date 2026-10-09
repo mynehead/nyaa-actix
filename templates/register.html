@@ -1,4 +1,5 @@
 {% extends "layout.html" %}
+{% import "macros.html" as macros %}
 {% block title %}Register :: {{ config.site_name }}{% endblock %}
 {% block metatags %}
 <meta property="og:description" content="Register to {{ config.site_name }}!">
@@ -60,6 +61,15 @@
 				</div>
 			</div>
 		</div>
+
+		{% if config.recaptcha_public_key %}
+		<div class="row">
+			<div class="col-md-4">
+				{{ macros::recaptcha_script() }}
+				{{ macros::recaptcha(site_key=config.recaptcha_public_key) }}
+			</div>
+		</div>
+		{% endif %}
 
 		<br>
 
