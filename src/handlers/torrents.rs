@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tera::Tera;
 
-use crate::auth::policy::{can_comment, can_delete_comment, can_edit_comment};
+use crate::auth::policy::{can_comment, can_delete_comment, can_edit_comment, edit_time_limit};
 use crate::auth::{CurrentUser, LoggedIn, Permission};
 use crate::config::Config;
 use crate::db::schema::{bans, nyaa_comments, nyaa_statistics, nyaa_torrents, users};
@@ -185,7 +185,7 @@ pub async fn edit_comment(
         }
     };
 
-    if comment.editing_limit_exceeded(cfg.editing_time_limit) {
+    if comment.editing_limit_exceeded(edit_time_limit(&user, cfg.editing_time_limit)) {
         return Ok(fail("Editing time limit exceeded.".into()));
     }
     let text = sanitize_text(form.comment.trim());
@@ -296,7 +296,9 @@ async fn render_view(
             let limit = cfg.editing_time_limit;
             let can_edit = can_edit_comment(&c, torrent, current_user.as_ref(), limit);
             let can_delete = can_delete_comment(&c, torrent, current_user.as_ref(), limit);
-            let editable_until = c.editable_until(limit).map(|t| t.and_utc().timestamp());
+            // The countdown on the Edit button; moderators have none
+            let own_limit = current_user.as_ref().map_or(limit, |u| edit_time_limit(u, limit));
+            let editable_until = c.editable_until(own_limit).map(|t| t.and_utc().timestamp());
             serde_json::json!({
                 "comment": c, "user": user, "avatar_url": avatar_url,
                 "can_edit": can_edit, "can_delete": can_delete, "editable_until": editable_until,
@@ -1379,7 +1381,7 @@ mod tests {
                 torrent_storage_path: storage.to_string_lossy().into_owned(),
                 avatar_storage_path: String::new(),
                 enable_gravatar: false,
-                maintenance_mode: false,
+                maintenance: Default::default(),
                 site_url: String::new(),
                 tracker_urls: vec![],
                 trusted_proxies: vec![],
@@ -2016,18 +2018,28 @@ mod tests {
             .await;
             assert_eq!(res.status(), StatusCode::OK);
 
-            // An old comment under EDITING_TIME_LIMIT
+            // Old comments under EDITING_TIME_LIMIT, on an unlocked torrent
             diesel::sql_query("UPDATE nyaa_comments SET created_time = '2000-01-01 00:00:00'")
                 .execute(&mut pool.get().unwrap())
                 .unwrap();
-            let comment =
-                nyaa_comments::table.find(2).first::<crate::models::Comment>(&mut pool.get().unwrap()).unwrap();
-            assert!(comment.editing_limit_exceeded(3600));
-            assert!(!comment.editing_limit_exceeded(0));
-            let user = User::by_id(&mut pool.get().unwrap(), 3).unwrap().unwrap();
-            assert!(!can_edit_comment(&comment, &torrent(&pool), Some(&user), 3600));
-            assert!(!can_delete_comment(&comment, &torrent(&pool), Some(&user), 3600));
-            assert!(can_edit_comment(&comment, &torrent(&pool), Some(&user), 0));
+            diesel::update(nyaa_torrents::table.find(5))
+                .set(nyaa_torrents::flags.eq(TorrentFlags::TRUSTED.bits()))
+                .execute(&mut pool.get().unwrap())
+                .unwrap();
+            let comment = |id: i32| {
+                nyaa_comments::table.find(id).first::<crate::models::Comment>(&mut pool.get().unwrap()).unwrap()
+            };
+            let user = |id: i32| User::by_id(&mut pool.get().unwrap(), id).unwrap().unwrap();
+            let (theirs, mods) = (comment(1), comment(2));
+            assert!(theirs.editing_limit_exceeded(3600));
+            assert!(!theirs.editing_limit_exceeded(0));
+            // A regular author is past the limit, unless there is none
+            assert!(!can_edit_comment(&theirs, &torrent(&pool), Some(&user(2)), 3600));
+            assert!(!can_delete_comment(&theirs, &torrent(&pool), Some(&user(2)), 3600));
+            assert!(can_edit_comment(&theirs, &torrent(&pool), Some(&user(2)), 0));
+            // Moderators edit their own comments without a time limit, and get no countdown
+            assert!(can_edit_comment(&mods, &torrent(&pool), Some(&user(3)), 3600));
+            assert!(can_delete_comment(&mods, &torrent(&pool), Some(&user(3)), 3600));
         }
 
         #[actix_web::test]

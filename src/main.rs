@@ -93,6 +93,8 @@ async fn main() -> std::io::Result<()> {
             .wrap(actix_web::middleware::from_fn(middleware::ip_ban::reject_banned_ip))
             .wrap(actix_web::middleware::from_fn(middleware::csrf::reject_cross_site))
             .wrap(security_headers())
+            // Inside the session middleware too, for its flash message
+            .wrap(actix_web::middleware::from_fn(middleware::maintenance::read_only))
             // Registered before the session middleware, so they run inside it and see the session
             .wrap(actix_web::middleware::from_fn(middleware::mfa_required::require_two_factor))
             .wrap(actix_web::middleware::from_fn(middleware::auth::refresh_session))
