@@ -15,9 +15,8 @@ pub struct Config {
     pub avatar_storage_path: String,
     /// Upstream ENABLE_GRAVATAR: Gravatar for users without an uploaded avatar.
     pub enable_gravatar: bool,
-    /// Upstream MAINTENANCE_MODE: turns off uploads, registration and login with a notice. Not enforced yet.
-    #[allow(dead_code)]
-    pub maintenance_mode: bool,
+    /// Upstream MAINTENANCE_MODE and friends: a read-only site with a notice.
+    pub maintenance: MaintenanceConfig,
     /// Public base URL of the site, used in the .torrent comment field.
     pub site_url: String,
     /// Announce URLs written into magnets and .torrent files, own tracker first.
@@ -27,7 +26,7 @@ pub struct Config {
     /// Upstream RATELIMIT_ACCOUNT_AGE, in seconds: accounts must be older than this to report torrents.
     pub ratelimit_account_age: i64,
     /// Upstream EDITING_TIME_LIMIT, in seconds: how long after posting a comment its author may
-    /// still edit or delete it (0 = no limit).
+    /// still edit or delete it (0 = no limit). Moderators and admins have no limit.
     pub editing_time_limit: i64,
     /// Upstream's upload rate limit for accounts younger than RATELIMIT_ACCOUNT_AGE.
     pub upload_limit: UploadLimitConfig,
@@ -40,6 +39,41 @@ pub struct Config {
     pub trusted: TrustedConfig,
     /// How many support tickets and replies a user may send.
     pub tickets: TicketConfig,
+}
+
+/// Upstream's maintenance mode: every page still shows, with `message` on top, but nothing
+/// can be changed: form posts are turned back with the message and the API answers 503.
+/// Logging in (and out) still works while `logins` is on.
+#[derive(Clone, Debug)]
+pub struct MaintenanceConfig {
+    /// MAINTENANCE_MODE
+    pub enabled: bool,
+    /// MAINTENANCE_MODE_MESSAGE
+    pub message: String,
+    /// MAINTENANCE_MODE_LOGINS
+    pub logins: bool,
+}
+
+impl Default for MaintenanceConfig {
+    fn default() -> Self {
+        MaintenanceConfig {
+            enabled: false,
+            message: "Site is currently in read-only maintenance mode.".into(),
+            logins: true,
+        }
+    }
+}
+
+impl MaintenanceConfig {
+    fn from_env() -> Self {
+        let flag = |key: &str, default: bool| env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default);
+        let d = MaintenanceConfig::default();
+        MaintenanceConfig {
+            enabled: flag("MAINTENANCE_MODE", d.enabled),
+            message: env::var("MAINTENANCE_MODE_MESSAGE").ok().filter(|m| !m.trim().is_empty()).unwrap_or(d.message),
+            logins: flag("MAINTENANCE_MODE_LOGINS", d.logins),
+        }
+    }
 }
 
 /// Upstream's upload rate limit: accounts younger than RATELIMIT_ACCOUNT_AGE that may not
@@ -157,7 +191,7 @@ impl Config {
             torrent_storage_path: env::var("TORRENT_STORAGE_PATH").unwrap_or_else(|_| "./torrents".into()),
             avatar_storage_path: env::var("AVATAR_STORAGE_PATH").unwrap_or_else(|_| "./avatars".into()),
             enable_gravatar: env::var("ENABLE_GRAVATAR").ok().and_then(|v| v.parse().ok()).unwrap_or(false),
-            maintenance_mode: env::var("MAINTENANCE_MODE").ok().and_then(|v| v.parse().ok()).unwrap_or(false),
+            maintenance: MaintenanceConfig::from_env(),
             site_url: env::var("SITE_URL")
                 .unwrap_or_else(|_| "http://localhost:8080".into())
                 .trim_end_matches('/')
@@ -196,7 +230,7 @@ impl Config {
             torrent_storage_path: String::new(),
             avatar_storage_path: String::new(),
             enable_gravatar: false,
-            maintenance_mode: false,
+            maintenance: Default::default(),
             site_url: String::new(),
             tracker_urls: vec![],
             trusted_proxies: vec![],
