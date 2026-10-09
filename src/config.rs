@@ -42,6 +42,8 @@ pub struct Config {
     pub tickets: TicketConfig,
     /// Two-factor sign-in (MFA_REQUIRED_LEVEL, MFA_ISSUER_NAME).
     pub mfa: crate::auth::mfa::MfaConfig,
+    /// Upstream USE_RECAPTCHA and the RECAPTCHA_* keys; None shows no captcha.
+    pub recaptcha: Option<crate::captcha::Recaptcha>,
 }
 
 /// Upstream's maintenance mode: every page still shows, with `message` on top, but nothing
@@ -220,6 +222,7 @@ impl Config {
             tracker: crate::tracker::Tracker::from_env(),
             trusted: TrustedConfig::from_env(),
             tickets: TicketConfig::from_env(),
+            recaptcha: crate::captcha::Recaptcha::from_env(),
         }
     }
 
@@ -249,6 +252,7 @@ impl Config {
             trusted: Default::default(),
             tickets: Default::default(),
             mfa: Default::default(),
+            recaptcha: None,
         }
     }
 

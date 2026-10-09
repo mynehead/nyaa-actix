@@ -96,6 +96,7 @@ mod tests {
             trusted: Default::default(),
             tickets: Default::default(),
             mfa: Default::default(),
+            recaptcha: None,
         };
         let app = atest::init_service(
             App::new()

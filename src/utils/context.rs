@@ -113,8 +113,12 @@ pub fn base_context(cfg: &Config, current_user: Option<&User>) -> tera::Context 
             "site_flavor": cfg.site_flavor,
             "maintenance_message": cfg.maintenance.enabled.then_some(&cfg.maintenance.message),
             "allow_password_reset": cfg.mail.password_reset().is_some(),
+            "recaptcha_public_key": cfg.recaptcha.as_ref().map(|r| &r.public_key),
         }),
     );
+    // Uploads and comments ask new accounts for a captcha too
+    let new_account = matches!((&cfg.recaptcha, current_user), (Some(r), Some(u)) if r.required_for(u));
+    ctx.insert("recaptcha_new_account", &new_account);
     let cats = nav_categories(&cfg.site_flavor);
     let names: std::collections::HashMap<&str, &str> = cats.iter().map(|c| (c.id, c.title)).collect();
     ctx.insert("nav_categories", cats);

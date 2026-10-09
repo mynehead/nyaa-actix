@@ -1,4 +1,5 @@
 {% extends "layout.html" %}
+{% import "macros.html" as macros %}
 {% block title %}Upload Torrent :: {{ config.site_name }}{% endblock %}
 {% block metatags %}
 <meta property="og:description" content="Upload a torrent to {{ config.site_name }}">
@@ -161,6 +162,16 @@
 			</div>
 		</div>
 	</div>
+
+	{% if recaptcha_new_account %}
+	<div class="row">
+		<div class="col-md-4{% if errors.recaptcha %} has-error{% endif %}">
+			{{ macros::recaptcha_script() }}
+			{{ macros::recaptcha(site_key=config.recaptcha_public_key) }}
+			{% if errors.recaptcha %}<div class="help-block">{{ errors.recaptcha }}</div>{% endif %}
+		</div>
+	</div>
+	{% endif %}
 
 	<br>
 	<div class="row">

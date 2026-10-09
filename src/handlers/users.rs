@@ -531,6 +531,7 @@ mod tests {
             trusted: Default::default(),
             tickets: Default::default(),
             mfa: Default::default(),
+            recaptcha: None,
         }
     }
 

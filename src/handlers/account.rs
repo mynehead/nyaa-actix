@@ -34,6 +34,8 @@ pub struct RegisterForm {
     pub email: String,
     pub password: String,
     pub password_confirm: String,
+    #[serde(default, rename = "g-recaptcha-response")]
+    pub recaptcha: String,
 }
 
 pub async fn login_get(
@@ -149,6 +151,16 @@ pub async fn register_post(
         return Ok(HttpResponse::TooManyRequests().content_type("text/html").body(html));
     }
     REGISTRATIONS_BY_IP.hit(&ip);
+    // Upstream's RegisterForm captcha, checked before any name or address is looked up
+    let remote = client_addr(&req).map(|a| a.to_string());
+    if let Err(error) = crate::captcha::check_form(&cfg, |_| true, &form.recaptcha, remote).await? {
+        let mut ctx = base_context(&cfg, None);
+        ctx.insert("errors", &[error]);
+        ctx.insert("username", &form.username);
+        ctx.insert("email", &form.email);
+        let html = tmpl.render("register.html", &ctx).map_err(internal_error)?;
+        return Ok(HttpResponse::BadRequest().content_type("text/html").body(html));
+    }
 
     let mut conn = pool.get().map_err(internal_error)?;
     let (username, email) = (form.username.trim(), form.email.trim());
@@ -312,6 +324,8 @@ pub async fn activate(
 pub struct PasswordResetRequestForm {
     #[serde(default)]
     pub email: String,
+    #[serde(default, rename = "g-recaptcha-response")]
+    pub recaptcha: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -367,6 +381,11 @@ pub async fn password_reset_request_post(
         return Err(actix_web::error::ErrorTooManyRequests("Too many password reset requests. Try again later."));
     }
     RESET_REQUESTS_BY_IP.hit(&ip);
+    let remote = client_addr(&req).map(|a| a.to_string());
+    if let Err(error) = crate::captcha::check_form(&cfg, |_| true, &form.recaptcha, remote).await? {
+        flash::push(&session, "danger", "", &error);
+        return Ok(redirect("/password-reset"));
+    }
 
     let email = form.email.trim();
     let mut conn = pool.get().map_err(internal_error)?;
@@ -795,6 +814,7 @@ mod tests {
             trusted: Default::default(),
             tickets: Default::default(),
             mfa: Default::default(),
+            recaptcha: None,
         }
     }
 
@@ -914,6 +934,29 @@ mod tests {
         let (status, _) = register(" carl ", "carl@example.com").await;
         assert_eq!(status, StatusCode::FOUND);
         assert!(User::by_username(&mut pool.get().unwrap(), "carl").unwrap().is_some(), "stored trimmed");
+    }
+
+    #[actix_web::test]
+    async fn register_asks_for_the_captcha_first() {
+        let (pool, mut cfg) = (pool(), config("register-captcha"));
+        cfg.recaptcha = Some(crate::captcha::Recaptcha::new("site-key".into(), "secret".into(), 0));
+        let (app, _) = app!(pool, cfg);
+        let req = test::TestRequest::post()
+            .uri("/register")
+            .peer_addr("10.9.9.9:1234".parse().unwrap())
+            .set_form([
+                ("username", "dave"),
+                ("email", "dave@example.com"),
+                ("password", PASSWORD),
+                ("password_confirm", PASSWORD),
+            ])
+            .to_request();
+        let res = test::call_service(&app, req).await;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let page = String::from_utf8(test::read_body(res).await.to_vec()).unwrap();
+        assert!(page.contains("Please complete the captcha."), "{page}");
+        assert!(page.contains("data-sitekey=\"site-key\""), "{page}");
+        assert!(User::by_username(&mut pool.get().unwrap(), "dave").unwrap().is_none());
     }
 
     #[actix_web::test]

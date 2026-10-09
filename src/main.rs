@@ -1,4 +1,5 @@
 mod auth;
+mod captcha;
 mod cli;
 mod config;
 mod db;
@@ -73,6 +74,7 @@ async fn main() -> std::io::Result<()> {
     middleware::ip_range_ban::spawn_reload(pool.clone(), range_bans.clone());
 
     let secret_key = Key::from(cfg.secret_key.as_bytes());
+    let recaptcha = cfg.recaptcha.is_some();
     let cfg_data = web::Data::new(cfg.clone());
     let pool_data = web::Data::new(pool);
 
@@ -93,7 +95,7 @@ async fn main() -> std::io::Result<()> {
             .wrap(Logger::default())
             .wrap(actix_web::middleware::from_fn(middleware::ip_ban::reject_banned_ip))
             .wrap(actix_web::middleware::from_fn(middleware::csrf::reject_cross_site))
-            .wrap(security_headers())
+            .wrap(security_headers(recaptcha))
             // Inside the session middleware too, for its flash message
             .wrap(actix_web::middleware::from_fn(middleware::maintenance::read_only))
             // Registered before the session middleware, so they run inside it and see the session
@@ -238,17 +240,28 @@ const PORT: u16 = 8080;
 
 /// Headers every response gets. The CSP allows inline scripts and styles because the
 /// templates (from upstream) use them; it still blocks scripts from other hosts, plugins,
-/// framing and form posts to other sites.
-fn security_headers() -> DefaultHeaders {
+/// framing and form posts to other sites. With reCAPTCHA on, Google's widget script and
+/// its frame are let in too.
+fn security_headers(recaptcha: bool) -> DefaultHeaders {
+    let (google_scripts, google_frames) = if recaptcha {
+        (
+            " https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/",
+            "frame-src https://www.google.com/recaptcha/ https://recaptcha.google.com/recaptcha/; ",
+        )
+    } else {
+        ("", "")
+    };
     DefaultHeaders::new()
         .add((
             "Content-Security-Policy",
-            "default-src 'self'; \
-             script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; \
-             style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; \
-             font-src 'self' data: https://cdnjs.cloudflare.com; \
-             img-src * data:; \
-             object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+            format!(
+                "default-src 'self'; \
+                 script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com{google_scripts}; \
+                 style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; \
+                 font-src 'self' data: https://cdnjs.cloudflare.com; \
+                 img-src * data:; {google_frames}\
+                 object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+            ),
         ))
         .add(("X-Frame-Options", "DENY"))
         .add(("X-Content-Type-Options", "nosniff"))
