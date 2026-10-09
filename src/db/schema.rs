@@ -174,6 +174,25 @@ diesel::table! {
         created_time -> Timestamp,
         last_seen -> Timestamp,
         ip -> Nullable<Binary>,
+        auth_method -> Text,
+    }
+}
+
+diesel::table! {
+    user_mfa (user_id) {
+        user_id -> Integer,
+        totp_secret -> Binary,
+        enabled_time -> Timestamp,
+        last_used_step -> BigInt,
+    }
+}
+
+diesel::table! {
+    user_recovery_codes (id) {
+        id -> Integer,
+        user_id -> Integer,
+        code_hash -> Text,
+        used_time -> Nullable<Timestamp>,
     }
 }
 
@@ -251,6 +270,8 @@ diesel::joinable!(trusted_reviews -> trusted_applications (app_id));
 diesel::joinable!(site_banners -> users (created_by));
 diesel::joinable!(ip_range_bans -> users (admin_id));
 diesel::joinable!(user_sessions -> users (user_id));
+diesel::joinable!(user_mfa -> users (user_id));
+diesel::joinable!(user_recovery_codes -> users (user_id));
 
 diesel::joinable!(nyaa_reports -> nyaa_torrents (torrent_id));
 diesel::joinable!(nyaa_reports -> users (user_id));
@@ -283,6 +304,8 @@ diesel::allow_tables_to_appear_in_same_query!(
     site_banners,
     ip_range_bans,
     user_sessions,
+    user_mfa,
+    user_recovery_codes,
     support_tickets,
     support_ticket_messages,
     support_ticket_torrents,

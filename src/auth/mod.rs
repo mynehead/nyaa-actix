@@ -5,6 +5,7 @@
 //! Only `get_current_user` knows about sessions, so the login part stays swappable.
 
 pub mod extract;
+pub mod mfa;
 pub mod permission;
 pub mod policy;
 

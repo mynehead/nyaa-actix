@@ -7,14 +7,15 @@ use actix_session::Session;
 use actix_web::{web, HttpRequest, HttpResponse, Result};
 use diesel::prelude::*;
 use futures_util::StreamExt;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tera::Tera;
 
+use crate::auth::mfa::UserMfa;
 use crate::auth::CurrentUser;
 use crate::config::Config;
 use crate::db::schema::users;
 use crate::db::{DbConnection, DbPool};
-use crate::middleware::auth::{login_user, logout_everywhere, logout_user};
+use crate::middleware::auth::{login_user, logout_everywhere, logout_user, session_auth_method, AuthMethod};
 use crate::models::{password_matches, Ban, NewUser, User};
 use crate::storage::{Kind, Storage};
 use crate::utils::context::base_context;
@@ -37,6 +38,7 @@ pub struct RegisterForm {
 
 pub async fn login_get(
     CurrentUser(current_user): CurrentUser,
+    session: Session,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
 ) -> Result<HttpResponse> {
@@ -44,6 +46,7 @@ pub async fn login_get(
         return Ok(HttpResponse::Found().insert_header(("Location", "/")).finish());
     }
     let mut ctx = base_context(&cfg, None);
+    ctx.insert("flash_messages", &flash::take(&session));
     ctx.insert("error", &Option::<String>::None);
     let html = tmpl.render("login.html", &ctx).map_err(internal_error)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
@@ -84,10 +87,7 @@ pub async fn login_post(
 
     let error = match user {
         Some(ref u) if password_ok && u.is_active() => {
-            LOGIN_FAILURES_BY_ACCOUNT.clear(&account);
-            // Also records last_login_date and last_login_ip, which IP bans from the user page use
-            login_user(&session, &mut conn, u.id, client_ip(&req)).map_err(internal_error)?;
-            return Ok(HttpResponse::Found().insert_header(("Location", "/")).finish());
+            return complete_login(&session, &mut conn, u, client_ip(&req));
         }
         // Like upstream, the ban (and its reason) only shows after the right password
         Some(ref u) if password_ok && u.is_banned() => {
@@ -182,8 +182,50 @@ pub async fn register_post(
         .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorInternalServerError("Failed to fetch user"))?;
 
-    login_user(&session, &mut conn, user.id, client_ip(&req)).map_err(internal_error)?;
-    Ok(HttpResponse::Found().insert_header(("Location", "/")).finish())
+    complete_login(&session, &mut conn, &user, client_ip(&req))
+}
+
+/// Session key of a login waiting for its second factor at /login/2fa.
+pub(crate) const MFA_PENDING_KEY: &str = "mfa_pending";
+/// How long the second step may take.
+const MFA_PENDING_SECS: i64 = 5 * 60;
+
+/// A user whose password was right but who still has to enter a two-factor code.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct MfaPending {
+    pub user_id: i32,
+    /// Unix time after which the password has to be entered again.
+    pub expires: i64,
+}
+
+impl MfaPending {
+    /// The pending login in `session`, if it hasn't expired.
+    pub(crate) fn get(session: &Session) -> Option<MfaPending> {
+        let pending: MfaPending = session.get(MFA_PENDING_KEY).ok()??;
+        (pending.expires > chrono::Utc::now().timestamp()).then_some(pending)
+    }
+}
+
+/// The one way a checked password (login or registration) becomes a session. Users with
+/// two-factor go to /login/2fa first; everyone else is signed in right away. Any other
+/// way of signing in (such as SSO, later) should end here too.
+pub(crate) fn complete_login(
+    session: &Session,
+    conn: &mut DbConnection,
+    user: &User,
+    ip: Option<Vec<u8>>,
+) -> Result<HttpResponse> {
+    if UserMfa::is_enabled(conn, user.id).map_err(internal_error)? {
+        // Failed logins stay counted until the second factor is right too, so knowing the
+        // password doesn't reset the limit on guessing codes
+        let expires = chrono::Utc::now().timestamp() + MFA_PENDING_SECS;
+        session.insert(MFA_PENDING_KEY, MfaPending { user_id: user.id, expires })?;
+        return Ok(redirect("/login/2fa"));
+    }
+    LOGIN_FAILURES_BY_ACCOUNT.clear(&format!("user:{}", user.id));
+    // Also records last_login_date and last_login_ip, which IP bans from the user page use
+    login_user(session, conn, user.id, ip, AuthMethod::Password).map_err(internal_error)?;
+    Ok(redirect("/"))
 }
 
 /// Upstream's `RegisterForm` rules, counted in characters: usernames are 3 to 32 ASCII
@@ -242,7 +284,7 @@ pub async fn legacy_redirect(req: HttpRequest, path: web::Path<String>) -> HttpR
 
 const PROFILE_URL: &str = "/profile";
 
-fn redirect(location: &str) -> HttpResponse {
+pub(crate) fn redirect(location: &str) -> HttpResponse {
     HttpResponse::Found().insert_header(("Location", location)).finish()
 }
 
@@ -331,6 +373,12 @@ fn render_profile(
     ctx.insert("password_errors", if active_tab == "password" { &errors } else { &no_errors });
     ctx.insert("email_errors", if active_tab == "email" { &errors } else { &no_errors });
     ctx.insert("email_value", email_value);
+    let mfa = UserMfa::get(conn, user.id).map_err(internal_error)?;
+    if let Some(mfa) = &mfa {
+        ctx.insert("two_factor_since", &mfa.enabled_time);
+        ctx.insert("recovery_codes_left", &UserMfa::recovery_codes_left(conn, user.id).map_err(internal_error)?);
+    }
+    ctx.insert("two_factor", &mfa.is_some());
     let html = tmpl.render("profile.html", &ctx).map_err(internal_error)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
@@ -388,8 +436,9 @@ pub async fn profile_post(
             }
             User::set_password(&mut conn, user.id, &form.new_password).map_err(internal)?;
             // A new password ends every other session; this one starts over
+            let method = session_auth_method(&session, &mut conn);
             logout_everywhere(&mut conn, user.id).map_err(internal)?;
-            login_user(&session, &mut conn, user.id, client_ip(&req)).map_err(internal_error)?;
+            login_user(&session, &mut conn, user.id, client_ip(&req), method).map_err(internal_error)?;
             flash::push(&session, "success", "Password successfully changed!", "");
         }
     } else if form.submit_settings.is_some() {
@@ -491,6 +540,7 @@ mod tests {
             ratelimit_account_age: 0,
             trusted: Default::default(),
             tickets: Default::default(),
+            mfa: Default::default(),
         }
     }
 

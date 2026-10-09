@@ -51,6 +51,13 @@ md5 = { package = "md-5", version = "0.10" }
 object_store = { version = "0.14", default-features = false, features = ["fs", "aws-base", "reqwest", "ring"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# Two-factor sign-in: TOTP codes (RFC 6238), the QR code as SVG, and the secret encrypted with a
+# key derived from SECRET_KEY. All pure Rust.
+totp-rs = { version = "6", default-features = false, features = ["std", "otpauth"] }
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+chacha20poly1305 = "0.11"
+hkdf = "0.13"
+sha2 = "0.11"
 
 # Optimize dependencies even in debug builds: argon2 (login, register) and Tera rendering
 # are many times slower unoptimized. Only the first debug build pays for it; this crate

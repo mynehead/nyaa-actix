@@ -30,10 +30,14 @@ pub enum Permission {
     BanIpRanges,
     /// Read, answer, close and reopen every user's support tickets (/admin/tickets).
     HandleTickets,
+    /// Turn off a lower-ranked user's two-factor sign-in, for someone who lost their
+    /// authenticator and recovery codes. Not moderators: a taken-over moderator account
+    /// must not be able to strip others' second factor.
+    ResetTwoFactor,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 12] = [
+    pub const ALL: [Permission; 13] = [
         Permission::SetTrustedFlag,
         Permission::ModerateTorrents,
         Permission::BanUsers,
@@ -46,6 +50,7 @@ impl Permission {
         Permission::NukeUsers,
         Permission::BanIpRanges,
         Permission::HandleTickets,
+        Permission::ResetTwoFactor,
     ];
 }
 
@@ -58,7 +63,7 @@ impl UserLevel {
             ModerateTorrents | BanUsers | ViewAdminPages | CreateGroups | ChangeUserClass | HandleTickets => {
                 UserLevel::Moderator
             }
-            SeeIps | DecideTrusted | GrantModerator | NukeUsers | BanIpRanges => UserLevel::SuperAdmin,
+            SeeIps | DecideTrusted | GrantModerator | NukeUsers | BanIpRanges | ResetTwoFactor => UserLevel::SuperAdmin,
         };
         self >= needed
     }

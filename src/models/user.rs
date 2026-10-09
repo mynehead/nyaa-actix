@@ -77,8 +77,12 @@ pub fn password_matches(user: Option<&User>, password: &str) -> bool {
     }
 }
 
+/// Only Argon2 hashes count, so a placeholder hash (as an account without a local password
+/// would get) can never be matched.
 fn verify_hash(hash: &str, password: &str) -> bool {
-    PasswordHash::new(hash).is_ok_and(|hash| Argon2::default().verify_password(password.as_bytes(), &hash).is_ok())
+    hash.starts_with("$argon2")
+        && PasswordHash::new(hash)
+            .is_ok_and(|hash| Argon2::default().verify_password(password.as_bytes(), &hash).is_ok())
 }
 
 pub const DEFAULT_AVATAR: &str = "/static/img/avatar/default.png";

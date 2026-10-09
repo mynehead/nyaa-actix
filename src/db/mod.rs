@@ -349,6 +349,20 @@ mod tests {
             assert_eq!(ip, Some(vec![10, 0, 0, 1]));
             assert_eq!(crate::middleware::auth::logout_everywhere(conn, user.id)?, 1);
 
+            // Two-factor: encrypted secret, one-time codes
+            use crate::auth::mfa::{self, SecondFactor, UserMfa};
+            let secret = mfa::new_secret();
+            let codes = mfa::new_recovery_codes();
+            let hashes: Vec<String> = codes.iter().map(|c| mfa::hash_recovery_code(c)).collect();
+            UserMfa::enable(conn, user.id, &mfa::encrypt_secret("k", user.id, &secret), 0, &hashes)?;
+            let two_factor = UserMfa::get(conn, user.id)?.unwrap();
+            let code = mfa::code_at(&secret, mfa::unix_now());
+            assert_eq!(two_factor.verify(conn, "k", &code)?, Some(SecondFactor::Totp));
+            assert_eq!(two_factor.verify(conn, "k", &code)?, None);
+            assert_eq!(two_factor.verify(conn, "k", &codes[0])?, Some(SecondFactor::RecoveryCode));
+            assert_eq!(UserMfa::recovery_codes_left(conn, user.id)?, 9);
+            assert!(UserMfa::disable(conn, user.id)?);
+
             check_flag_migration(
                 conn,
                 include_str!("../../migrations/postgres/2026-10-06-160100_upstream_flag_bits/up.sql"),

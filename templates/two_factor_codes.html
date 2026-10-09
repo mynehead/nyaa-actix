@@ -1,0 +1,19 @@
+{% extends "layout.html" %}
+{% block title %}Recovery codes :: {{ config.site_name }}{% endblock %}
+{% block body %}
+
+<h2 style="margin-bottom: 20px;">Your recovery codes</h2>
+
+<div class="alert alert-warning" role="alert">
+	<strong>Save these now; they are shown only once.</strong> Each code logs you in once in place
+	of an app code, for when you don't have your phone. Keep them somewhere safe, apart from the phone.
+</div>
+
+<pre id="recovery_codes" style="font-size: 1.3em; display: inline-block; padding: 10px 20px;">
+{% for code in codes %}{{ code }}
+{% endfor %}</pre>
+
+<p>Any recovery codes you had before no longer work.</p>
+<a class="btn btn-primary" href="/profile/2fa">Done</a>
+
+{% endblock %}

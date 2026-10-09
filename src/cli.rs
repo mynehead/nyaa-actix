@@ -21,6 +21,9 @@
 //!
 //! `nyaa-actix unban-ip-range <range>` lifts an IP range ban (Admin > Bans), for when an
 //! admin has locked themselves out. A running server notices within a minute.
+//!
+//! `nyaa-actix reset-2fa <username>` turns off the user's two-factor sign-in, for an admin
+//! who lost both the authenticator and the recovery codes. The admin log records it.
 
 use diesel::prelude::*;
 
@@ -33,7 +36,8 @@ const USAGE: &str =
     "usage: nyaa-actix create-user <username> <password> [--level regular|trusted|moderator|admin] [--email <addr>]
        nyaa-actix migrate-storage [--dry-run]
        nyaa-actix reindex
-       nyaa-actix unban-ip-range <range>";
+       nyaa-actix unban-ip-range <range>
+       nyaa-actix reset-2fa <username>";
 
 /// Runs the subcommand named in `args` (program name already stripped).
 /// Returns None when there is no subcommand, so the caller starts the server.
@@ -43,6 +47,7 @@ pub async fn run(args: &[String]) -> Option<Result<(), String>> {
         Some("migrate-storage") => Some(migrate_storage(&args[1..]).await),
         Some("reindex") => Some(reindex()),
         Some("unban-ip-range") => Some(unban_ip_range(&args[1..])),
+        Some("reset-2fa") => Some(reset_two_factor(&args[1..])),
         Some("help" | "--help" | "-h") => {
             println!("{USAGE}\nWith no subcommand, starts the web server.");
             Some(Ok(()))
@@ -179,6 +184,36 @@ fn unban_range(conn: &mut DbConnection, cidr: &str) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
+fn reset_two_factor(args: &[String]) -> Result<(), String> {
+    let [username] = args else { return Err(USAGE.into()) };
+    let (mut conn, database_url) = open_db()?;
+    reset_mfa(&mut conn, username)?;
+    println!("turned off two-factor sign-in of `{username}` in {database_url}");
+    Ok(())
+}
+
+/// Turns off the user's two-factor; the log entry names the user, as there is no admin.
+fn reset_mfa(conn: &mut DbConnection, username: &str) -> Result<(), String> {
+    use crate::auth::mfa::UserMfa;
+    use crate::models::{user_link, AdminLog};
+    let user =
+        User::by_username(conn, username).map_err(|e| e.to_string())?.ok_or_else(|| format!("no user `{username}`"))?;
+    conn.transaction::<_, diesel::result::Error, _>(|conn| {
+        if !UserMfa::disable(conn, user.id)? {
+            return Ok(false);
+        }
+        AdminLog::add(
+            conn,
+            user.id,
+            &format!("Two-factor sign-in of {} was reset from the command line", user_link(&user.username)),
+        )?;
+        Ok(true)
+    })
+    .map_err(|e| e.to_string())?
+    .then_some(())
+    .ok_or_else(|| format!("`{username}` has no two-factor sign-in"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,5 +268,21 @@ mod tests {
         assert!(unban_range(&mut conn, "10.1.0.0/16").is_err());
         unban_range(&mut conn, "10.0.0.0/8").unwrap();
         assert!(IpRangeBan::all(&mut conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn resets_two_factor() {
+        use crate::auth::mfa::{encrypt_secret, new_secret, UserMfa};
+        let mut conn = crate::db::connect(":memory:").unwrap();
+        crate::db::run_migrations(&mut conn).unwrap();
+        diesel::insert_into(users::table).values(&NewUser::new("admin", None, "admin")).execute(&mut conn).unwrap();
+        let admin = User::by_username(&mut conn, "admin").unwrap().unwrap();
+        UserMfa::enable(&mut conn, admin.id, &encrypt_secret("k", admin.id, &new_secret()), 0, &[]).unwrap();
+        assert!(reset_mfa(&mut conn, "nobody").is_err());
+        reset_mfa(&mut conn, "admin").unwrap();
+        assert!(!UserMfa::is_enabled(&mut conn, admin.id).unwrap());
+        assert!(reset_mfa(&mut conn, "admin").is_err(), "nothing left to reset");
+        let (entries, _) = crate::models::AdminLog::page(&mut conn, 1, 10).unwrap();
+        assert!(entries[0].entry.log.contains("reset from the command line"));
     }
 }

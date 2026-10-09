@@ -28,6 +28,9 @@
 	<li role="presentation"{% if active_tab == "preferences" %} class="active"{% endif %}>
 		<a href="#preferences-change" id="preferences-change-tab" role="tab" data-toggle="tab" aria-controls="profile" aria-expanded="{{ active_tab == "preferences" }}">Preferences</a>
 	</li>
+	<li role="presentation">
+		<a href="#two-factor" id="two-factor-tab" role="tab" data-toggle="tab" aria-controls="profile" aria-expanded="false">Two-factor</a>
+	</li>
 </ul>
 
 <div class="tab-content">
@@ -119,6 +122,19 @@
 					</div>
 				</div>
 		</form>
+	</div>
+	<div class="tab-pane fade" role="tabpanel" id="two-factor" aria-labelledby="two-factor-tab">
+		<div class="row">
+			<div class="form-group col-md-6">
+				{% if two_factor %}
+				<p>Two-factor sign-in is <strong>on</strong> since {{ two_factor_since | date(format="%Y-%m-%d") }}. You have {{ recovery_codes_left }} of 10 recovery codes left.</p>
+				<a class="btn btn-default" href="/profile/2fa">Manage two-factor sign-in</a>
+				{% else %}
+				<p>Two-factor sign-in is <strong>off</strong>. Turn it on so that logging in also needs a code from an app on your phone.</p>
+				<a class="btn btn-primary" href="/profile/2fa">Set up two-factor sign-in</a>
+				{% endif %}
+			</div>
+		</div>
 	</div>
 </div>
 

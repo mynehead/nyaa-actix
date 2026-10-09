@@ -17,6 +17,34 @@ use crate::models::User;
 
 pub const SESSION_ID_KEY: &str = "sid";
 
+/// How a session was signed in, stored in `user_sessions.auth_method`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthMethod {
+    Password,
+    /// Password, then a code from an authenticator app.
+    PasswordTotp,
+    /// Password, then a one-time recovery code.
+    PasswordRecovery,
+}
+
+impl AuthMethod {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AuthMethod::Password => "password",
+            AuthMethod::PasswordTotp => "password+totp",
+            AuthMethod::PasswordRecovery => "password+recovery",
+        }
+    }
+
+    fn parse(s: &str) -> Self {
+        match s {
+            "password+totp" => AuthMethod::PasswordTotp,
+            "password+recovery" => AuthMethod::PasswordRecovery,
+            _ => AuthMethod::Password,
+        }
+    }
+}
+
 /// Sessions end after this long without a request (upstream: 7 days, renewed on activity).
 pub const SESSION_TTL_DAYS: i64 = 7;
 
@@ -52,8 +80,15 @@ fn user_by_session(conn: &mut DbConnection, sid: &str) -> QueryResult<Option<Use
 }
 
 /// Starts a fresh session (new cookie, new row) and records the login like upstream:
-/// `last_login_date` and `last_login_ip`.
-pub fn login_user(session: &Session, conn: &mut DbConnection, user_id: i32, ip: Option<Vec<u8>>) -> anyhow::Result<()> {
+/// `last_login_date` and `last_login_ip`. Login handlers go through
+/// `handlers::account::complete_login`, which asks for the second factor first when needed.
+pub fn login_user(
+    session: &Session,
+    conn: &mut DbConnection,
+    user_id: i32,
+    ip: Option<Vec<u8>>,
+    method: AuthMethod,
+) -> anyhow::Result<()> {
     let mut bytes = [0u8; 32];
     OsRng.fill_bytes(&mut bytes);
     let sid = hex::encode(bytes);
@@ -69,6 +104,7 @@ pub fn login_user(session: &Session, conn: &mut DbConnection, user_id: i32, ip: 
                 user_sessions::created_time.eq(now),
                 user_sessions::last_seen.eq(now),
                 user_sessions::ip.eq(&ip),
+                user_sessions::auth_method.eq(method.as_str()),
             ))
             .execute(conn)?;
         diesel::update(users::table.find(user_id))
@@ -81,6 +117,16 @@ pub fn login_user(session: &Session, conn: &mut DbConnection, user_id: i32, ip: 
     session.renew();
     session.insert(SESSION_ID_KEY, sid)?;
     Ok(())
+}
+
+/// How the current session was signed in; Password when there is none.
+pub fn session_auth_method(session: &Session, conn: &mut DbConnection) -> AuthMethod {
+    let Ok(Some(sid)) = session.get::<String>(SESSION_ID_KEY) else {
+        return AuthMethod::Password;
+    };
+    let method: Option<String> =
+        user_sessions::table.find(sid).select(user_sessions::auth_method).first(conn).optional().ok().flatten();
+    method.map_or(AuthMethod::Password, |m| AuthMethod::parse(&m))
 }
 
 /// Ends the session for good: deletes its row and clears the cookie.
@@ -153,7 +199,7 @@ pub mod test_support {
 
     /// Test route body: signs in as the user in the path, as a real login would.
     pub async fn login(session: Session, pool: web::Data<DbPool>, path: web::Path<i32>) -> actix_web::HttpResponse {
-        login_user(&session, &mut pool.get().unwrap(), path.into_inner(), None).unwrap();
+        login_user(&session, &mut pool.get().unwrap(), path.into_inner(), None, AuthMethod::Password).unwrap();
         actix_web::HttpResponse::Ok().finish()
     }
 }
