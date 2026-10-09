@@ -94,6 +94,14 @@
 					Lock Comments
 				</label>
 				{% endif %}
+				{% if can.mark_best %}
+				<label class="btn btn-info{% if form.is_best %} active{% endif %}" title="Mark as one of the best releases (blue row)">
+					<input id="is_best" name="is_best" type="checkbox" value="y"{% if form.is_best %} checked{% endif %}>
+					<span class="glyphicon glyphicon-check"></span>
+					<span class="glyphicon glyphicon-unchecked"></span>
+					Best
+				</label>
+				{% endif %}
 			</div>
 		</div>
 	</div>

@@ -31,6 +31,7 @@ pub fn register(tera: &mut Tera) {
     tera.register_filter("is_anonymous", torrent_filter("is_anonymous", |t| Value::Bool(t.is_anonymous())));
     tera.register_filter("is_remake", torrent_filter("is_remake", |t| Value::Bool(t.is_remake())));
     tera.register_filter("is_hidden", torrent_filter("is_hidden", |t| Value::Bool(t.is_hidden())));
+    tera.register_filter("is_best", torrent_filter("is_best", |t| Value::Bool(t.is_best())));
     tera.register_filter("is_complete", torrent_filter("is_complete", |t| Value::Bool(t.is_complete())));
     tera.register_filter("is_deleted", torrent_filter("is_deleted", |t| Value::Bool(t.is_deleted() || t.is_banned())));
     tera.register_filter("row_class", torrent_filter("row_class", |t| to_value(t.row_class()).unwrap()));

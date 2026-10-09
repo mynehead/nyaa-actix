@@ -183,6 +183,7 @@
 								<option value="0" title="No filter" {% if search is not defined or search.quality_filter == "0" %}selected{% endif %}>No filter</option>
 								<option value="1" title="No remakes" {% if search is defined and search.quality_filter == "1" %}selected{% endif %}>No remakes</option>
 								<option value="2" title="Trusted only" {% if search is defined and search.quality_filter == "2" %}selected{% endif %}>Trusted only</option>
+								<option value="4" title="Best only" {% if search is defined and search.quality_filter == "4" %}selected{% endif %}>Best only</option>
 							</select>
 
 							<br>
@@ -213,6 +214,7 @@
 									<option value="0" title="No filter" {% if search is not defined or search.quality_filter == "0" %}selected{% endif %}>No filter</option>
 									<option value="1" title="No remakes" {% if search is defined and search.quality_filter == "1" %}selected{% endif %}>No remakes</option>
 									<option value="2" title="Trusted only" {% if search is defined and search.quality_filter == "2" %}selected{% endif %}>Trusted only</option>
+									<option value="4" title="Best only" {% if search is defined and search.quality_filter == "4" %}selected{% endif %}>Best only</option>
 								</select>
 							</div>
 

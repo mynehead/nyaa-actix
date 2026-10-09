@@ -22,6 +22,7 @@
 			<nyaa:comments>{{ item.comments }}</nyaa:comments>
 			<nyaa:trusted>{{ item.trusted | safe }}</nyaa:trusted>
 			<nyaa:remake>{{ item.remake | safe }}</nyaa:remake>
+			<nyaa:best>{{ item.best | safe }}</nyaa:best>
 			<description><![CDATA[<a href="{{ item.view_url | safe }}">#{{ item.id }} | {{ item.title | safe }}</a> | {{ item.size | safe }} | {{ item.category | safe }} | {{ item.info_hash | upper | safe }}]]></description>
 		</item>
 		{%- endfor %}
