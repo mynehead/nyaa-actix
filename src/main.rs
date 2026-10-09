@@ -66,6 +66,7 @@ async fn main() -> std::io::Result<()> {
     });
     log::info!("Storing files on {}", storage.description());
     let storage_data = web::Data::new(storage);
+    let gravatar_data = web::Data::new(utils::gravatar::GravatarProxy::new());
 
     let range_bans = {
         let mut conn = pool.get().expect("Failed to get DB connection");
@@ -89,6 +90,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(cfg_data.clone())
             .app_data(pool_data.clone())
             .app_data(storage_data.clone())
+            .app_data(gravatar_data.clone())
             .app_data(tmpl_data.clone())
             .app_data(range_bans.clone())
             .wrap(ErrorHandlers::new().handler(StatusCode::NOT_FOUND, handlers::site::not_found))

@@ -80,17 +80,26 @@ mod render_tests {
             database_url: String::new(),
             secret_key: String::new(),
             site_name: "Nyaa".into(),
+            global_site_name: "Nyaa".into(),
             site_flavor: "nyaa".into(),
+            sister_site_url: None,
             results_per_page: 75,
             max_pages: 0,
             torrent_storage_path: String::new(),
             avatar_storage_path: String::new(),
             enable_gravatar: false,
+            show_stats: true,
+            max_files_view: 1000,
+            required_announce_url: None,
+            gravatar_url: crate::config::DEFAULT_GRAVATAR_URL.into(),
+            gravatar_sha256: false,
             maintenance: Default::default(),
+            raid_mode: Default::default(),
             site_url: String::new(),
             tracker_urls: vec![],
             trusted_proxies: vec![],
             meili: None,
+            count_cache: None,
             tracker: None,
             ratelimit_account_age: 0,
             editing_time_limit: 0,
@@ -100,6 +109,7 @@ mod render_tests {
             tickets: Default::default(),
             mfa: Default::default(),
             recaptcha: None,
+            email_blacklist: Default::default(),
         }
     }
 
@@ -210,6 +220,20 @@ mod render_tests {
         let html = render("view.html", &ctx);
         assert!(html.contains("<div class=\"collapse \" id=\"collapse-comments\">"), "{}", html);
         assert!(html.contains("aria-expanded=\"false\" aria-controls=\"collapse-comments\""));
+
+        // MAX_FILES_VIEW: a longer file list isn't rendered
+        ctx.insert("max_files_view", &0);
+        let html = render("view.html", &ctx);
+        assert!(html.contains("Too many files to display."), "{}", html);
+        assert!(!html.contains("a.txt <span"), "{}", html);
+
+        // ENABLE_SHOW_STATS=false: the counts say "Coming soon"
+        let mut cfg = config();
+        cfg.show_stats = false;
+        let mut ctx = ctx.clone();
+        ctx.extend(base_context(&cfg, Some(&user(2))));
+        let html = render("view.html", &ctx);
+        assert_eq!(html.matches("Coming soon").count(), 3, "{}", html);
     }
 
     #[test]

@@ -111,6 +111,8 @@ pub fn base_context(cfg: &Config, current_user: Option<&User>) -> tera::Context 
         &serde_json::json!({
             "site_name": cfg.site_name,
             "site_flavor": cfg.site_flavor,
+            "sister_site_url": cfg.sister_site_url,
+            "show_stats": cfg.show_stats,
             "maintenance_message": cfg.maintenance.enabled.then_some(&cfg.maintenance.message),
             "allow_password_reset": cfg.mail.password_reset().is_some(),
             "recaptcha_public_key": cfg.recaptcha.as_ref().map(|r| &r.public_key),

@@ -286,15 +286,28 @@ fn filtered(q: &SearchQuery, r: &Resolved) -> nyaa_torrents::BoxedQuery<'static,
 #[cfg(test)]
 pub fn search(conn: &mut DbConnection, q: &SearchQuery) -> QueryResult<SearchResult> {
     let r = q.resolve(conn)?;
-    search_resolved(conn, q, &r)
+    search_resolved(conn, q, &r, None)
 }
 
-/// `search` with the term already resolved.
-pub fn search_resolved(conn: &mut DbConnection, q: &SearchQuery, r: &Resolved) -> QueryResult<SearchResult> {
+/// `search` with the term already resolved. Totals come from `counts` when given.
+pub fn search_resolved(
+    conn: &mut DbConnection,
+    q: &SearchQuery,
+    r: &Resolved,
+    counts: Option<&super::count_cache::CountCache>,
+) -> QueryResult<SearchResult> {
     if r.matches_nothing {
         return Ok(SearchResult { torrents: vec![], total: 0 });
     }
-    let total: i64 = filtered(q, r).count().get_result(conn)?;
+    let mut count = || filtered(q, r).count().get_result::<i64>(&mut *conn);
+    let total = match counts {
+        // Page, sort and order don't change the count
+        Some(cache) => {
+            let key = SearchQuery { page: 1, per_page: 0, sort: SearchSort::Id, order: SearchOrder::Desc, ..q.clone() };
+            cache.get_or(format!("{key:?}{r:?}"), count)?
+        }
+        None => count()?,
+    };
     let query = filtered(q, r);
 
     // Sort
@@ -327,6 +340,8 @@ pub fn search_resolved(conn: &mut DbConnection, q: &SearchQuery, r: &Resolved) -
     let torrents =
         query.then_order_by(nyaa_torrents::id.desc()).limit(q.per_page).offset(offset).load::<Torrent>(conn)?;
 
+    // A cached total can be behind the rows just loaded
+    let total = if torrents.is_empty() { total } else { total.max(offset.saturating_add(torrents.len() as i64)) };
     Ok(SearchResult { torrents, total })
 }
 

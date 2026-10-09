@@ -42,7 +42,7 @@
 			</div>
 
 			<div class="col-md-1">Seeders:</div>
-			<div class="col-md-5"><span style="color: green;">{% if stats %}{{ stats.seed_count }}{% else %}0{% endif %}</span></div>
+			<div class="col-md-5"><span style="color: green;">{% if not config.show_stats %}Coming soon{% elif stats %}{{ stats.seed_count }}{% else %}0{% endif %}</span></div>
 		</div>
 
 		{% if group %}
@@ -63,7 +63,7 @@
 			</div>
 
 			<div class="col-md-1">Leechers:</div>
-			<div class="col-md-5"><span style="color: red;">{% if stats %}{{ stats.leech_count }}{% else %}0{% endif %}</span></div>
+			<div class="col-md-5"><span style="color: red;">{% if not config.show_stats %}Coming soon{% elif stats %}{{ stats.leech_count }}{% else %}0{% endif %}</span></div>
 		</div>
 
 		<div class="row">
@@ -71,7 +71,7 @@
 			<div class="col-md-5">{{ torrent | filesize_human }}</div>
 
 			<div class="col-md-1">Completed:</div>
-			<div class="col-md-5">{% if stats %}{{ stats.download_count }}{% else %}0{% endif %}</div>
+			<div class="col-md-5">{% if not config.show_stats %}Coming soon{% elif stats %}{{ stats.download_count }}{% else %}0{% endif %}</div>
 		</div>
 		<div class="row">
 			<div class="col-md-offset-6 col-md-1">Info hash:</div>

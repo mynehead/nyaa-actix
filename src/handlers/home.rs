@@ -132,7 +132,7 @@ async fn listing(
     }
 
     crate::utils::pagination::check_max_pages(q.page, cfg.max_pages)?;
-    let result = search(&mut conn, cfg.meili.as_ref(), &q).map_err(internal_error)?;
+    let result = search(&mut conn, &cfg, &q).map_err(internal_error)?;
     let torrents = with_stats(&mut conn, result.torrents).map_err(internal_error)?;
 
     if params.rss {
@@ -218,13 +218,21 @@ mod tests {
             database_url: String::new(),
             secret_key: String::new(),
             site_name: "Nyaa".into(),
+            global_site_name: "Nyaa".into(),
             site_flavor: "nyaa".into(),
+            sister_site_url: None,
             results_per_page: 1,
             max_pages: 2,
             torrent_storage_path: String::new(),
             avatar_storage_path: String::new(),
             enable_gravatar: false,
+            show_stats: true,
+            max_files_view: 1000,
+            required_announce_url: None,
+            gravatar_url: crate::config::DEFAULT_GRAVATAR_URL.into(),
+            gravatar_sha256: false,
             maintenance: Default::default(),
+            raid_mode: Default::default(),
             site_url: String::new(),
             tracker_urls: vec![],
             trusted_proxies: vec![],
@@ -233,11 +241,13 @@ mod tests {
             upload_limit: Default::default(),
             mail: Default::default(),
             meili: None,
+            count_cache: None,
             tracker: None,
             trusted: Default::default(),
             tickets: Default::default(),
             mfa: Default::default(),
             recaptcha: None,
+            email_blacklist: Default::default(),
         };
         let mut tera = Tera::new("templates/**/*").unwrap();
         crate::utils::tera_filters::register(&mut tera);
