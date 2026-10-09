@@ -237,6 +237,7 @@ mod tests {
             trusted: Default::default(),
             tickets: Default::default(),
             mfa: Default::default(),
+            email_blacklist: Default::default(),
         };
         let mut tera = Tera::new("templates/**/*").unwrap();
         crate::utils::tera_filters::register(&mut tera);
