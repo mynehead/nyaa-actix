@@ -884,33 +884,11 @@ body.dark .table-hover > tbody > tr.danger:hover {
 	background-color: transparent;
 }
 
-body.dark table.torrent-list td:nth-child(6),
-body.dark table.torrent-list > tbody > tr.success > td:nth-child(6),
-body.dark table.torrent-list > tbody > tr.danger > td:nth-child(6) {
-	color: #5cb85c;
-}
-
-body.dark table.torrent-list td:nth-child(7),
-body.dark table.torrent-list > tbody > tr.success > td:nth-child(7),
-body.dark table.torrent-list > tbody > tr.danger > td:nth-child(7) {
-	color: #ff6b6b;
-}
-
-/* Seeders/leechers on the torrent page (upstream used inline styles, which dark mode can't reach) */
-.text-seeders {
-	color: green;
-}
-
-.text-leechers {
-	color: red;
-}
-
-body.dark .text-seeders,
+/* Trusted and banned user names: Bootstrap's dark green/red are hard to read on the dark background */
 body.dark .text-success {
 	color: #5cb85c;
 }
 
-body.dark .text-leechers,
 body.dark .text-danger {
 	color: #ff6b6b;
 }
