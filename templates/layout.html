@@ -72,6 +72,9 @@
 							</ul>
 						</li>
 						<li><a href="{% if rss_url is defined %}{{ rss_url }}{% else %}/?page=rss{% endif %}">RSS</a></li>
+						{% if config.sister_site_url %}
+						<li><a href="{{ config.sister_site_url }}">{% if config.site_flavor == "sukebei" %}Fun{% else %}Fap{% endif %}</a></li>
+						{% endif %}
 						{% if can.view_admin_pages %}
 						<li class="dropdown">
 							<a href="#" class="dropdown-toggle" data-toggle="dropdown" role="button" aria-haspopup="true" aria-expanded="false">

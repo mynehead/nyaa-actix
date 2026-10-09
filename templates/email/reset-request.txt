@@ -1,4 +1,4 @@
-{{ site_name }} password reset request
+{{ global_site_name }} password reset request
 {{ site_name }} password reset request
 
 A password reset request was made for this account. Click the following link to reset your password:

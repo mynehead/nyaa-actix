@@ -8,7 +8,12 @@ pub struct Config {
     pub database_url: String,
     pub secret_key: String,
     pub site_name: String,
+    /// Upstream GLOBAL_SITE_NAME: what both sites are called together, used in mail subjects.
+    pub global_site_name: String,
     pub site_flavor: String,
+    /// Upstream EXTERNAL_URLS: the sister site's address for the "Fap" (on nyaa) or "Fun"
+    /// (on sukebei) navbar link; None hides the link.
+    pub sister_site_url: Option<String>,
     pub results_per_page: i64,
     /// Upstream MAX_PAGES: cap on how deep torrent listings can be paged (0 = no cap).
     pub max_pages: i64,
@@ -17,6 +22,14 @@ pub struct Config {
     pub avatar_storage_path: String,
     /// Upstream ENABLE_GRAVATAR: Gravatar for users without an uploaded avatar.
     pub enable_gravatar: bool,
+    /// Upstream ENABLE_SHOW_STATS: seeders, leechers and completed on the torrent page;
+    /// off shows "Coming soon" instead.
+    pub show_stats: bool,
+    /// Upstream MAX_FILES_VIEW: torrents with more files show "Too many files to display."
+    pub max_files_view: usize,
+    /// Upstream ENFORCE_MAIN_ANNOUNCE_URL with MAIN_ANNOUNCE_URL: uploads must list this
+    /// tracker. None accepts any trackers.
+    pub required_announce_url: Option<String>,
     /// GRAVATAR_URL: base of a Gravatar-compatible avatar service (gravatar.com, Libravatar
     /// or a self-hosted instance), without the trailing slash; the hash is appended to it.
     pub gravatar_url: String,
@@ -43,6 +56,9 @@ pub struct Config {
     pub mail: crate::mail::MailConfig,
     /// Meilisearch for text search and stats sorts (MEILI_URL and friends); None keeps search on SQLite.
     pub meili: Option<crate::search::meili::Meili>,
+    /// Upstream COUNT_CACHE_SIZE and COUNT_CACHE_DURATION: listing totals reused for a few
+    /// seconds; None counts every time.
+    pub count_cache: Option<std::sync::Arc<crate::search::count_cache::CountCache>>,
     /// The tracker's management API (TRACKER_API_URL and TRACKER_API_KEY) for the whitelist
     /// and stats; None runs the site without talking to a tracker.
     pub tracker: Option<crate::tracker::Tracker>,
@@ -230,17 +246,32 @@ impl Config {
             secret_key.len()
         );
         let site_name = env::var("SITE_NAME").unwrap_or_else(|_| "Nyaa".into());
+        let site_flavor = env::var("SITE_FLAVOR").unwrap_or_else(|_| "nyaa".into());
+        let tracker_urls: Vec<String> = ["TRACKER_ANNOUNCE_URLS", "TRACKER_EXTRA_URLS"]
+            .iter()
+            .flat_map(|key| split_list(&env::var(key).unwrap_or_default()))
+            .collect();
+        let flag = |key: &str, default: bool| env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default);
+        let non_empty = |key: &str| env::var(key).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
         Config {
             database_url: env::var("DATABASE_URL").unwrap_or_else(|_| "nyaa.db".into()),
             secret_key,
             mfa: crate::auth::mfa::MfaConfig::from_env(&site_name),
+            global_site_name: non_empty("GLOBAL_SITE_NAME").unwrap_or_else(|| site_name.clone()),
             site_name,
-            site_flavor: env::var("SITE_FLAVOR").unwrap_or_else(|_| "nyaa".into()),
+            sister_site_url: non_empty(if site_flavor == "sukebei" { "EXTERNAL_URL_MAIN" } else { "EXTERNAL_URL_FAP" })
+                .map(|url| if url.contains("//") { url } else { format!("//{url}") }),
+            site_flavor,
             results_per_page: env::var("RESULTS_PER_PAGE").ok().and_then(|v| v.parse().ok()).unwrap_or(75),
             max_pages: env::var("MAX_PAGES").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
             torrent_storage_path: env::var("TORRENT_STORAGE_PATH").unwrap_or_else(|_| "./torrents".into()),
             avatar_storage_path: env::var("AVATAR_STORAGE_PATH").unwrap_or_else(|_| "./avatars".into()),
             enable_gravatar: env::var("ENABLE_GRAVATAR").ok().and_then(|v| v.parse().ok()).unwrap_or(false),
+            show_stats: flag("ENABLE_SHOW_STATS", true),
+            max_files_view: env::var("MAX_FILES_VIEW").ok().and_then(|v| v.parse().ok()).unwrap_or(1000),
+            required_announce_url: flag("ENFORCE_MAIN_ANNOUNCE_URL", false)
+                .then(|| non_empty("MAIN_ANNOUNCE_URL").or_else(|| tracker_urls.first().cloned()))
+                .flatten(),
             gravatar_url: env::var("GRAVATAR_URL")
                 .ok()
                 .map(|v| v.trim().trim_end_matches('/').to_string())
@@ -257,10 +288,7 @@ impl Config {
                 .unwrap_or_else(|_| "http://localhost:8080".into())
                 .trim_end_matches('/')
                 .to_string(),
-            tracker_urls: ["TRACKER_ANNOUNCE_URLS", "TRACKER_EXTRA_URLS"]
-                .iter()
-                .flat_map(|key| split_list(&env::var(key).unwrap_or_default()))
-                .collect(),
+            tracker_urls,
             trusted_proxies: crate::utils::proxy::parse_trusted_proxies(
                 &env::var("TRUSTED_PROXIES").unwrap_or_default(),
             )
@@ -273,6 +301,7 @@ impl Config {
             upload_limit: UploadLimitConfig::from_env(),
             mail: crate::mail::MailConfig::from_env(),
             meili: crate::search::meili::Meili::from_env(),
+            count_cache: crate::search::count_cache::CountCache::from_env(),
             tracker: crate::tracker::Tracker::from_env(),
             trusted: TrustedConfig::from_env(),
             tickets: TicketConfig::from_env(),
@@ -287,12 +316,17 @@ impl Config {
             database_url: String::new(),
             secret_key: String::new(),
             site_name: "Nyaa".into(),
+            global_site_name: "Nyaa".into(),
             site_flavor: "nyaa".into(),
+            sister_site_url: None,
             results_per_page: 75,
             max_pages: 0,
             torrent_storage_path: String::new(),
             avatar_storage_path: String::new(),
             enable_gravatar: false,
+            show_stats: true,
+            max_files_view: 1000,
+            required_announce_url: None,
             gravatar_url: crate::config::DEFAULT_GRAVATAR_URL.into(),
             gravatar_sha256: false,
             maintenance: Default::default(),
@@ -301,6 +335,7 @@ impl Config {
             tracker_urls: vec![],
             trusted_proxies: vec![],
             meili: None,
+            count_cache: None,
             tracker: None,
             ratelimit_account_age: 0,
             editing_time_limit: 0,

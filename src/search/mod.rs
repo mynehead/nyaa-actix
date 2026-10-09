@@ -1,3 +1,4 @@
+pub mod count_cache;
 pub mod db;
 pub mod index;
 pub mod meili;
@@ -9,7 +10,6 @@ use crate::db::schema::nyaa_torrents;
 use crate::db::DbConnection;
 use crate::models::Torrent;
 use db::{SearchQuery, SearchResult, SearchSort};
-use meili::Meili;
 
 /// Whether a listing goes to Meilisearch when it is configured: text searches and the
 /// stats sorts, which SQLite can only answer by scanning every torrent. Plain listings
@@ -21,15 +21,15 @@ fn wants_index(q: &SearchQuery) -> bool {
 
 /// One page of a listing. Uses Meilisearch where it helps and falls back to SQLite when it
 /// is not configured or fails, so search never breaks because the index is down.
-pub fn search(conn: &mut DbConnection, meili: Option<&Meili>, q: &SearchQuery) -> QueryResult<SearchResult> {
+pub fn search(conn: &mut DbConnection, cfg: &crate::config::Config, q: &SearchQuery) -> QueryResult<SearchResult> {
     let r = q.resolve(conn)?;
-    if let Some(meili) = meili.filter(|m| m.is_ready() && wants_index(q) && !r.matches_nothing) {
+    if let Some(meili) = cfg.meili.as_ref().filter(|m| m.is_ready() && wants_index(q) && !r.matches_nothing) {
         match meili.search(q, &r) {
             Ok((ids, total)) => return Ok(SearchResult { torrents: load_in_order(conn, &ids)?, total }),
             Err(e) => log::warn!("Meilisearch search failed, using SQLite: {e}"),
         }
     }
-    db::search_resolved(conn, q, &r)
+    db::search_resolved(conn, q, &r, cfg.count_cache.as_deref())
 }
 
 /// Loads torrents by id in the given order, skipping any gone from SQLite since they were
@@ -48,6 +48,7 @@ fn load_in_order(conn: &mut DbConnection, ids: &[i32]) -> QueryResult<Vec<Torren
 mod tests {
     use super::*;
     use crate::models::TorrentFlags;
+    use meili::Meili;
     use std::time::Duration;
 
     /// Torrents 1..=6: names, flags, categories, uploaders and seeders that the tests below
@@ -106,7 +107,8 @@ mod tests {
     }
 
     fn ids(conn: &mut DbConnection, meili: Option<&Meili>, q: &SearchQuery) -> (Vec<i32>, i64) {
-        let r = search(conn, meili, q).unwrap();
+        let cfg = crate::config::Config { meili: meili.cloned(), ..crate::config::Config::for_tests() };
+        let r = search(conn, &cfg, q).unwrap();
         (r.torrents.iter().map(|t| t.id).collect(), r.total)
     }
 
