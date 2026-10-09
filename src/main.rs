@@ -65,6 +65,12 @@ async fn main() -> std::io::Result<()> {
     log::info!("Storing files on {}", storage.description());
     let storage_data = web::Data::new(storage);
 
+    let range_bans = {
+        let mut conn = pool.get().expect("Failed to get DB connection");
+        web::Data::new(middleware::ip_range_ban::IpRangeBans::load(&mut conn).expect("Failed to load IP range bans"))
+    };
+    middleware::ip_range_ban::spawn_reload(pool.clone(), range_bans.clone());
+
     let secret_key = Key::from(cfg.secret_key.as_bytes());
     let cfg_data = web::Data::new(cfg.clone());
     let pool_data = web::Data::new(pool);
@@ -81,6 +87,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(pool_data.clone())
             .app_data(storage_data.clone())
             .app_data(tmpl_data.clone())
+            .app_data(range_bans.clone())
             .wrap(ErrorHandlers::new().handler(StatusCode::NOT_FOUND, handlers::site::not_found))
             .wrap(Logger::default())
             .wrap(actix_web::middleware::from_fn(middleware::ip_ban::reject_banned_ip))
@@ -99,6 +106,8 @@ async fn main() -> std::io::Result<()> {
                     )
                     .build(),
             )
+            // Outermost, so a banned network costs no session or database work
+            .wrap(actix_web::middleware::from_fn(middleware::ip_range_ban::reject_banned_range))
             // Static files
             .service(fs::Files::new("/static", "./static"))
             // Home / search
@@ -177,6 +186,8 @@ async fn main() -> std::io::Result<()> {
             .route("/admin/log", web::get().to(handlers::admin::log))
             .route("/admin/bans", web::get().to(handlers::admin::bans))
             .route("/admin/bans", web::post().to(handlers::admin::bans_post))
+            .route("/admin/bans/ranges", web::post().to(handlers::admin::range_ban_add))
+            .route("/admin/bans/ranges/{id}/delete", web::post().to(handlers::admin::range_ban_remove))
             .route("/admin/trusted", web::get().to(handlers::trusted::admin_trusted))
             .route("/admin/trusted/{list_filter}", web::get().to(handlers::trusted::admin_trusted))
             .route("/admin/trusted/application/{id}", web::get().to(handlers::trusted::admin_trusted_application))

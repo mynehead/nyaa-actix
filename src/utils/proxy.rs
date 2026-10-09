@@ -27,7 +27,29 @@ impl IpNet {
         };
         let max = if addr.is_ipv4() { 32 } else { 128 };
         let prefix = prefix.unwrap_or(max);
-        (prefix <= max).then_some(IpNet { addr, prefix })
+        if prefix > max {
+            return None;
+        }
+        // `::ffff:10.0.0.0/104` is the IPv4 network 10.0.0.0/8, which is how clients are compared
+        if let IpAddr::V6(v6) = addr {
+            if let (Some(v4), true) = (v6.to_ipv4_mapped(), prefix >= 96) {
+                return Some(IpNet { addr: IpAddr::V4(v4), prefix: prefix - 96 });
+            }
+        }
+        Some(IpNet { addr, prefix })
+    }
+
+    /// The same network with the host bits cleared: `10.1.2.3/8` becomes `10.0.0.0/8`.
+    pub fn network(self) -> IpNet {
+        let addr = match self.addr {
+            IpAddr::V4(v4) => {
+                IpAddr::V4((u32::from(v4) & u32::MAX.checked_shl(32 - self.prefix as u32).unwrap_or(0)).into())
+            }
+            IpAddr::V6(v6) => {
+                IpAddr::V6((u128::from(v6) & u128::MAX.checked_shl(128 - self.prefix as u32).unwrap_or(0)).into())
+            }
+        };
+        IpNet { addr, ..self }
     }
 
     pub fn contains(&self, ip: IpAddr) -> bool {
@@ -42,6 +64,13 @@ impl IpNet {
             }
             _ => false,
         }
+    }
+}
+
+/// `10.0.0.0/8`, always with the prefix.
+impl std::fmt::Display for IpNet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.addr, self.prefix)
     }
 }
 
@@ -124,6 +153,17 @@ mod tests {
             assert!(parse_trusted_proxies(bad).is_err(), "{bad}");
         }
         assert!(parse_trusted_proxies("").unwrap().is_empty());
+    }
+
+    #[test]
+    fn networks_print_canonically() {
+        assert_eq!(IpNet::parse("10.1.2.3/8").unwrap().network().to_string(), "10.0.0.0/8");
+        assert_eq!(IpNet::parse("10.1.2.3").unwrap().network().to_string(), "10.1.2.3/32");
+        assert_eq!(IpNet::parse("2001:db8:1::5/32").unwrap().network().to_string(), "2001:db8::/32");
+        assert_eq!(IpNet::parse("0.0.0.0/0").unwrap().network().to_string(), "0.0.0.0/0");
+        let mapped = IpNet::parse("::ffff:10.9.0.0/112").unwrap();
+        assert_eq!(mapped.to_string(), "10.9.0.0/16");
+        assert!(mapped.contains(ip("10.9.8.7")) && mapped.contains(ip("::ffff:10.9.8.7")));
     }
 
     #[test]

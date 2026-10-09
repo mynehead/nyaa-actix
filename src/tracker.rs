@@ -1,10 +1,12 @@
 //! The torrust-actix tracker's management API (optional, TRACKER_API_URL): keeps the
-//! tracker's whitelist in step with the site and pulls seeders, leechers and completed
+//! tracker's whitelist and blacklist in step with the site and pulls seeders, leechers and completed
 //! counts into `nyaa_statistics`.
 //!
 //! Upstream nyaa queues whitelist changes for its tracker in a table. Here handlers hand the
-//! ids of changed torrents to a background thread instead, which sends them in batches. That
-//! thread also sends the whole whitelist whenever the tracker (re)starts or a call failed, so
+//! ids of changed torrents to a background thread instead, which sends them in batches.
+//! Listed torrents go on the whitelist and off the blacklist; deleted and banned ones go off
+//! the whitelist and on the blacklist, so the tracker refuses them in blacklist mode too
+//! (its `blacklist_enabled`). That thread also sends both whole lists whenever the tracker (re)starts or a call failed, so
 //! a change made while the tracker was down still reaches it, and an upload never waits on it.
 
 use std::collections::{HashMap, HashSet};
@@ -21,7 +23,7 @@ use crate::db::schema::{nyaa_statistics, nyaa_torrents};
 use crate::db::{DbConnection, DbPool};
 use crate::models::{NewStatistic, Statistic, TorrentFlags};
 
-/// Hashes per whitelist call; the tracker refuses bodies over 1 MiB (43 bytes per hash).
+/// Hashes per whitelist or blacklist call; the tracker refuses bodies over 1 MiB (43 bytes per hash).
 const WHITELIST_BATCH: usize = 1000;
 /// Hashes per stats call. Its answer lists every peer of each torrent, so keep it small.
 const STATS_BATCH: usize = 200;
@@ -66,7 +68,7 @@ impl Tracker {
 }
 
 /// Call after a torrent was uploaded, deleted, banned or restored. Only queues the id; the
-/// sync thread adds the torrent to the whitelist or removes it, whichever its flags say.
+/// sync thread moves the torrent between the whitelist and the blacklist as its flags say.
 pub fn torrent_changed(tracker: Option<&Tracker>, id: i32) {
     if let Some(tracker) = tracker {
         // Fails only once the sync thread is gone, and then there is no one left to tell
@@ -74,12 +76,12 @@ pub fn torrent_changed(tracker: Option<&Tracker>, id: i32) {
     }
 }
 
-/// Starts the thread that applies whitelist changes as they come and syncs stats `every`.
+/// Starts the thread that applies whitelist and blacklist changes as they come and syncs stats `every`.
 pub fn spawn_sync(pool: DbPool, tracker: Tracker, every: Duration) {
     let Some(receiver) = tracker.receiver.lock().unwrap().take() else { return };
     std::thread::spawn(move || {
         let api = tracker.api;
-        // The tracker's start time when the whole whitelist was last sent; None sends it again
+        // The tracker's start time when both whole lists were last sent; None sends them again
         let mut synced_start: Option<i64> = None;
         let mut next_stats = Instant::now();
         loop {
@@ -102,14 +104,14 @@ pub fn spawn_sync(pool: DbPool, tracker: Tracker, every: Duration) {
                 // Before the first full sync (or after a failure) the next one covers these
                 if !changed.is_empty() && synced_start.is_some() {
                     let ids: Vec<i32> = changed.into_iter().collect();
-                    push_whitelist(&mut conn, &api, Some(&ids))?;
+                    push_lists(&mut conn, &api, Some(&ids))?;
                 }
                 if stats_due {
-                    // A restarted tracker without a database has forgotten the whitelist
+                    // A restarted tracker without a database has forgotten both lists
                     let started = api.started()?;
                     if synced_start != Some(started) {
-                        let count = push_whitelist(&mut conn, &api, None)?;
-                        log::info!("Sent {count} torrents to the tracker's whitelist");
+                        let (listed, unlisted) = push_lists(&mut conn, &api, None)?;
+                        log::info!("Sent {listed} torrents to the tracker's whitelist and {unlisted} to its blacklist");
                         synced_start = Some(started);
                     }
                     sync_stats(&mut conn, &api)?;
@@ -124,10 +126,10 @@ pub fn spawn_sync(pool: DbPool, tracker: Tracker, every: Duration) {
     });
 }
 
-/// Adds the listed torrents among `ids` (all torrents for None) to the whitelist and
-/// removes the others. Returns how many it added.
-fn push_whitelist(conn: &mut DbConnection, api: &Api, ids: Option<&[i32]>) -> anyhow::Result<usize> {
-    let mut added = 0;
+/// Moves the listed torrents among `ids` (all torrents for None) onto the whitelist and off
+/// the blacklist, and the others the other way. Returns how many went on each list.
+fn push_lists(conn: &mut DbConnection, api: &Api, ids: Option<&[i32]>) -> anyhow::Result<(usize, usize)> {
+    let (mut listed_count, mut unlisted_count) = (0, 0);
     let mut last_id = i32::MIN;
     loop {
         let mut query = nyaa_torrents::table
@@ -142,14 +144,19 @@ fn push_whitelist(conn: &mut DbConnection, api: &Api, ids: Option<&[i32]>) -> an
         let rows: Vec<(i32, Vec<u8>, i32)> = query.load(conn)?;
         let Some(&(last, ..)) = rows.last() else { break };
         last_id = last;
-        let (add, remove): (Vec<_>, Vec<_>) = rows.iter().partition(|(_, _, flags)| listed(*flags));
+        let (listed_rows, unlisted_rows): (Vec<_>, Vec<_>) = rows.iter().partition(|(_, _, flags)| listed(*flags));
         let hex =
             |rows: Vec<&(i32, Vec<u8>, i32)>| rows.into_iter().map(|(_, h, _)| hex::encode(h)).collect::<Vec<_>>();
-        added += add.len();
-        api.whitelist(true, &hex(add))?;
-        api.whitelist(false, &hex(remove))?;
+        let (listed_hashes, unlisted_hashes) = (hex(listed_rows), hex(unlisted_rows));
+        listed_count += listed_hashes.len();
+        unlisted_count += unlisted_hashes.len();
+        // Off the blacklist before onto the whitelist, so a restored torrent is never on both
+        api.list(List::Black, false, &listed_hashes)?;
+        api.list(List::White, true, &listed_hashes)?;
+        api.list(List::White, false, &unlisted_hashes)?;
+        api.list(List::Black, true, &unlisted_hashes)?;
     }
-    Ok(added)
+    Ok((listed_count, unlisted_count))
 }
 
 /// Pulls the counts of every listed torrent from the tracker. Seeders and leechers are
@@ -234,6 +241,12 @@ fn updated_stats(old: &Statistic, swarm: Option<Swarm>) -> (i32, i32, i32, i32) 
     (seeders, leechers, old.download_count.saturating_add(new_downloads), completed)
 }
 
+#[derive(Clone, Copy)]
+enum List {
+    White,
+    Black,
+}
+
 #[derive(Clone)]
 struct Api {
     url: String,
@@ -283,10 +296,15 @@ impl Api {
         v["started"].as_i64().ok_or_else(|| anyhow!("GET /stats: no start time in {v}"))
     }
 
-    /// `POST /api/whitelists` (add) or `DELETE /api/whitelists` (remove) for hex hashes.
-    fn whitelist(&self, add: bool, hashes: &[String]) -> anyhow::Result<()> {
+    /// `POST` (add) or `DELETE` (remove) `/api/whitelists` or `/api/blacklists` for hex
+    /// hashes. The tracker takes blacklist calls even with `blacklist_enabled` off.
+    fn list(&self, list: List, add: bool, hashes: &[String]) -> anyhow::Result<()> {
         if !hashes.is_empty() {
-            self.call(if add { "POST" } else { "DELETE" }, "/api/whitelists", Some(&json!(hashes)))?;
+            let path = match list {
+                List::White => "/api/whitelists",
+                List::Black => "/api/blacklists",
+            };
+            self.call(if add { "POST" } else { "DELETE" }, path, Some(&json!(hashes)))?;
         }
         Ok(())
     }
@@ -374,14 +392,17 @@ mod tests {
         diesel::sql_query("INSERT INTO nyaa_statistics (torrent_id, seed_count, leech_count, download_count) VALUES (1, 0, 0, 0), (2, 0, 0, 0)")
             .execute(&mut conn)
             .unwrap();
-        let whitelisted = |ids: &[i32]| -> Vec<bool> {
+        let on_list = |list: &str, ids: &[i32]| -> Vec<bool> {
             let hashes: Vec<String> = ids.iter().map(|&id| hash(id)).collect();
-            let v = api.call("GET", "/api/whitelists", Some(&json!(hashes))).unwrap();
-            hashes.iter().map(|h| v["whitelists"][h].as_bool().unwrap()).collect()
+            let v = api.call("GET", &format!("/api/{list}"), Some(&json!(hashes))).unwrap();
+            hashes.iter().map(|h| v[list][h].as_bool().unwrap()).collect()
         };
+        let whitelisted = |ids: &[i32]| on_list("whitelists", ids);
+        let blacklisted = |ids: &[i32]| on_list("blacklists", ids);
 
-        assert_eq!(push_whitelist(&mut conn, &api, None).unwrap(), 2);
+        assert_eq!(push_lists(&mut conn, &api, None).unwrap(), (2, 1));
         assert_eq!(whitelisted(&[1, 2, 3]), [true, false, true]);
+        assert_eq!(blacklisted(&[1, 2, 3]), [false, true, false]);
 
         // A seeder that just finished and a leecher on torrent 1
         let peer = |n: u8, left: u64, event: &str| {
@@ -416,13 +437,22 @@ mod tests {
         sync_stats(&mut conn, &api).unwrap();
         assert_eq!(row(&mut conn, 1), (1, 1, 1, 1));
 
-        // Deleting torrent 3 takes it off the whitelist
-        diesel::update(nyaa_torrents::table.find(3))
-            .set(nyaa_torrents::flags.eq(TorrentFlags::DELETED.bits()))
-            .execute(&mut conn)
-            .unwrap();
-        assert_eq!(push_whitelist(&mut conn, &api, Some(&[3])).unwrap(), 0);
+        // Deleting torrent 3 moves it from the whitelist to the blacklist
+        let set_flags = |conn: &mut DbConnection, id: i32, flags: i32| {
+            diesel::update(nyaa_torrents::table.find(id)).set(nyaa_torrents::flags.eq(flags)).execute(conn).unwrap();
+        };
+        set_flags(&mut conn, 3, TorrentFlags::DELETED.bits());
+        assert_eq!(push_lists(&mut conn, &api, Some(&[3])).unwrap(), (0, 1));
         assert_eq!(whitelisted(&[1, 3]), [true, false]);
+        assert_eq!(blacklisted(&[1, 3]), [false, true]);
+        // Banning works the same way
+        set_flags(&mut conn, 1, TorrentFlags::BANNED.bits());
+        assert_eq!(push_lists(&mut conn, &api, Some(&[1])).unwrap(), (0, 1));
+        assert_eq!((whitelisted(&[1]), blacklisted(&[1])), (vec![false], vec![true]));
+        // Restoring torrent 2 takes it off the blacklist and back onto the whitelist
+        set_flags(&mut conn, 2, 0);
+        assert_eq!(push_lists(&mut conn, &api, Some(&[2])).unwrap(), (1, 0));
+        assert_eq!((whitelisted(&[2]), blacklisted(&[2])), (vec![true], vec![false]));
         assert!(api.started().unwrap() > 0);
     }
 }

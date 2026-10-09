@@ -1,6 +1,65 @@
 {% extends "layout.html" %}
 {% block title %}Bans :: {{ config.site_name }}{% endblock %}
 {% block body %}
+	{% if range_bans is defined %}
+	<h3>IP range bans</h3>
+	<p class="text-muted">Nobody connecting from a banned network can use the site at all. Enter one address or a network in CIDR notation, IPv4 or IPv6.</p>
+	<form method="POST" action="/admin/bans/ranges" class="form-inline" style="margin-bottom: 15px">
+		<div class="form-group">
+			<label class="sr-only" for="cidr">Range</label>
+			<input class="form-control" id="cidr" name="cidr" type="text" required placeholder="203.0.113.0/24 or 2001:db8::/32">
+		</div>
+		<div class="form-group">
+			<label class="sr-only" for="range_reason">Reason</label>
+			<input class="form-control" id="range_reason" name="reason" type="text" maxlength="1024" placeholder="Reason (optional)">
+		</div>
+		<div class="form-group">
+			<label class="sr-only" for="duration">Expires</label>
+			<select class="form-control" id="duration" name="duration">
+				<option value="">Never expires</option>
+				{% for d in range_ban_durations %}
+				<option value="{{ d.0 }}">{{ d.1 }}</option>
+				{% endfor %}
+			</select>
+		</div>
+		<button class="btn btn-danger" type="submit">Ban range</button>
+	</form>
+	{% if range_bans %}
+	<div class="table-responsive">
+		<table class="table table-bordered table-hover table-striped">
+			<thead>
+			<tr>
+				<th style="width: 75px">#</th>
+				<th>Moderator/Admin</th>
+				<th>Range</th>
+				<th>Reason</th>
+				<th style="width: 175px">Date</th>
+				<th style="width: 175px">Expires</th>
+				<th style="width: 75px">Action</th>
+			</tr>
+			</thead>
+			<tbody>
+			{% for ban in range_bans %}
+			<tr{% if ban.expired %} class="text-muted"{% endif %}>
+				<td>{{ ban.id }}</td>
+				<td><a href="/user/{{ ban.admin_name | urlencode }}">{{ ban.admin_name }}</a></td>
+				<td><code>{{ ban.cidr }}</code></td>
+				<td>{{ ban.reason }}</td>
+				<td class="center">{{ ban.created_time | date(format="%Y-%m-%d %H:%M:%S") }}</td>
+				<td class="center">{% if ban.expires_time %}{{ ban.expires_time | date(format="%Y-%m-%d %H:%M:%S") }}{% if ban.expired %} (expired){% endif %}{% else %}Never{% endif %}</td>
+				<td class="center">
+					<form method="POST" action="/admin/bans/ranges/{{ ban.id }}/delete">
+						<button class="btn btn-danger btn-xs" type="submit">{% if ban.expired %}Remove{% else %}Unban{% endif %}</button>
+					</form>
+				</td>
+			</tr>
+			{% endfor %}
+			</tbody>
+		</table>
+	</div>
+	{% endif %}
+	<h3>Bans</h3>
+	{% endif %}
 	<div class="table-responsive">
 		<table class="table table-bordered table-hover table-striped">
 			<thead>

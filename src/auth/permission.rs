@@ -26,12 +26,14 @@ pub enum Permission {
     GrantModerator,
     /// Delete and ban all torrents, or delete all comments, of a lower-ranked user.
     NukeUsers,
+    /// Ban and unban whole networks (CIDR) from using the site.
+    BanIpRanges,
     /// Read, answer, close and reopen every user's support tickets (/admin/tickets).
     HandleTickets,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 11] = [
+    pub const ALL: [Permission; 12] = [
         Permission::SetTrustedFlag,
         Permission::ModerateTorrents,
         Permission::BanUsers,
@@ -42,6 +44,7 @@ impl Permission {
         Permission::ChangeUserClass,
         Permission::GrantModerator,
         Permission::NukeUsers,
+        Permission::BanIpRanges,
         Permission::HandleTickets,
     ];
 }
@@ -55,7 +58,7 @@ impl UserLevel {
             ModerateTorrents | BanUsers | ViewAdminPages | CreateGroups | ChangeUserClass | HandleTickets => {
                 UserLevel::Moderator
             }
-            SeeIps | DecideTrusted | GrantModerator | NukeUsers => UserLevel::SuperAdmin,
+            SeeIps | DecideTrusted | GrantModerator | NukeUsers | BanIpRanges => UserLevel::SuperAdmin,
         };
         self >= needed
     }
