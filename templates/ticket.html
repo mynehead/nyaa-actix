@@ -27,6 +27,17 @@
 	</div>
 	{% endif %}
 
+	{% if reported_users %}
+	<div class="panel panel-default">
+		<div class="panel-heading">Users ({{ reported_users | length }})</div>
+		<ul class="list-group">
+			{% for name in reported_users %}
+			<li class="list-group-item"><a href="/user/{{ name | urlencode }}">{{ name }}</a></li>
+			{% endfor %}
+		</ul>
+	</div>
+	{% endif %}
+
 	{% for row in messages %}
 	<div class="panel {% if row.from_staff %}panel-info{% else %}panel-default{% endif %}" id="message-{{ row.id }}">
 		<div class="panel-heading">

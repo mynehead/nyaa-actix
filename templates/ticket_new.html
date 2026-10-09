@@ -26,12 +26,20 @@
 			</div>
 			{% if errors.category %}<div class="help-block">{{ errors.category }}</div>{% endif %}
 		</div>
-		<div class="form-group ticket-torrents{% if errors.torrent_ids %} has-error{% endif %}">
+		{# Lists for one category each; the script below shows the one the category needs #}
+		<div class="form-group ticket-list-field{% if errors.torrent_ids %} has-error{% endif %}" data-category="torrent" data-max="{{ max_torrents }}">
 			<label class="control-label ticket-form-label" for="torrent_ids">
-				Torrent IDs <span class="text-muted" id="torrent-count">0/{{ max_torrents }}</span>
+				Torrent IDs <span class="text-muted ticket-list-count">0/{{ max_torrents }}</span>
 			</label>
 			<textarea class="form-control" id="torrent_ids" name="torrent_ids" rows="2" placeholder="Paste torrent IDs or links, separated by spaces, commas or new lines">{{ form.torrent_ids }}</textarea>
 			{% if errors.torrent_ids %}<div class="help-block">{{ errors.torrent_ids }}</div>{% endif %}
+		</div>
+		<div class="form-group ticket-list-field{% if errors.user_names %} has-error{% endif %}" data-category="user" data-max="{{ max_users }}">
+			<label class="control-label ticket-form-label" for="user_names">
+				Users <span class="text-muted ticket-list-count">0/{{ max_users }}</span>
+			</label>
+			<textarea class="form-control" id="user_names" name="user_names" rows="2" placeholder="Paste usernames or profile links, separated by spaces, commas or new lines">{{ form.user_names }}</textarea>
+			{% if errors.user_names %}<div class="help-block">{{ errors.user_names }}</div>{% endif %}
 		</div>
 		<div class="form-group{% if errors.subject %} has-error{% endif %}">
 			<label class="control-label ticket-form-label" for="subject">Subject</label>
@@ -54,30 +62,35 @@
 	<script>
 	(function () {
 		var form = document.querySelector('.ticket-form');
-		var torrents = form.querySelector('.ticket-torrents');
-		var ids = document.getElementById('torrent_ids');
-		var count = document.getElementById('torrent-count');
-		// The torrent field is for Torrent Reports only
-		function showTorrents() {
+		var lists = form.querySelectorAll('.ticket-list-field');
+		// Torrent IDs for Torrent Reports, users for User Reports
+		function showLists() {
 			var picked = form.querySelector('input[name=category]:checked');
-			torrents.style.display = picked && picked.value === 'torrent' ? '' : 'none';
+			Array.prototype.forEach.call(lists, function (field) {
+				var shown = picked && picked.value === field.getAttribute('data-category');
+				field.style.display = shown ? '' : 'none';
+			});
 		}
-		function countTorrents() {
-			var tokens = ids.value.split(/[\s,]+/).filter(function (t) { return t; });
-			count.textContent = tokens.length + '/{{ max_torrents }}';
-		}
-		Array.prototype.forEach.call(form.querySelectorAll('input[name=category]'), function (r) {
-			r.addEventListener('change', showTorrents);
+		Array.prototype.forEach.call(lists, function (field) {
+			var input = field.querySelector('textarea');
+			var count = field.querySelector('.ticket-list-count');
+			var update = function () {
+				var tokens = input.value.split(/[\s,]+/).filter(function (t) { return t; });
+				count.textContent = tokens.length + '/' + field.getAttribute('data-max');
+			};
+			input.addEventListener('input', update);
+			update();
 		});
-		ids.addEventListener('input', countTorrents);
+		Array.prototype.forEach.call(form.querySelectorAll('input[name=category]'), function (r) {
+			r.addEventListener('change', showLists);
+		});
 		Array.prototype.forEach.call(form.querySelectorAll('[data-counter-for]'), function (p) {
 			var field = document.getElementById(p.getAttribute('data-counter-for'));
 			var update = function () { p.textContent = field.value.length + ' / ' + field.maxLength; };
 			field.addEventListener('input', update);
 			update();
 		});
-		showTorrents();
-		countTorrents();
+		showLists();
 	})();
 	</script>
 	{% endif %}
