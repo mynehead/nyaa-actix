@@ -174,7 +174,7 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(7 * 24 * 3600),
-            editing_time_limit: env::var("EDITING_TIME_LIMIT").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
+            editing_time_limit: env::var("EDITING_TIME_LIMIT").ok().and_then(|v| v.parse().ok()).unwrap_or(3600),
             upload_limit: UploadLimitConfig::from_env(),
             meili: crate::search::meili::Meili::from_env(),
             tracker: crate::tracker::Tracker::from_env(),
