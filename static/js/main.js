@@ -103,7 +103,7 @@ $(document).ready(function() {
 
 		var $this = $(this),
 			$submitButton = $this.find('[type=submit]').attr('disabled', 'disabled'),
-			$waitIndicator = $this.find('.edit-waiting').show()
+			$waitIndicator = $this.find('.edit-waiting').show(),
 			$errorStatus = $this.find('.edit-error').empty();
 
 		$.ajax({
@@ -119,7 +119,7 @@ $(document).ready(function() {
 			$errorStatus.text(error);
 		}).always(function() {
 			$submitButton.removeAttr('disabled');
-			if (grecaptcha) {
+			if (typeof grecaptcha !== 'undefined') {
 				grecaptcha.reset();
 			}
 			$waitIndicator.hide();

@@ -136,6 +136,11 @@ async fn main() -> std::io::Result<()> {
                     .route(web::post().to(handlers::torrents::edit_torrent_post)),
             )
             // Upstream's URLs; the .torrent suffix lets clients add a torrent by URL
+            .route("/view/{id:\\d+}/comment/{comment_id:\\d+}/edit", web::post().to(handlers::torrents::edit_comment))
+            .route(
+                "/view/{id:\\d+}/comment/{comment_id:\\d+}/delete",
+                web::post().to(handlers::torrents::delete_comment),
+            )
             .route("/view/{id:\\d+}/submit_report", web::post().to(handlers::reports::submit_torrent_report))
             .route("/download/{id:\\d+}.torrent", web::get().to(handlers::torrents::download_torrent))
             .route("/view/{id:\\d+}/torrent", web::get().to(handlers::torrents::download_torrent))
