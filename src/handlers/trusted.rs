@@ -309,6 +309,7 @@ mod tests {
             trusted: TrustedConfig { min_uploads: 0, min_downloads: 0, reapply_cooldown_days: 90 },
             tickets: Default::default(),
             mfa: Default::default(),
+            recaptcha: None,
             email_blacklist: Default::default(),
         }
     }

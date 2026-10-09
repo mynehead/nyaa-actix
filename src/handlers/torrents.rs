@@ -1426,6 +1426,7 @@ mod tests {
                 trusted: Default::default(),
                 tickets: Default::default(),
                 mfa: Default::default(),
+                recaptcha: None,
                 email_blacklist: Default::default(),
             }
         }

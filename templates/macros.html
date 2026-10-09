@@ -57,3 +57,13 @@
 		{% endif %}
 	</div>
 {%- endmacro form_field %}
+
+{# Google's reCAPTCHA checkbox, as Flask-WTF's RecaptchaField: the script once per page, then a
+   widget in each form that needs one. It fills in a g-recaptcha-response field. #}
+{% macro recaptcha_script() -%}
+<script src="https://www.google.com/recaptcha/api.js" async defer></script>
+{%- endmacro recaptcha_script %}
+
+{% macro recaptcha(site_key) -%}
+<div class="g-recaptcha" data-sitekey="{{ site_key }}"></div>
+{%- endmacro recaptcha %}

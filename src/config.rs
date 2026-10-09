@@ -68,6 +68,8 @@ pub struct Config {
     pub tickets: TicketConfig,
     /// Two-factor sign-in (MFA_REQUIRED_LEVEL, MFA_ISSUER_NAME).
     pub mfa: crate::auth::mfa::MfaConfig,
+    /// Upstream USE_RECAPTCHA and the RECAPTCHA_* keys; None shows no captcha.
+    pub recaptcha: Option<crate::captcha::Recaptcha>,
     /// Upstream EMAIL_BLACKLIST and EMAIL_SERVER_BLACKLIST: email providers registration turns away.
     pub email_blacklist: crate::auth::email_blacklist::EmailBlacklist,
 }
@@ -305,6 +307,7 @@ impl Config {
             tracker: crate::tracker::Tracker::from_env(),
             trusted: TrustedConfig::from_env(),
             tickets: TicketConfig::from_env(),
+            recaptcha: crate::captcha::Recaptcha::from_env(),
             email_blacklist: crate::auth::email_blacklist::EmailBlacklist::from_env(),
         }
     }
@@ -344,6 +347,7 @@ impl Config {
             trusted: Default::default(),
             tickets: Default::default(),
             mfa: Default::default(),
+            recaptcha: None,
             email_blacklist: Default::default(),
         }
     }
