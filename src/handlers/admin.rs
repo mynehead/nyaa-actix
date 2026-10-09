@@ -22,13 +22,13 @@ pub struct PageParams {
 }
 
 impl PageParams {
-    fn page(&self) -> i64 {
+    pub(crate) fn page(&self) -> i64 {
         self.p.or(self.offset).unwrap_or(1).max(1)
     }
 }
 
 /// Upstream's admin lists show 20 rows a page.
-const ADMIN_PER_PAGE: i64 = 20;
+pub(crate) const ADMIN_PER_PAGE: i64 = 20;
 
 /// /admin/log: moderator actions, newest first. Only superadmins see IPs, as upstream.
 pub async fn log(
@@ -291,6 +291,7 @@ mod tests {
             gravatar_sha256: false,
             maintenance: Default::default(),
             raid_mode: Default::default(),
+            registration: Default::default(),
             site_url: String::new(),
             tracker_urls: vec![],
             trusted_proxies: vec![],

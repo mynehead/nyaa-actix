@@ -90,6 +90,8 @@ pub async fn view_user(
         ctx.insert("ban_form", &true);
         ctx.insert("bans", &bans);
         ctx.insert("ip_banned", &ip_banned);
+        let invited_by = crate::models::Invite::inviter_of(&mut conn, profile_user.id).map_err(internal_error)?;
+        ctx.insert("invited_by", &invited_by);
         if moderator.can(Permission::ResetTwoFactor) {
             let two_factor =
                 crate::auth::mfa::UserMfa::is_enabled(&mut conn, profile_user.id).map_err(internal_error)?;
@@ -552,6 +554,7 @@ mod tests {
             gravatar_sha256: false,
             maintenance: Default::default(),
             raid_mode: Default::default(),
+            registration: Default::default(),
             site_url: String::new(),
             tracker_urls: vec![],
             trusted_proxies: vec![],

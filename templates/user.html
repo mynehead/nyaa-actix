@@ -32,6 +32,10 @@
 						<dd>{{ profile_user | level_str }}</dd>
 						<dt>User status:</dt>
 						<dd>{{ profile_user | status_str }}</dd>
+						{%- if invited_by -%}
+						<dt>Invited by:</dt>
+						<dd><a href="/user/{{ invited_by | urlencode }}">{{ invited_by }}</a></dd>
+						{%- endif -%}
 						{%- if can.see_ips and ban_form -%}
 						<dt>Last login IP:</dt>
 						<dd>{{ last_login_ip | default(value="") }}</dd>

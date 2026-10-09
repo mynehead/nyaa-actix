@@ -6,6 +6,12 @@
 {% block body %}
 
 <h1>Register</h1>
+	{% if config.registration_mode == "closed" %}
+	<div class="alert alert-info" role="alert">Registration is closed.</div>
+	{% else %}
+	{% if config.registration_mode == "invite" %}
+	<p class="text-muted">Registration needs an invite code from a moderator or member.</p>
+	{% endif %}
 	{% if registered %}
 	<div class="alert alert-warning" role="alert">
 		{{ raid_message }} Please <a href="/help">ask a moderator</a> to manually activate your account <a href="/user/{{ registered | urlencode }}">'{{ registered }}'</a>.
@@ -43,6 +49,17 @@
 			</div>
 		</div>
 
+		{% if config.registration_mode == "invite" %}
+		<div class="row">
+			<div class="form-group col-md-4">
+				<div class="form-group">
+					<label class="control-label" for="invite">Invite code</label>
+					<input class="form-control" id="invite" name="invite" placeholder="Invite code" required type="text" autocomplete="off" value="{{ invite | default(value="") }}">
+				</div>
+			</div>
+		</div>
+		{% endif %}
+
 		<div class="row">
 			<div class="form-group col-md-4">
 				<div class="form-group">
@@ -69,4 +86,5 @@
 			</div>
 		</div>
 	</form>
+	{% endif %}
 {% endblock %}

@@ -86,6 +86,7 @@
 								{% if can.handle_tickets %}<li><a href="/admin/tickets">Tickets</a></li>{% endif %}
 								<li><a href="/admin/log">Log</a></li>
 								<li><a href="/admin/bans">Bans</a></li>
+								{% if can.create_invites %}<li><a href="/admin/invites">Invites</a></li>{% endif %}
 								<li><a href="/admin/trusted">Trusted</a></li>
 								<li><a href="/admin/banners">Banners</a></li>
 							</ul>
@@ -158,12 +159,14 @@
 										Login
 									</a>
 								</li>
+								{% if config.registration_mode != "closed" %}
 								<li>
 									<a href="/register">
 										<i class="fa fa-pencil fa-fw"></i>
 										Register
 									</a>
 								</li>
+								{% endif %}
 							</ul>
 						</li>
 						{% endif %}

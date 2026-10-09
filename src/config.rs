@@ -39,6 +39,8 @@ pub struct Config {
     pub maintenance: MaintenanceConfig,
     /// Upstream RAID_MODE_LIMIT_REGISTER and RAID_MODE_REGISTER_MESSAGE.
     pub raid_mode: RaidModeConfig,
+    /// REGISTRATION_MODE and INVITE_EXPIRY_DAYS: open sign-up, invite codes only, or closed.
+    pub registration: RegistrationConfig,
     /// Public base URL of the site, used in the .torrent comment field.
     pub site_url: String,
     /// Announce URLs written into magnets and .torrent files, own tracker first.
@@ -103,6 +105,53 @@ impl MaintenanceConfig {
             enabled: flag("MAINTENANCE_MODE", d.enabled),
             message: env::var("MAINTENANCE_MODE_MESSAGE").ok().filter(|m| !m.trim().is_empty()).unwrap_or(d.message),
             logins: flag("MAINTENANCE_MODE_LOGINS", d.logins),
+        }
+    }
+}
+
+/// Who may create an account at /register.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RegistrationMode {
+    /// Anyone (upstream's behaviour).
+    #[default]
+    Open,
+    /// Only with an invite code from /admin/invites.
+    Invite,
+    /// Nobody; accounts come from `create-user` or an admin.
+    Closed,
+}
+
+#[derive(Clone, Debug)]
+pub struct RegistrationConfig {
+    /// REGISTRATION_MODE: open, invite or closed.
+    pub mode: RegistrationMode,
+    /// INVITE_EXPIRY_DAYS: how long a new invite code stays valid.
+    pub invite_expiry_days: i64,
+}
+
+impl Default for RegistrationConfig {
+    fn default() -> Self {
+        RegistrationConfig { mode: RegistrationMode::Open, invite_expiry_days: 7 }
+    }
+}
+
+impl RegistrationConfig {
+    fn from_env() -> Self {
+        let d = RegistrationConfig::default();
+        let mode = match env::var("REGISTRATION_MODE").unwrap_or_default().trim().to_ascii_lowercase().as_str() {
+            "" | "open" => RegistrationMode::Open,
+            "invite" => RegistrationMode::Invite,
+            "closed" => RegistrationMode::Closed,
+            other => panic!("REGISTRATION_MODE must be open, invite or closed, got {:?}", other),
+        };
+        RegistrationConfig {
+            mode,
+            invite_expiry_days: env::var("INVITE_EXPIRY_DAYS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .filter(|&d: &i64| d > 0)
+                .unwrap_or(d.invite_expiry_days),
         }
     }
 }
@@ -284,6 +333,7 @@ impl Config {
             },
             maintenance: MaintenanceConfig::from_env(),
             raid_mode: RaidModeConfig::from_env(),
+            registration: RegistrationConfig::from_env(),
             site_url: env::var("SITE_URL")
                 .unwrap_or_else(|_| "http://localhost:8080".into())
                 .trim_end_matches('/')
@@ -331,6 +381,7 @@ impl Config {
             gravatar_sha256: false,
             maintenance: Default::default(),
             raid_mode: Default::default(),
+            registration: Default::default(),
             site_url: String::new(),
             tracker_urls: vec![],
             trusted_proxies: vec![],
