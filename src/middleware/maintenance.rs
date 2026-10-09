@@ -30,14 +30,15 @@ pub async fn read_only(
 fn allowed(m: &MaintenanceConfig, method: &Method, path: &str) -> bool {
     matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
         || path == "/logout"
-        || (m.logins && path == "/login")
+        // The two-factor step is part of logging in
+        || (m.logins && (path == "/login" || path == "/login/2fa"))
 }
 
 fn refuse(req: &ServiceRequest, m: &MaintenanceConfig) -> HttpResponse {
     if req.path().starts_with("/api/") {
         return HttpResponse::ServiceUnavailable().json(serde_json::json!({ "errors": [m.message] }));
     }
-    let what = if req.path() == "/login" { "Logging in is disabled during maintenance." } else { "" };
+    let what = if req.path().starts_with("/login") { "Logging in is disabled during maintenance." } else { "" };
     flash::push(&req.get_session(), "danger", &m.message, what);
     // Back to the page the form was on; only its path is kept, so this never leads off-site
     let back = req
@@ -107,13 +108,15 @@ mod tests {
 
     #[actix_web::test]
     async fn logins_follow_their_own_switch() {
-        for path in ["/login", "/logout"] {
+        for path in ["/login", "/login/2fa", "/logout"] {
             let (status, _, _) = call(on(), test::TestRequest::post().uri(path)).await;
             assert_eq!(status, StatusCode::OK, "{path}");
         }
         let no_logins = MaintenanceConfig { logins: false, ..on() };
-        let (status, _, _) = call(no_logins.clone(), test::TestRequest::post().uri("/login")).await;
-        assert_eq!(status, StatusCode::SEE_OTHER);
+        for path in ["/login", "/login/2fa"] {
+            let (status, _, _) = call(no_logins.clone(), test::TestRequest::post().uri(path)).await;
+            assert_eq!(status, StatusCode::SEE_OTHER, "{path}");
+        }
         let (status, _, _) = call(no_logins, test::TestRequest::post().uri("/logout")).await;
         assert_eq!(status, StatusCode::OK);
     }

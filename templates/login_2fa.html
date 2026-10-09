@@ -1,0 +1,29 @@
+{% extends "layout.html" %}
+{% block title %}Two-factor sign-in :: {{ config.site_name }}{% endblock %}
+{% block body %}
+
+<h1>Two-factor sign-in</h1>
+	<p>Enter the 6-digit code from your authenticator app, or one of your recovery codes.</p>
+	<form method="POST" action="/login/2fa">
+		<div class="row">
+			<div class="form-group col-md-4">
+				<div class="form-group{% if error %} has-error{% endif %}">
+					<label class="control-label" for="code">Code</label>
+					<input autofocus class="form-control" id="code" name="code" required tabindex="1" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="32" value="">
+					{% if error %}
+					<div class="help-block">
+						{{ error }}
+					</div>
+					{% endif %}
+				</div>
+			</div>
+		</div>
+
+		<div class="row">
+			<div class="col-md-4">
+				<input type="submit" value="Verify" class="btn btn-primary" tabindex="2">
+				<a href="/login" class="btn btn-link">Start over</a>
+			</div>
+		</div>
+	</form>
+{% endblock %}

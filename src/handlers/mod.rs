@@ -10,4 +10,5 @@ pub mod site;
 pub mod tickets;
 pub mod torrents;
 pub mod trusted;
+pub mod two_factor;
 pub mod users;

@@ -155,6 +155,12 @@
 						</div>
 					</form>
 					{% endif %}
+					{% if profile_user_two_factor %}
+					<hr>
+					<form method="POST" action="/user/{{ profile_user.username | urlencode }}/reset-2fa" onsubmit="return confirm('Turn off two-factor sign-in for {{ profile_user.username }}? They can then log in with the password alone.')">
+						<input class="btn btn-warning" id="reset_2fa" type="submit" value="Reset two-factor sign-in">
+					</form>
+					{% endif %}
 				</div>
 			</div>
 		</div>

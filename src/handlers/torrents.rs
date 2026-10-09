@@ -1392,6 +1392,7 @@ mod tests {
                 upload_limit: Default::default(),
                 trusted: Default::default(),
                 tickets: Default::default(),
+                mfa: Default::default(),
             }
         }
 

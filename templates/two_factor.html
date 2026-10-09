@@ -1,0 +1,97 @@
+{% extends "layout.html" %}
+{% import "macros.html" as macros %}
+{% block title %}Two-factor sign-in :: {{ config.site_name }}{% endblock %}
+{% block body %}
+
+<h2 style="margin-bottom: 20px;">Two-factor sign-in</h2>
+
+{% if enabled %}
+<p>
+	Two-factor sign-in is <strong>on</strong> since {{ enabled_time | date(format="%Y-%m-%d %H:%M UTC") }}.
+	Logging in asks for a code from your authenticator app after the password.
+</p>
+<p>You have <strong id="recovery_codes_left">{{ recovery_codes_left }}</strong> of 10 recovery codes left.</p>
+
+<div class="row">
+	<div class="col-md-5">
+		<div class="panel panel-default">
+			<div class="panel-heading"><h3 class="panel-title">New recovery codes</h3></div>
+			<div class="panel-body">
+				<p>Replaces all your recovery codes with ten new ones.</p>
+				<form method="POST" action="/profile/2fa/recovery-codes">
+					<div class="form-group">
+						<label class="control-label" for="codes_current_password">Current Password</label>
+						<input class="form-control" id="codes_current_password" name="current_password" type="password" required>
+					</div>
+					<div class="form-group">
+						<label class="control-label" for="codes_code">Code from your app</label>
+						<input class="form-control" id="codes_code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" required>
+					</div>
+					<input class="btn btn-primary" id="new_recovery_codes" type="submit" value="Make new codes">
+				</form>
+			</div>
+		</div>
+	</div>
+	{% if not required %}
+	<div class="col-md-5">
+		<div class="panel panel-danger">
+			<div class="panel-heading"><h3 class="panel-title">Turn off</h3></div>
+			<div class="panel-body">
+				<p>Logging in will only ask for your password again.</p>
+				<form method="POST" action="/profile/2fa/disable">
+					<div class="form-group">
+						<label class="control-label" for="disable_current_password">Current Password</label>
+						<input class="form-control" id="disable_current_password" name="current_password" type="password" required>
+					</div>
+					<div class="form-group">
+						<label class="control-label" for="disable_code">Code from your app, or a recovery code</label>
+						<input class="form-control" id="disable_code" name="code" type="text" autocomplete="one-time-code" required>
+					</div>
+					<input class="btn btn-danger" id="disable_2fa" type="submit" value="Turn off two-factor">
+				</form>
+			</div>
+		</div>
+	</div>
+	{% endif %}
+</div>
+{% else %}
+{% if required %}
+<div class="alert alert-warning" role="alert">
+	<strong>Two-factor sign-in is required for your account.</strong> Set it up to continue using the site.
+</div>
+{% endif %}
+<p>
+	With two-factor sign-in, logging in also asks for a 6-digit code from an authenticator app
+	on your phone (such as Aegis, 2FAS, Google Authenticator or Microsoft Authenticator), so a
+	stolen password alone is not enough.
+</p>
+<ol>
+	<li>Scan this QR code with the app, or type the key into it.</li>
+	<li>Enter the code the app shows, and your password.</li>
+	<li>Write down the recovery codes you get next. They let you in if you lose the phone.</li>
+</ol>
+<div class="row">
+	<div class="col-md-4">
+		<div id="qr_code" style="background: #fff; display: inline-block; padding: 8px;">{{ qr_svg | safe }}</div>
+		<p style="margin-top: 10px;">Key: <code id="totp_secret">{{ secret }}</code></p>
+	</div>
+	<div class="col-md-4">
+		<form method="POST" action="/profile/2fa/enable">
+			<div class="form-group">
+				<label class="control-label" for="code">Code from your app</label>
+				<input autofocus class="form-control" id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="10" required>
+			</div>
+			<div class="form-group">
+				<label class="control-label" for="current_password">Current Password</label>
+				<input class="form-control" id="current_password" name="current_password" type="password" required>
+			</div>
+			<input class="btn btn-primary" id="enable_2fa" type="submit" value="Turn on two-factor">
+		</form>
+	</div>
+</div>
+{% endif %}
+
+<hr>
+<a href="/profile">Back to profile</a>
+
+{% endblock %}

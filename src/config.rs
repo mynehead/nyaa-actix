@@ -39,6 +39,8 @@ pub struct Config {
     pub trusted: TrustedConfig,
     /// How many support tickets and replies a user may send.
     pub tickets: TicketConfig,
+    /// Two-factor sign-in (MFA_REQUIRED_LEVEL, MFA_ISSUER_NAME).
+    pub mfa: crate::auth::mfa::MfaConfig,
 }
 
 /// Upstream's maintenance mode: every page still shows, with `message` on top, but nothing
@@ -181,10 +183,12 @@ impl Config {
             "SECRET_KEY must be at least 64 bytes (got {}); generate one with `openssl rand -hex 64`",
             secret_key.len()
         );
+        let site_name = env::var("SITE_NAME").unwrap_or_else(|_| "Nyaa".into());
         Config {
             database_url: env::var("DATABASE_URL").unwrap_or_else(|_| "nyaa.db".into()),
             secret_key,
-            site_name: env::var("SITE_NAME").unwrap_or_else(|_| "Nyaa".into()),
+            mfa: crate::auth::mfa::MfaConfig::from_env(&site_name),
+            site_name,
             site_flavor: env::var("SITE_FLAVOR").unwrap_or_else(|_| "nyaa".into()),
             results_per_page: env::var("RESULTS_PER_PAGE").ok().and_then(|v| v.parse().ok()).unwrap_or(75),
             max_pages: env::var("MAX_PAGES").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
@@ -241,6 +245,7 @@ impl Config {
             upload_limit: Default::default(),
             trusted: Default::default(),
             tickets: Default::default(),
+            mfa: Default::default(),
         }
     }
 

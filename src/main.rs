@@ -95,7 +95,8 @@ async fn main() -> std::io::Result<()> {
             .wrap(security_headers())
             // Inside the session middleware too, for its flash message
             .wrap(actix_web::middleware::from_fn(middleware::maintenance::read_only))
-            // Registered before the session middleware, so it runs inside it and sees the session
+            // Registered before the session middleware, so they run inside it and see the session
+            .wrap(actix_web::middleware::from_fn(middleware::mfa_required::require_two_factor))
             .wrap(actix_web::middleware::from_fn(middleware::auth::refresh_session))
             .wrap(
                 SessionMiddleware::builder(CookieSessionStore::default(), secret_key.clone())
@@ -156,17 +157,24 @@ async fn main() -> std::io::Result<()> {
             .route("/user/{username}", web::post().to(handlers::users::ban_user_post))
             .route("/user/{username}/nuke/torrents", web::post().to(handlers::users::nuke_torrents_post))
             .route("/user/{username}/nuke/comments", web::post().to(handlers::users::nuke_comments_post))
+            .route("/user/{username}/reset-2fa", web::post().to(handlers::two_factor::admin_reset_post))
             .route("/user/{username}/comments", web::get().to(handlers::users::view_user_comments))
             // Account
             // Account pages sit at the root like upstream; /account/* redirects for old links
             .route("/login", web::get().to(handlers::account::login_get))
             .route("/login", web::post().to(handlers::account::login_post))
+            .route("/login/2fa", web::get().to(handlers::two_factor::login_2fa_get))
+            .route("/login/2fa", web::post().to(handlers::two_factor::login_2fa_post))
             .route("/register", web::get().to(handlers::account::register_get))
             .route("/register", web::post().to(handlers::account::register_post))
             .route("/logout", web::post().to(handlers::account::logout))
             .route("/profile", web::get().to(handlers::account::profile))
             .route("/profile", web::post().to(handlers::account::profile_post))
             .route("/profile/avatar", web::post().to(handlers::account::avatar_post))
+            .route("/profile/2fa", web::get().to(handlers::two_factor::page))
+            .route("/profile/2fa/enable", web::post().to(handlers::two_factor::enable_post))
+            .route("/profile/2fa/disable", web::post().to(handlers::two_factor::disable_post))
+            .route("/profile/2fa/recovery-codes", web::post().to(handlers::two_factor::recovery_codes_post))
             .route("/account/{page:.+}", web::route().to(handlers::account::legacy_redirect))
             .route("/avatar/{id}", web::get().to(handlers::users::avatar))
             // Support tickets

@@ -94,6 +94,7 @@ mod tests {
             upload_limit: Default::default(),
             trusted: Default::default(),
             tickets: Default::default(),
+            mfa: Default::default(),
         };
         let app = atest::init_service(
             App::new()

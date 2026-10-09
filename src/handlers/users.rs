@@ -89,6 +89,11 @@ pub async fn view_user(
         ctx.insert("ban_form", &true);
         ctx.insert("bans", &bans);
         ctx.insert("ip_banned", &ip_banned);
+        if moderator.can(Permission::ResetTwoFactor) {
+            let two_factor =
+                crate::auth::mfa::UserMfa::is_enabled(&mut conn, profile_user.id).map_err(internal_error)?;
+            ctx.insert("profile_user_two_factor", &two_factor);
+        }
         if moderator.can(Permission::SeeIps) {
             let ip = |b: &Option<Vec<u8>>| b.as_deref().and_then(unpack_ip).map(|ip| ip.to_string());
             ctx.insert("last_login_ip", &ip(&profile_user.last_login_ip));
@@ -523,6 +528,7 @@ mod tests {
             upload_limit: Default::default(),
             trusted: Default::default(),
             tickets: Default::default(),
+            mfa: Default::default(),
         }
     }
 

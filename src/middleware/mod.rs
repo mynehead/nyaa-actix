@@ -3,3 +3,4 @@ pub mod csrf;
 pub mod ip_ban;
 pub mod ip_range_ban;
 pub mod maintenance;
+pub mod mfa_required;
