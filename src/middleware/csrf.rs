@@ -84,6 +84,7 @@ mod tests {
             avatar_storage_path: String::new(),
             enable_gravatar: false,
             maintenance: Default::default(),
+            raid_mode: Default::default(),
             site_url: site_url.into(),
             tracker_urls: vec![],
             trusted_proxies: vec![],
