@@ -1,0 +1,41 @@
+{% extends "layout.html" %}
+{% block title %}Support :: {{ config.site_name }}{% endblock %}
+{% block body %}
+<div class="content">
+	<h2>
+		Support tickets
+		<a class="btn btn-primary btn-sm pull-right" href="/tickets/new"><i class="fa fa-plus fa-fw"></i> New ticket</a>
+	</h2>
+	<p>Questions about your account, a takedown, or anything the staff should know? Open a ticket and they will reply here.</p>
+	<div class="table">
+		<table class="table table-bordered table-hover table-striped table-condensed">
+			<thead>
+			<tr>
+				<th>#</th>
+				<th>Category</th>
+				<th>Subject</th>
+				<th>Status</th>
+				<th>Last activity</th>
+			</tr>
+			</thead>
+			<tbody>
+			{% for ticket in tickets %}
+			<tr>
+				<td>{{ ticket.id }}</td>
+				<td>{{ category_titles[ticket.category] | default(value="Other") }}</td>
+				<td><a href="/tickets/{{ ticket.id }}">{{ ticket.subject }}</a></td>
+				<td>
+					{% if ticket.status == 1 %}<span class="label label-default">Closed</span>
+					{% elif ticket.staff_replied %}<span class="label label-success">Answered</span>
+					{% else %}<span class="label label-warning">Waiting for staff</span>{% endif %}
+				</td>
+				<td data-timestamp="{{ ticket.updated_time | date(format="%s") }}">{{ ticket.updated_time | date(format="%Y-%m-%d %H:%M") }}</td>
+			</tr>
+			{% else %}
+			<tr><td colspan="5" class="text-center">You have no tickets.</td></tr>
+			{% endfor %}
+			</tbody>
+		</table>
+	</div>
+</div>
+{% endblock %}

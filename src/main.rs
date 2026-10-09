@@ -162,6 +162,12 @@ async fn main() -> std::io::Result<()> {
             .route("/profile/avatar", web::post().to(handlers::account::avatar_post))
             .route("/account/{page:.+}", web::route().to(handlers::account::legacy_redirect))
             .route("/avatar/{id}", web::get().to(handlers::users::avatar))
+            // Support tickets
+            .route("/tickets", web::get().to(handlers::tickets::my_tickets))
+            .route("/tickets/new", web::get().to(handlers::tickets::new_ticket_get))
+            .route("/tickets/new", web::post().to(handlers::tickets::new_ticket_post))
+            .route("/tickets/{id:\\d+}", web::get().to(handlers::tickets::view_ticket))
+            .route("/tickets/{id:\\d+}", web::post().to(handlers::tickets::ticket_post))
             // Groups
             .route("/groups", web::get().to(handlers::groups::group_list))
             .route("/groups/create", web::get().to(handlers::groups::create_group_get))
@@ -175,6 +181,8 @@ async fn main() -> std::io::Result<()> {
             // Admin
             .route("/admin/reports", web::get().to(handlers::reports::admin_reports))
             .route("/admin/reports", web::post().to(handlers::reports::admin_reports_post))
+            .route("/admin/tickets", web::get().to(handlers::tickets::admin_tickets))
+            .route("/admin/tickets/{list_filter}", web::get().to(handlers::tickets::admin_tickets))
             .route("/admin/log", web::get().to(handlers::admin::log))
             .route("/admin/bans", web::get().to(handlers::admin::bans))
             .route("/admin/bans", web::post().to(handlers::admin::bans_post))

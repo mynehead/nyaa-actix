@@ -1214,6 +1214,7 @@ mod tests {
                 tracker: None,
                 ratelimit_account_age: 0,
                 trusted: Default::default(),
+                tickets: Default::default(),
             }
         }
 

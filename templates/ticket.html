@@ -1,0 +1,63 @@
+{% extends "layout.html" %}
+{% block title %}Ticket #{{ ticket.id }} :: {{ config.site_name }}{% endblock %}
+{% block body %}
+<div class="content">
+	<h2>
+		{{ ticket.subject }}
+		{% if ticket.status == 1 %}<span class="label label-default">Closed</span>
+		{% elif ticket.staff_replied %}<span class="label label-success">Answered</span>
+		{% else %}<span class="label label-warning">Waiting for staff</span>{% endif %}
+	</h2>
+	<p class="text-muted">
+		<i class="fa fa-{{ category.icon }} fa-fw"></i> {{ category.title }} &middot;
+		Ticket #{{ ticket.id }} opened by
+		{% if opener %}<a href="/user/{{ opener | urlencode }}">{{ opener }}</a>{% else %}[deleted user]{% endif %}
+		on <span data-timestamp="{{ ticket.created_time | date(format="%s") }}">{{ ticket.created_time | date(format="%Y-%m-%d %H:%M") }}</span>
+		&middot; {% if is_owner %}<a href="/tickets">Your tickets</a>{% else %}<a href="/admin/tickets">Ticket queue</a>{% endif %}
+	</p>
+
+	{% if torrents %}
+	<div class="panel panel-default">
+		<div class="panel-heading">Torrents ({{ torrents | length }})</div>
+		<ul class="list-group">
+			{% for t in torrents %}
+			<li class="list-group-item"><a href="/view/{{ t.id }}">#{{ t.id }} {{ t.display_name }}</a></li>
+			{% endfor %}
+		</ul>
+	</div>
+	{% endif %}
+
+	{% for row in messages %}
+	<div class="panel {% if row.from_staff %}panel-info{% else %}panel-default{% endif %}" id="message-{{ row.id }}">
+		<div class="panel-heading">
+			{% if row.author %}<a href="/user/{{ row.author | urlencode }}">{{ row.author }}</a>{% else %}[deleted user]{% endif %}
+			{% if row.from_staff %}<span class="label label-info">Staff</span>{% endif %}
+			<span class="pull-right" data-timestamp="{{ row.created_time | date(format="%s") }}">{{ row.created_time | date(format="%Y-%m-%d %H:%M") }}</span>
+		</div>
+		<div class="panel-body" markdown-text markdown-no-images>{{- row.body -}}</div>
+	</div>
+	{% endfor %}
+
+	{% if error %}
+	<div class="alert alert-danger" role="alert">{{ error }}</div>
+	{% endif %}
+
+	{% if ticket.status == 0 %}
+	<form method="POST" action="/tickets/{{ ticket.id }}">
+		<div class="form-group">
+			<label class="control-label" for="message">Reply</label>
+			<textarea class="form-control" id="message" name="message" rows="6" maxlength="65535" required>{{ message }}</textarea>
+		</div>
+		<button type="submit" name="action" value="reply" class="btn btn-success">Send reply</button>
+	</form>
+	<form method="POST" action="/tickets/{{ ticket.id }}" class="ticket-status-form">
+		<button type="submit" name="action" value="close" class="btn btn-default btn-sm">Close ticket</button>
+	</form>
+	{% else %}
+	<p>This ticket is closed.</p>
+	<form method="POST" action="/tickets/{{ ticket.id }}">
+		<button type="submit" name="action" value="reopen" class="btn btn-default btn-sm">Reopen ticket</button>
+	</form>
+	{% endif %}
+</div>
+{% endblock %}
