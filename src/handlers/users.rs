@@ -512,7 +512,7 @@ mod tests {
             torrent_storage_path: String::new(),
             avatar_storage_path: String::new(),
             enable_gravatar: false,
-            maintenance_mode: false,
+            maintenance: Default::default(),
             site_url: String::new(),
             tracker_urls: vec![],
             trusted_proxies: vec![],

@@ -482,7 +482,7 @@ mod tests {
             torrent_storage_path: String::new(),
             avatar_storage_path: avatars.to_string_lossy().into_owned(),
             enable_gravatar: false,
-            maintenance_mode: false,
+            maintenance: Default::default(),
             site_url: "http://localhost:8080".into(),
             tracker_urls: vec![],
             trusted_proxies: vec![],
