@@ -16,6 +16,8 @@ pub struct Config {
     pub enable_gravatar: bool,
     /// Upstream MAINTENANCE_MODE and friends: a read-only site with a notice.
     pub maintenance: MaintenanceConfig,
+    /// Upstream RAID_MODE_LIMIT_REGISTER and RAID_MODE_REGISTER_MESSAGE.
+    pub raid_mode: RaidModeConfig,
     /// Public base URL of the site, used in the .torrent comment field.
     pub site_url: String,
     /// Announce URLs written into magnets and .torrent files, own tracker first.
@@ -75,6 +77,39 @@ impl MaintenanceConfig {
             enabled: flag("MAINTENANCE_MODE", d.enabled),
             message: env::var("MAINTENANCE_MODE_MESSAGE").ok().filter(|m| !m.trim().is_empty()).unwrap_or(d.message),
             logins: flag("MAINTENANCE_MODE_LOGINS", d.logins),
+        }
+    }
+}
+
+/// Upstream's raid mode for registration: sign-ups still create an account, but it stays
+/// inactive (no login, no verification mail) until a moderator activates it on the user's
+/// page. Upstream's RAID_MODE_LIMIT_UPLOADS is not here because uploads need an account.
+#[derive(Clone, Debug)]
+pub struct RaidModeConfig {
+    /// RAID_MODE_LIMIT_REGISTER
+    pub limit_register: bool,
+    /// RAID_MODE_REGISTER_MESSAGE, shown before the "ask a moderator" note.
+    pub register_message: String,
+}
+
+impl Default for RaidModeConfig {
+    fn default() -> Self {
+        RaidModeConfig { limit_register: false, register_message: "Registration is currently being limited.".into() }
+    }
+}
+
+impl RaidModeConfig {
+    fn from_env() -> Self {
+        let d = RaidModeConfig::default();
+        RaidModeConfig {
+            limit_register: env::var("RAID_MODE_LIMIT_REGISTER")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(d.limit_register),
+            register_message: env::var("RAID_MODE_REGISTER_MESSAGE")
+                .ok()
+                .filter(|m| !m.trim().is_empty())
+                .unwrap_or(d.register_message),
         }
     }
 }
@@ -197,6 +232,7 @@ impl Config {
             avatar_storage_path: env::var("AVATAR_STORAGE_PATH").unwrap_or_else(|_| "./avatars".into()),
             enable_gravatar: env::var("ENABLE_GRAVATAR").ok().and_then(|v| v.parse().ok()).unwrap_or(false),
             maintenance: MaintenanceConfig::from_env(),
+            raid_mode: RaidModeConfig::from_env(),
             site_url: env::var("SITE_URL")
                 .unwrap_or_else(|_| "http://localhost:8080".into())
                 .trim_end_matches('/')
@@ -237,6 +273,7 @@ impl Config {
             avatar_storage_path: String::new(),
             enable_gravatar: false,
             maintenance: Default::default(),
+            raid_mode: Default::default(),
             site_url: String::new(),
             tracker_urls: vec![],
             trusted_proxies: vec![],
