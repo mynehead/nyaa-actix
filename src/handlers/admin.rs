@@ -2,12 +2,14 @@ use crate::auth::{Moderator, Permission};
 use crate::config::Config;
 use crate::db::schema::{bans, users};
 use crate::db::DbPool;
-use crate::models::{hide_ips, AdminLog, Ban, User, UserStatus};
+use crate::middleware::ip_range_ban::IpRangeBans;
+use crate::models::{hide_ips, AdminLog, Ban, IpRangeBan, NewIpRangeBan, User, UserStatus, MAX_BAN_REASON_LEN};
 use crate::utils::context::base_context;
 use crate::utils::pagination::Pagination;
-use crate::utils::{flash, internal_error};
+use crate::utils::proxy::IpNet;
+use crate::utils::{client_addr, flash, internal_error};
 use actix_session::Session;
-use actix_web::{web, HttpResponse, Result};
+use actix_web::{web, HttpRequest, HttpResponse, Result};
 use diesel::prelude::*;
 use serde::Deserialize;
 use tera::Tera;
@@ -63,6 +65,11 @@ pub async fn bans(
     let (bans, total) = Ban::page(&mut conn, query.page(), ADMIN_PER_PAGE).map_err(internal_error)?;
     let mut ctx = base_context(&cfg, Some(&current_user));
     ctx.insert("bans", &bans);
+    if current_user.can(Permission::BanIpRanges) {
+        let ranges = IpRangeBan::list(&mut conn, chrono::Utc::now().naive_utc()).map_err(internal_error)?;
+        ctx.insert("range_bans", &ranges);
+        ctx.insert("range_ban_durations", &RANGE_BAN_DURATIONS);
+    }
     ctx.insert("pagination", &Pagination::new(query.page(), total, ADMIN_PER_PAGE));
     ctx.insert("flash_messages", &flash::take(&session));
     let html = tmpl.render("admin/bans.html", &ctx).map_err(internal_error)?;
@@ -105,6 +112,134 @@ pub async fn bans_post(
     .map_err(internal_error)?;
     flash::push(&session, "success", "", &format!("Unbanned ban #{}", ban.id));
     Ok(HttpResponse::SeeOther().insert_header(("Location", "/admin/bans")).finish())
+}
+
+/// The expiry choices on the range ban form: hours, and the label shown.
+const RANGE_BAN_DURATIONS: [(i64, &str); 6] =
+    [(1, "1 hour"), (24, "1 day"), (168, "1 week"), (720, "30 days"), (2160, "90 days"), (8760, "1 year")];
+
+#[derive(Debug, Deserialize)]
+pub struct RangeBanForm {
+    cidr: String,
+    #[serde(default)]
+    reason: String,
+    /// Hours from `RANGE_BAN_DURATIONS`; empty means until lifted.
+    #[serde(default)]
+    duration: String,
+}
+
+/// Why a range can't be banned, or the canonical network to ban.
+fn check_range(cidr: &str, own: Option<std::net::IpAddr>) -> std::result::Result<IpNet, &'static str> {
+    let net = IpNet::parse(cidr.trim())
+        .ok_or("Not an IP address or network, for example 203.0.113.0/24 or 2001:db8::/32.")?
+        .network();
+    if own.is_some_and(|ip| net.contains(ip)) {
+        return Err("That range includes your own address; banning it would lock you out.");
+    }
+    // Without TRUSTED_PROXIES behind a local reverse proxy every visitor would look like this
+    if ["127.0.0.1", "::1"].iter().any(|ip| net.contains(ip.parse().unwrap())) {
+        return Err("Loopback addresses can't be banned.");
+    }
+    Ok(net)
+}
+
+fn back_to_bans() -> HttpResponse {
+    HttpResponse::SeeOther().insert_header(("Location", "/admin/bans")).finish()
+}
+
+/// Bans a network from the whole site and logs it.
+pub async fn range_ban_add(
+    Moderator(current_user): Moderator,
+    req: HttpRequest,
+    session: Session,
+    pool: web::Data<DbPool>,
+    range_bans: web::Data<IpRangeBans>,
+    form: web::Form<RangeBanForm>,
+) -> Result<HttpResponse> {
+    if !current_user.can(Permission::BanIpRanges) {
+        return Err(actix_web::error::ErrorForbidden("Not allowed"));
+    }
+    let net = match check_range(&form.cidr, client_addr(&req)) {
+        Ok(net) => net,
+        Err(msg) => {
+            flash::push(&session, "danger", "", msg);
+            return Ok(back_to_bans());
+        }
+    };
+    let reason = form.reason.trim();
+    if reason.chars().count() > MAX_BAN_REASON_LEN {
+        flash::push(&session, "danger", "", "The reason is too long.");
+        return Ok(back_to_bans());
+    }
+    let hours = match form.duration.trim() {
+        "" => None,
+        h => match RANGE_BAN_DURATIONS.iter().find(|(d, _)| d.to_string() == h) {
+            Some((d, _)) => Some(*d),
+            None => {
+                flash::push(&session, "danger", "", "Pick an expiry from the list.");
+                return Ok(back_to_bans());
+            }
+        },
+    };
+    let now = chrono::Utc::now().naive_utc();
+    let ban = NewIpRangeBan {
+        cidr: net.to_string(),
+        reason: reason.to_owned(),
+        created_time: now,
+        expires_time: hours.map(|h| now + chrono::Duration::hours(h)),
+        admin_id: current_user.id,
+    };
+    let mut conn = pool.get().map_err(internal_error)?;
+    let added = conn
+        .transaction::<_, diesel::result::Error, _>(|conn| {
+            if let Some(old) = IpRangeBan::by_cidr(conn, &ban.cidr)? {
+                if !old.is_expired(now) {
+                    return Ok(false);
+                }
+                IpRangeBan::delete(conn, old.id)?;
+            }
+            IpRangeBan::insert(conn, &ban)?;
+            let until = match ban.expires_time {
+                Some(t) => format!(" until {} UTC", t.format("%Y-%m-%d %H:%M")),
+                None => String::new(),
+            };
+            let because = if reason.is_empty() { String::new() } else { format!(": {reason}") };
+            AdminLog::add(conn, current_user.id, &format!("Banned IP range IP({}){until}{because}", ban.cidr))?;
+            Ok(true)
+        })
+        .map_err(internal_error)?;
+    if added {
+        range_bans.reload(&mut conn).map_err(internal_error)?;
+        flash::push(&session, "success", "", &format!("Banned {}", ban.cidr));
+    } else {
+        flash::push(&session, "danger", "", &format!("{} is already banned.", ban.cidr));
+    }
+    Ok(back_to_bans())
+}
+
+/// Lifts a range ban and logs it.
+pub async fn range_ban_remove(
+    Moderator(current_user): Moderator,
+    session: Session,
+    pool: web::Data<DbPool>,
+    range_bans: web::Data<IpRangeBans>,
+    path: web::Path<i32>,
+) -> Result<HttpResponse> {
+    if !current_user.can(Permission::BanIpRanges) {
+        return Err(actix_web::error::ErrorForbidden("Not allowed"));
+    }
+    let mut conn = pool.get().map_err(internal_error)?;
+    let ban = IpRangeBan::by_id(&mut conn, path.into_inner())
+        .map_err(internal_error)?
+        .ok_or_else(|| actix_web::error::ErrorNotFound("Ban not found"))?;
+    conn.transaction::<_, diesel::result::Error, _>(|conn| {
+        IpRangeBan::delete(conn, ban.id)?;
+        AdminLog::add(conn, current_user.id, &format!("Lifted IP range ban #{} IP({})", ban.id, ban.cidr))
+    })
+    .map_err(internal_error)?;
+    range_bans.reload(&mut conn).map_err(internal_error)?;
+    flash::push(&session, "success", "", &format!("Unbanned {}", ban.cidr));
+    Ok(back_to_bans())
 }
 
 #[cfg(test)]
@@ -169,12 +304,16 @@ mod tests {
                     .app_data(web::Data::new(config()))
                     .app_data(web::Data::new($pool.clone()))
                     .app_data(web::Data::new(tera))
+                    .app_data(web::Data::new(IpRangeBans::load(&mut $pool.get().unwrap()).unwrap()))
                     .route("/login/{id}", web::get().to(login))
                     .wrap(actix_web::middleware::from_fn(crate::middleware::ip_ban::reject_banned_ip))
                     .wrap(SessionMiddleware::new(CookieSessionStore::default(), Key::from(&[7u8; 64])))
+                    .wrap(actix_web::middleware::from_fn(crate::middleware::ip_range_ban::reject_banned_range))
                     .route("/admin/log", web::get().to(log))
                     .route("/admin/bans", web::get().to(bans))
                     .route("/admin/bans", web::post().to(bans_post))
+                    .route("/admin/bans/ranges", web::post().to(range_ban_add))
+                    .route("/admin/bans/ranges/{id}/delete", web::post().to(range_ban_remove))
                     .route("/user/{username}", web::get().to(crate::handlers::users::view_user))
                     .route("/user/{username}", web::post().to(crate::handlers::users::ban_user_post))
                     .route("/user/{username}/nuke/torrents", web::post().to(crate::handlers::users::nuke_torrents_post))
@@ -448,6 +587,129 @@ mod tests {
         assert_eq!(
             logs(&pool),
             ["Nuked 2 torrents of [regular](/user/regular)", "Nuked 2 comments of [regular](/user/regular)"]
+        );
+    }
+
+    /// POSTs a form as the cookie's user from `ip`; returns the response.
+    macro_rules! post_from {
+        ($app:expr, $cookie:expr, $ip:expr, $uri:expr, $form:expr) => {
+            test::call_service(
+                &$app,
+                test::TestRequest::post()
+                    .uri($uri)
+                    .peer_addr(std::net::SocketAddr::new($ip.parse().unwrap(), 4000))
+                    .cookie($cookie.clone())
+                    .set_form($form)
+                    .to_request(),
+            )
+            .await
+        };
+    }
+
+    fn range_bans(pool: &DbPool) -> Vec<IpRangeBan> {
+        IpRangeBan::all(&mut pool.get().unwrap()).unwrap()
+    }
+
+    /// GETs /admin/bans as a guest from `ip`; returns the status and body.
+    macro_rules! get_from {
+        ($app:expr, $ip:expr) => {{
+            let req = test::TestRequest::get()
+                .uri("/admin/bans")
+                .peer_addr(std::net::SocketAddr::new($ip.parse().unwrap(), 4000))
+                .to_request();
+            let res = test::call_service(&$app, req).await;
+            let status = res.status();
+            (status, String::from_utf8(test::read_body(res).await.to_vec()).unwrap())
+        }};
+    }
+
+    #[actix_web::test]
+    async fn superadmins_ban_ip_ranges_from_the_whole_site() {
+        let pool = pool();
+        let me = "198.51.100.7";
+
+        // Moderators neither see nor use the form
+        let (app, cookie) = app!(pool, 2);
+        let (_, html) = page!(app, cookie, "/admin/bans");
+        assert!(!html.contains("IP range bans"), "{html}");
+        let res = post_from!(app, cookie, me, "/admin/bans/ranges", &[("cidr", "10.9.0.0/16")]);
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        assert!(range_bans(&pool).is_empty());
+
+        let (app, cookie) = app!(pool, 3);
+        let (_, html) = page!(app, cookie, "/admin/bans");
+        assert!(html.contains("IP range bans") && html.contains("name=\"cidr\""), "{html}");
+
+        // Refused: garbage, the admin's own address, loopback, an expiry not on the list
+        for (cidr, duration) in
+            [("nope", ""), ("198.51.0.0/16", ""), ("127.0.0.0/8", ""), ("::/0", ""), ("10.9.0.0/16", "5")]
+        {
+            post_from!(app, cookie, me, "/admin/bans/ranges", &[("cidr", cidr), ("duration", duration)]);
+        }
+        assert!(range_bans(&pool).is_empty());
+
+        // Host bits are dropped; IPv6 works the same way
+        let res = post_from!(app, cookie, me, "/admin/bans/ranges", &[("cidr", " 10.9.8.7/16 "), ("reason", "botnet")]);
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        post_from!(app, cookie, me, "/admin/bans/ranges", &[("cidr", "2001:db8:1::/48"), ("duration", "24")]);
+        // A second ban on the same live range is refused
+        post_from!(app, cookie, me, "/admin/bans/ranges", &[("cidr", "10.9.0.0/16")]);
+        let bans = range_bans(&pool);
+        assert_eq!(bans.len(), 2);
+        assert_eq!(
+            (bans[0].cidr.as_str(), bans[0].reason.as_str(), bans[0].expires_time),
+            ("10.9.0.0/16", "botnet", None)
+        );
+        assert_eq!(bans[1].cidr, "2001:db8:1::/48");
+        assert!(bans[1].expires_time.is_some());
+        assert_eq!(logs(&pool)[0], "Banned IP range IP(10.9.0.0/16): botnet");
+        assert!(logs(&pool)[1].starts_with("Banned IP range IP(2001:db8:1::/48) until "), "{:?}", logs(&pool));
+
+        // Every request from a banned network is refused, before any login or page code
+        let (status, body) = get_from!(app, "10.9.200.1");
+        assert_eq!((status, body.as_str()), (StatusCode::FORBIDDEN, "Your network is banned from this site."));
+        let (status, body) = get_from!(app, "::ffff:10.9.0.1");
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        let (status, body) = get_from!(app, "2001:db8:1:ffff::1");
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(body.contains(" until "), "{body}");
+        assert_ne!(get_from!(app, "10.10.0.1").0, StatusCode::FORBIDDEN);
+        assert_ne!(get_from!(app, "2001:db8:2::1").0, StatusCode::FORBIDDEN);
+
+        let (_, html) = page!(app, cookie, "/admin/bans");
+        assert!(html.contains("<code>10.9.0.0&#x2F;16</code>") && html.contains("botnet"), "{html}");
+
+        // Unbanning takes effect at once
+        let uri = format!("/admin/bans/ranges/{}/delete", bans[0].id);
+        let res = post_from!(app, cookie, me, &uri, &[("x", "")]);
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(range_bans(&pool).len(), 1);
+        assert_ne!(get_from!(app, "10.9.200.1").0, StatusCode::FORBIDDEN);
+        assert_eq!(logs(&pool)[2], format!("Lifted IP range ban #{} IP(10.9.0.0/16)", bans[0].id));
+    }
+
+    #[actix_web::test]
+    async fn expired_range_bans_stop_applying() {
+        let pool = pool();
+        let mut conn = pool.get().unwrap();
+        let now = chrono::Utc::now().naive_utc();
+        let ban = |cidr: &str, expires| NewIpRangeBan {
+            cidr: cidr.into(),
+            reason: String::new(),
+            created_time: now,
+            expires_time: expires,
+            admin_id: 3,
+        };
+        IpRangeBan::insert(&mut conn, &ban("10.1.0.0/16", Some(now - chrono::Duration::hours(1)))).unwrap();
+        IpRangeBan::insert(&mut conn, &ban("10.2.0.0/16", Some(now + chrono::Duration::hours(1)))).unwrap();
+        let cache = IpRangeBans::load(&mut conn).unwrap();
+        assert!(cache.find("10.1.0.1".parse().unwrap(), now).is_none());
+        assert!(cache.find("10.2.0.1".parse().unwrap(), now).is_some());
+        assert!(cache.find("10.2.0.1".parse().unwrap(), now + chrono::Duration::hours(2)).is_none());
+        let listed = IpRangeBan::list(&mut conn, now).unwrap();
+        assert_eq!(
+            listed.iter().map(|b| (b.ban.cidr.as_str(), b.expired)).collect::<Vec<_>>(),
+            [("10.2.0.0/16", false), ("10.1.0.0/16", true)]
         );
     }
 }

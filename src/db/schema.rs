@@ -147,6 +147,17 @@ diesel::table! {
 }
 
 diesel::table! {
+    ip_range_bans (id) {
+        id -> Integer,
+        cidr -> Text,
+        reason -> Text,
+        created_time -> Timestamp,
+        expires_time -> Nullable<Timestamp>,
+        admin_id -> Integer,
+    }
+}
+
+diesel::table! {
     site_banners (id) {
         id -> Integer,
         content -> Text,
@@ -200,6 +211,7 @@ diesel::joinable!(group_members -> groups (group_id));
 diesel::joinable!(group_members -> users (user_id));
 diesel::joinable!(trusted_reviews -> trusted_applications (app_id));
 diesel::joinable!(site_banners -> users (created_by));
+diesel::joinable!(ip_range_bans -> users (admin_id));
 diesel::joinable!(user_sessions -> users (user_id));
 
 diesel::joinable!(nyaa_reports -> nyaa_torrents (torrent_id));
@@ -224,5 +236,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     trusted_applications,
     trusted_reviews,
     site_banners,
+    ip_range_bans,
     user_sessions,
 );

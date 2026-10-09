@@ -18,6 +18,9 @@
 //! `nyaa-actix reindex` rebuilds the Meilisearch index named by MEILI_URL / MEILI_KEY /
 //! MEILI_INDEX from the database. Searches keep using the old index until the new one is
 //! complete. The server also does this by itself when the index is missing or incomplete.
+//!
+//! `nyaa-actix unban-ip-range <range>` lifts an IP range ban (Admin > Bans), for when an
+//! admin has locked themselves out. A running server notices within a minute.
 
 use diesel::prelude::*;
 
@@ -29,7 +32,8 @@ use crate::storage::{S3Settings, Storage};
 const USAGE: &str =
     "usage: nyaa-actix create-user <username> <password> [--level regular|trusted|moderator|admin] [--email <addr>]
        nyaa-actix migrate-storage [--dry-run]
-       nyaa-actix reindex";
+       nyaa-actix reindex
+       nyaa-actix unban-ip-range <range>";
 
 /// Runs the subcommand named in `args` (program name already stripped).
 /// Returns None when there is no subcommand, so the caller starts the server.
@@ -38,6 +42,7 @@ pub async fn run(args: &[String]) -> Option<Result<(), String>> {
         Some("create-user") => Some(create_user(&args[1..])),
         Some("migrate-storage") => Some(migrate_storage(&args[1..]).await),
         Some("reindex") => Some(reindex()),
+        Some("unban-ip-range") => Some(unban_ip_range(&args[1..])),
         Some("help" | "--help" | "-h") => {
             println!("{USAGE}\nWith no subcommand, starts the web server.");
             Some(Ok(()))
@@ -147,6 +152,33 @@ fn reindex() -> Result<(), String> {
     Ok(())
 }
 
+fn unban_ip_range(args: &[String]) -> Result<(), String> {
+    let [range] = args else { return Err(USAGE.into()) };
+    let net = crate::utils::proxy::IpNet::parse(range.trim())
+        .ok_or_else(|| format!("`{range}` is not an IP address or network"))?
+        .network();
+    let (mut conn, database_url) = open_db()?;
+    unban_range(&mut conn, &net.to_string()).map_err(|e| format!("cannot unban: {e}"))?;
+    println!("lifted the ban on {net} in {database_url}");
+    Ok(())
+}
+
+/// Deletes the range ban on `cidr` (canonical) and logs it as the admin who placed it.
+fn unban_range(conn: &mut DbConnection, cidr: &str) -> Result<(), String> {
+    use crate::models::{AdminLog, IpRangeBan};
+    let ban =
+        IpRangeBan::by_cidr(conn, cidr).map_err(|e| e.to_string())?.ok_or_else(|| format!("{cidr} is not banned"))?;
+    conn.transaction::<_, diesel::result::Error, _>(|conn| {
+        IpRangeBan::delete(conn, ban.id)?;
+        AdminLog::add(
+            conn,
+            ban.admin_id,
+            &format!("Lifted IP range ban #{} IP({}) from the command line", ban.id, ban.cidr),
+        )
+    })
+    .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,5 +212,26 @@ mod tests {
         diesel::insert_into(users::table).values(&u).execute(&mut conn).unwrap();
         let user = User::by_username(&mut conn, "admin").unwrap().unwrap();
         assert!(user.verify_password("admin") && user.is_active() && user.level() == UserLevel::SuperAdmin);
+    }
+
+    #[test]
+    fn unbans_an_ip_range() {
+        use crate::models::{IpRangeBan, NewIpRangeBan};
+        let mut conn = crate::db::connect(":memory:").unwrap();
+        crate::db::run_migrations(&mut conn).unwrap();
+        diesel::insert_into(users::table).values(&NewUser::new("admin", None, "admin")).execute(&mut conn).unwrap();
+        let admin = User::by_username(&mut conn, "admin").unwrap().unwrap();
+        let now = chrono::Utc::now().naive_utc();
+        let ban = NewIpRangeBan {
+            cidr: "10.0.0.0/8".into(),
+            reason: String::new(),
+            created_time: now,
+            expires_time: None,
+            admin_id: admin.id,
+        };
+        IpRangeBan::insert(&mut conn, &ban).unwrap();
+        assert!(unban_range(&mut conn, "10.1.0.0/16").is_err());
+        unban_range(&mut conn, "10.0.0.0/8").unwrap();
+        assert!(IpRangeBan::all(&mut conn).unwrap().is_empty());
     }
 }
