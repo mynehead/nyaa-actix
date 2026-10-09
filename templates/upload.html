@@ -12,6 +12,14 @@
 	<p><strong>Important:</strong> Make sure you have read <strong><a href="/rules">the rules</a></strong> before uploading!</p>
 	<br>
 
+	{% if errors.ratelimit %}
+	<div class="row">
+		<div class="col-md-12">
+			<div class="alert alert-danger" role="alert">{{ errors.ratelimit }}</div>
+		</div>
+	</div>
+	{% endif %}
+
 	<div class="row">
 		<div class="col-md-12">
 			<div class="form-group{% if errors.torrent_file %} has-error{% endif %}">

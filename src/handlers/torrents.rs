@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tera::Tera;
 
-use crate::auth::policy::can_comment;
+use crate::auth::policy::{can_comment, can_delete_comment, can_edit_comment};
 use crate::auth::{CurrentUser, LoggedIn, Permission};
 use crate::config::Config;
 use crate::db::schema::{bans, nyaa_comments, nyaa_statistics, nyaa_torrents, users};
@@ -122,6 +122,133 @@ pub async fn post_comment(
     Ok(redirect(&format!("/view/{torrent_id}#com-{count}")))
 }
 
+/// Loads a torrent and one of its comments for the edit and delete routes: 404 for either
+/// missing, 400 when the comment belongs to another torrent, as upstream.
+fn torrent_and_comment(
+    conn: &mut DbConnection,
+    torrent_id: i32,
+    comment_id: i32,
+    user: &User,
+) -> Result<(Torrent, crate::models::Comment)> {
+    let torrent = Torrent::by_id(conn, torrent_id)
+        .map_err(internal_error)?
+        .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))?;
+    check_visible(&torrent, &Some(user.clone()))?;
+    let comment: crate::models::Comment = nyaa_comments::table
+        .find(comment_id)
+        .first(conn)
+        .optional()
+        .map_err(internal_error)?
+        .ok_or_else(|| actix_web::error::ErrorNotFound("Comment not found"))?;
+    if comment.torrent_id != torrent_id {
+        return Err(actix_web::error::ErrorBadRequest("Comment is not on this torrent"));
+    }
+    Ok((torrent, comment))
+}
+
+/// The `#com-N` anchor of a comment: its place in the torrent's comment list.
+fn comment_anchor(conn: &mut DbConnection, comment: &crate::models::Comment) -> QueryResult<i64> {
+    nyaa_comments::table
+        .filter(nyaa_comments::torrent_id.eq(comment.torrent_id))
+        .filter(nyaa_comments::id.le(comment.id))
+        .count()
+        .get_result(conn)
+}
+
+/// Upstream's POST /view/<id>/comment/<comment_id>/edit. The view page's script posts it and
+/// gets `{"comment": text}` or `{"error": message}` back; a plain form post (no script)
+/// is redirected to the comment with a flash message instead.
+pub async fn edit_comment(
+    LoggedIn(user): LoggedIn,
+    req: HttpRequest,
+    session: Session,
+    pool: web::Data<DbPool>,
+    cfg: web::Data<Config>,
+    path: web::Path<(i32, i32)>,
+    form: web::Form<CommentForm>,
+) -> Result<HttpResponse> {
+    let (torrent_id, comment_id) = path.into_inner();
+    let mut conn = pool.get().map_err(internal_error)?;
+    let (torrent, comment) = torrent_and_comment(&mut conn, torrent_id, comment_id, &user)?;
+    if comment.user_id != Some(user.id) || !can_comment(&torrent, Some(&user)) {
+        return Err(actix_web::error::ErrorForbidden("You may not edit this comment"));
+    }
+    let anchor = comment_anchor(&mut conn, &comment).map_err(internal_error)?;
+    let back = format!("/view/{torrent_id}#com-{anchor}");
+    let from_script = req.headers().get("X-Requested-With").is_some_and(|v| v == "XMLHttpRequest");
+    let fail = |error: String| {
+        if from_script {
+            HttpResponse::BadRequest().json(serde_json::json!({ "error": error }))
+        } else {
+            flash::push(&session, "danger", "Comment edit failed!", &error);
+            redirect(&back)
+        }
+    };
+
+    if comment.editing_limit_exceeded(cfg.editing_time_limit) {
+        return Ok(fail("Editing time limit exceeded.".into()));
+    }
+    let text = sanitize_text(form.comment.trim());
+    let len = text.chars().count();
+    if !(COMMENT_MIN_LEN..=COMMENT_MAX_LEN).contains(&len) {
+        return Ok(fail(format!(
+            "Comment must be at least {COMMENT_MIN_LEN} characters long and {COMMENT_MAX_LEN} at most."
+        )));
+    }
+
+    diesel::update(nyaa_comments::table.find(comment_id))
+        .set((nyaa_comments::text.eq(&text), nyaa_comments::edited_time.eq(chrono::Utc::now().naive_utc())))
+        .execute(&mut conn)
+        .map_err(internal_error)?;
+
+    if from_script {
+        Ok(HttpResponse::Ok().json(serde_json::json!({ "comment": text })))
+    } else {
+        flash::push(&session, "success", "Comment successfully edited.", "");
+        Ok(redirect(&back))
+    }
+}
+
+/// Upstream's POST /view/<id>/comment/<comment_id>/delete: the author (within the editing
+/// time limit) or a superadmin. Deleting someone else's comment goes in the admin log.
+pub async fn delete_comment(
+    LoggedIn(user): LoggedIn,
+    session: Session,
+    pool: web::Data<DbPool>,
+    cfg: web::Data<Config>,
+    path: web::Path<(i32, i32)>,
+) -> Result<HttpResponse> {
+    let (torrent_id, comment_id) = path.into_inner();
+    let mut conn = pool.get().map_err(internal_error)?;
+    let (torrent, comment) = torrent_and_comment(&mut conn, torrent_id, comment_id, &user)?;
+    if !can_delete_comment(&comment, &torrent, Some(&user), cfg.editing_time_limit) {
+        return Err(actix_web::error::ErrorForbidden("You may not delete this comment"));
+    }
+
+    conn.transaction::<_, diesel::result::Error, _>(|conn| {
+        diesel::delete(nyaa_comments::table.find(comment_id)).execute(conn)?;
+        let count: i64 =
+            nyaa_comments::table.filter(nyaa_comments::torrent_id.eq(torrent_id)).count().get_result(conn)?;
+        diesel::update(nyaa_torrents::table.find(torrent_id))
+            .set(nyaa_torrents::comment_count.eq(count as i32))
+            .execute(conn)?;
+        if comment.user_id != Some(user.id) {
+            let author = match comment.user_id {
+                Some(id) => User::by_id(conn, id)?.map(|u| user_link(&u.username)),
+                None => None,
+            };
+            let by = author.map(|a| format!(" by {a}")).unwrap_or_default();
+            AdminLog::add(conn, user.id, &format!("Comment{by} deleted on torrent {}", torrent_link(torrent_id)))?;
+        }
+        Ok(())
+    })
+    .map_err(internal_error)?;
+    crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), torrent_id);
+
+    flash::push(&session, "success", "Comment successfully deleted.", "");
+    Ok(redirect(&format!("/view/{torrent_id}#comments")))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn render_view(
     conn: &mut DbConnection,
@@ -166,7 +293,14 @@ async fn render_view(
             let user = c.user_id.and_then(|uid| User::by_id(conn, uid).ok().flatten());
             let avatar_url =
                 user.as_ref().map_or_else(|| crate::models::DEFAULT_AVATAR.to_string(), |u| u.avatar_url(cfg));
-            serde_json::json!({ "comment": c, "user": user, "avatar_url": avatar_url })
+            let limit = cfg.editing_time_limit;
+            let can_edit = can_edit_comment(&c, torrent, current_user.as_ref(), limit);
+            let can_delete = can_delete_comment(&c, torrent, current_user.as_ref(), limit);
+            let editable_until = c.editable_until(limit).map(|t| t.and_utc().timestamp());
+            serde_json::json!({
+                "comment": c, "user": user, "avatar_url": avatar_url,
+                "can_edit": can_edit, "can_delete": can_delete, "editable_until": editable_until,
+            })
         })
         .collect();
 
@@ -455,6 +589,37 @@ pub(crate) struct Upload {
 /// Errors by upload form field (`torrent_file` for the file itself).
 pub(crate) type UploadErrors = HashMap<&'static str, String>;
 
+/// Upstream's `check_uploader_ratelimit`: how long `user` must still wait before uploading,
+/// or None. Only accounts younger than RATELIMIT_ACCOUNT_AGE without
+/// [`Permission::SkipUploadLimit`] are limited; their uploads and any from the same IP count.
+fn upload_wait(
+    conn: &mut DbConnection,
+    cfg: &Config,
+    user: &User,
+    ip: Option<&[u8]>,
+) -> QueryResult<Option<chrono::Duration>> {
+    let limit = &cfg.upload_limit;
+    if !limit.enabled || user.can(Permission::SkipUploadLimit) || user.age_secs() >= cfg.ratelimit_account_age {
+        return Ok(None);
+    }
+    // No IP (no peer address) matches nothing: stored addresses are never empty
+    let ip = ip.unwrap_or_default().to_vec();
+    let mine = nyaa_torrents::uploader_id.eq(user.id).or(nyaa_torrents::uploader_ip.eq(ip));
+    let now = chrono::Utc::now().naive_utc();
+    let recent: i64 = nyaa_torrents::table
+        .filter(mine.clone())
+        .filter(nyaa_torrents::created_time.ge(now - chrono::Duration::seconds(limit.burst_secs)))
+        .count()
+        .get_result(conn)?;
+    if recent < limit.max_burst {
+        return Ok(None);
+    }
+    let last: Option<chrono::NaiveDateTime> =
+        nyaa_torrents::table.filter(mine).select(diesel::dsl::max(nyaa_torrents::created_time)).first(conn)?;
+    let next = last.map(|t| t + chrono::Duration::seconds(limit.timeout_secs));
+    Ok(next.filter(|&next| next > now).map(|next| next - now))
+}
+
 /// Checks an upload and stores it: the torrent row, its statistics and the info dict.
 /// Returns the new torrent, or every problem found by field.
 pub(crate) async fn create_torrent(
@@ -466,6 +631,14 @@ pub(crate) async fn create_torrent(
     upload: &Upload,
 ) -> Result<std::result::Result<Torrent, UploadErrors>> {
     let mut conn = pool.get().map_err(internal_error)?;
+    // Upstream checks the upload rate limit before anything else and reports only that
+    if let Some(wait) = upload_wait(&mut conn, cfg, user, uploader_ip.as_deref()).map_err(internal_error)? {
+        let minutes = (wait.num_seconds() + 59) / 60;
+        let plural = if minutes == 1 { "" } else { "s" };
+        let message =
+            format!("You've gone over the upload ratelimit. You can upload again in {minutes} minute{plural}.");
+        return Ok(Err(HashMap::from([("ratelimit", message)])));
+    }
     let (form, group_id) = (&upload.form, upload.group_id);
     // The same checks as the edit form, plus the file's own; all are shown at once
     let mut errors = HashMap::new();
@@ -1213,6 +1386,8 @@ mod tests {
                 meili: None,
                 tracker: None,
                 ratelimit_account_age: 0,
+                editing_time_limit: 0,
+                upload_limit: Default::default(),
                 trusted: Default::default(),
                 tickets: Default::default(),
                 mfa: Default::default(),
@@ -1244,6 +1419,8 @@ mod tests {
                         .route("/login/{id}", web::get().to(login))
                         .route("/view/{id}", web::get().to(view_torrent))
                         .route("/view/{id}", web::post().to(post_comment))
+                        .route("/view/{id}/comment/{comment_id}/edit", web::post().to(edit_comment))
+                        .route("/view/{id}/comment/{comment_id}/delete", web::post().to(delete_comment))
                         .route("/view/{id}/edit", web::get().to(edit_torrent_get))
                         .route("/view/{id}/edit", web::post().to(edit_torrent_post))
                         .route("/upload", web::post().to(upload_post)),
@@ -1716,6 +1893,176 @@ mod tests {
             assert_eq!(torrent(&pool).comment_count, 2);
         }
 
+        fn comment_rows(pool: &DbPool) -> Vec<(i32, String, bool)> {
+            nyaa_comments::table
+                .order(nyaa_comments::id)
+                .select((nyaa_comments::id, nyaa_comments::text, nyaa_comments::edited_time.is_not_null()))
+                .load(&mut pool.get().unwrap())
+                .unwrap()
+        }
+
+        /// Comment 1 by `other` (2) and comment 2 by `mod` (3) on torrent 5, plus superadmin 4.
+        fn pool_with_comments() -> DbPool {
+            let pool = pool();
+            let mut conn = pool.get().unwrap();
+            diesel::sql_query(
+                "INSERT INTO users (id, username, password_hash, status, level) VALUES (4, 'admin', 'x', 1, 3)",
+            )
+            .execute(&mut conn)
+            .unwrap();
+            diesel::sql_query(
+                "INSERT INTO nyaa_comments (id, torrent_id, user_id, text) VALUES (1, 5, 2, 'first'), (2, 5, 3, 'second')",
+            )
+            .execute(&mut conn)
+            .unwrap();
+            diesel::update(nyaa_torrents::table.find(5))
+                .set(nyaa_torrents::comment_count.eq(2))
+                .execute(&mut conn)
+                .unwrap();
+            drop(conn);
+            pool
+        }
+
+        fn xhr(req: test::TestRequest) -> test::TestRequest {
+            req.insert_header(("X-Requested-With", "XMLHttpRequest"))
+        }
+
+        #[actix_web::test]
+        async fn authors_edit_their_own_comments() {
+            let pool = pool_with_comments();
+            let (app, cookie) = app!(pool, Some(2));
+            let page =
+                String::from_utf8(test::call_and_read_body(&app, get("/view/5", &cookie).to_request()).await.to_vec())
+                    .unwrap();
+            assert!(page.contains("action=\"/view/5/comment/1/edit\""), "{page}");
+            assert!(!page.contains("action=\"/view/5/comment/2/edit\""), "{page}");
+            assert!(page.contains("action=\"/view/5/comment/1/delete\""), "{page}");
+            assert!(!page.contains("action=\"/view/5/comment/2/delete\""), "{page}");
+            assert!(!page.contains("data-until"), "no limit, no countdown");
+
+            // The page script gets JSON back
+            let res = test::call_service(
+                &app,
+                xhr(post("/view/5/comment/1/edit", &cookie, &[("comment", "  first, edited  ")])).to_request(),
+            )
+            .await;
+            assert_eq!(res.status(), StatusCode::OK);
+            let body: serde_json::Value = test::read_body_json(res).await;
+            assert_eq!(body, serde_json::json!({ "comment": "first, edited" }));
+            let res = test::call_service(
+                &app,
+                xhr(post("/view/5/comment/1/edit", &cookie, &[("comment", "ab")])).to_request(),
+            )
+            .await;
+            assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+            let body: serde_json::Value = test::read_body_json(res).await;
+            assert!(body["error"].as_str().unwrap().starts_with("Comment must be at least 3"), "{body}");
+
+            // A plain form post is sent back to the comment
+            let res = test::call_service(
+                &app,
+                post("/view/5/comment/1/edit", &cookie, &[("comment", "third try")]).to_request(),
+            )
+            .await;
+            assert_eq!(res.status(), StatusCode::FOUND);
+            assert_eq!(location(&res), "/view/5#com-1");
+
+            // Not someone else's, and not through another torrent's URL
+            let res = test::call_service(
+                &app,
+                post("/view/5/comment/2/edit", &cookie, &[("comment", "hijack")]).to_request(),
+            )
+            .await;
+            assert_eq!(res.status(), StatusCode::FORBIDDEN);
+            let res = test::call_service(
+                &app,
+                post("/view/5/comment/9/edit", &cookie, &[("comment", "missing")]).to_request(),
+            )
+            .await;
+            assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+            assert_eq!(comment_rows(&pool), [(1, "third try".into(), true), (2, "second".into(), false)]);
+
+            // Guests are turned away
+            let (app, cookie) = app!(pool, None::<i32>);
+            let res =
+                test::call_service(&app, post("/view/5/comment/1/edit", &cookie, &[("comment", "guest")]).to_request())
+                    .await;
+            assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        }
+
+        #[actix_web::test]
+        async fn locked_torrents_and_the_time_limit_stop_author_edits() {
+            let pool = pool_with_comments();
+            diesel::update(nyaa_torrents::table.find(5))
+                .set(nyaa_torrents::flags.eq((TorrentFlags::TRUSTED | TorrentFlags::COMMENT_LOCKED).bits()))
+                .execute(&mut pool.get().unwrap())
+                .unwrap();
+            let (app, cookie) = app!(pool, Some(2));
+            for action in ["edit", "delete"] {
+                let res = test::call_service(
+                    &app,
+                    post(&format!("/view/5/comment/1/{action}"), &cookie, &[("comment", "locked")]).to_request(),
+                )
+                .await;
+                assert_eq!(res.status(), StatusCode::FORBIDDEN, "{action}");
+            }
+            // Moderators may still post on locked torrents, so they may still edit their own
+            let (app, cookie) = app!(pool, Some(3));
+            let res = test::call_service(
+                &app,
+                xhr(post("/view/5/comment/2/edit", &cookie, &[("comment", "still mine")])).to_request(),
+            )
+            .await;
+            assert_eq!(res.status(), StatusCode::OK);
+
+            // An old comment under EDITING_TIME_LIMIT
+            diesel::sql_query("UPDATE nyaa_comments SET created_time = '2000-01-01 00:00:00'")
+                .execute(&mut pool.get().unwrap())
+                .unwrap();
+            let comment =
+                nyaa_comments::table.find(2).first::<crate::models::Comment>(&mut pool.get().unwrap()).unwrap();
+            assert!(comment.editing_limit_exceeded(3600));
+            assert!(!comment.editing_limit_exceeded(0));
+            let user = User::by_id(&mut pool.get().unwrap(), 3).unwrap().unwrap();
+            assert!(!can_edit_comment(&comment, &torrent(&pool), Some(&user), 3600));
+            assert!(!can_delete_comment(&comment, &torrent(&pool), Some(&user), 3600));
+            assert!(can_edit_comment(&comment, &torrent(&pool), Some(&user), 0));
+        }
+
+        #[actix_web::test]
+        async fn authors_and_superadmins_delete_comments() {
+            let pool = pool_with_comments();
+            // A moderator can't delete someone else's comment
+            let (app, cookie) = app!(pool, Some(3));
+            let res = test::call_service(&app, post("/view/5/comment/1/delete", &cookie, &[]).to_request()).await;
+            assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+            // The author can, without a log entry
+            let (app, cookie) = app!(pool, Some(2));
+            let res = test::call_service(&app, post("/view/5/comment/1/delete", &cookie, &[]).to_request()).await;
+            assert_eq!(res.status(), StatusCode::FOUND);
+            assert_eq!(location(&res), "/view/5#comments");
+            assert_eq!(torrent(&pool).comment_count, 1);
+            assert!(admin_logs(&pool).is_empty());
+
+            // A superadmin sees the button on others' comments and their deletion is logged
+            let (app, cookie) = app!(pool, Some(4));
+            let page =
+                String::from_utf8(test::call_and_read_body(&app, get("/view/5", &cookie).to_request()).await.to_vec())
+                    .unwrap();
+            assert!(page.contains("action=\"/view/5/comment/2/delete\""), "{page}");
+            assert!(!page.contains("action=\"/view/5/comment/2/edit\""), "{page}");
+            let res = test::call_service(&app, post("/view/5/comment/2/delete", &cookie, &[]).to_request()).await;
+            assert_eq!(res.status(), StatusCode::FOUND);
+            assert_eq!(comment_rows(&pool), []);
+            assert_eq!(torrent(&pool).comment_count, 0);
+            assert_eq!(
+                admin_logs(&pool),
+                [(4, "Comment by [mod](/user/mod) deleted on torrent [#5](/view/5)".to_string())]
+            );
+        }
+
         /// The test row is given the hash of a real .torrent, so uploading that file collides with it.
         #[actix_web::test]
         async fn deleted_torrents_can_be_reuploaded_but_banned_cannot() {
@@ -1775,6 +2122,72 @@ mod tests {
             let comments: i64 = nyaa_comments::table.count().get_result(&mut pool.get().unwrap()).unwrap();
             assert_eq!(comments, 0);
             std::fs::remove_dir_all(config().torrent_storage_path).ok();
+        }
+
+        #[actix_web::test]
+        async fn new_accounts_wait_after_an_upload_burst() {
+            let pool = pool();
+            let mut conn = pool.get().unwrap();
+            let mut cfg = config();
+            cfg.ratelimit_account_age = 3600;
+            cfg.upload_limit =
+                crate::config::UploadLimitConfig { enabled: true, max_burst: 2, burst_secs: 600, timeout_secs: 300 };
+            let user = |conn: &mut DbConnection, id| User::by_id(conn, id).unwrap().unwrap();
+            let ip = crate::utils::pack_ip("10.0.0.1".parse().unwrap());
+            // Torrent 5 is owner's (1); one more upload from another account on owner's IP
+            diesel::sql_query(format!(
+                "INSERT INTO nyaa_torrents (id, info_hash, display_name, torrent_name, information, description, \
+                 flags, uploader_id, uploader_ip, main_category_id, sub_category_id) \
+                 VALUES (6, X'{}', 'Second', 's.torrent', '', '', 0, 2, X'{}', 1, 2)",
+                "cd".repeat(20),
+                hex::encode(&ip)
+            ))
+            .execute(&mut conn)
+            .unwrap();
+            let wait = |conn: &mut DbConnection, cfg: &Config, id, ip: Option<&[u8]>| {
+                {
+                    let u = user(conn, id);
+                    upload_wait(conn, cfg, &u, ip).unwrap()
+                }
+                .map(|d| d.num_seconds())
+            };
+
+            // One upload of their own is under the burst; the same IP's makes two
+            assert_eq!(wait(&mut conn, &cfg, 1, None), None);
+            let secs = wait(&mut conn, &cfg, 1, Some(&ip)).expect("over the burst");
+            assert!((290..=300).contains(&secs), "{secs}");
+            // Trusted users (2) skip it, and so do accounts older than RATELIMIT_ACCOUNT_AGE
+            assert_eq!(wait(&mut conn, &cfg, 2, Some(&ip)), None);
+            diesel::sql_query("UPDATE users SET created_time = '2000-01-01 00:00:00' WHERE id = 1")
+                .execute(&mut conn)
+                .unwrap();
+            assert_eq!(wait(&mut conn, &cfg, 1, Some(&ip)), None);
+            diesel::sql_query("UPDATE users SET created_time = CURRENT_TIMESTAMP WHERE id = 1")
+                .execute(&mut conn)
+                .unwrap();
+            // The wait runs from the latest upload
+            diesel::sql_query("UPDATE nyaa_torrents SET created_time = datetime('now', '-6 minutes') WHERE id = 6")
+                .execute(&mut conn)
+                .unwrap();
+            assert_eq!(wait(&mut conn, &cfg, 1, Some(&ip)).map(|s| (290..=300).contains(&s)), Some(true));
+            diesel::sql_query("UPDATE nyaa_torrents SET created_time = datetime('now', '-6 minutes')")
+                .execute(&mut conn)
+                .unwrap();
+            assert_eq!(wait(&mut conn, &cfg, 1, Some(&ip)), None);
+            cfg.upload_limit.enabled = false;
+            diesel::sql_query("UPDATE nyaa_torrents SET created_time = CURRENT_TIMESTAMP").execute(&mut conn).unwrap();
+            assert_eq!(wait(&mut conn, &cfg, 1, Some(&ip)), None);
+
+            // The upload page shows the message above the form
+            let mut tera = Tera::new("templates/**/*").unwrap();
+            crate::utils::tera_filters::register(&mut tera);
+            let errors = HashMap::from([("ratelimit", "You've gone over the upload ratelimit.".to_string())]);
+            let owner = user(&mut conn, 1);
+            let page = render_upload(&mut conn, &tera, &cfg, &owner, &EditForm::default(), None, &errors).unwrap();
+            assert!(
+                page.contains("alert-danger\" role=\"alert\">You&#x27;ve gone over the upload ratelimit."),
+                "{page}"
+            );
         }
 
         /// Multipart upload body with `fields` and, when given, a .torrent file.

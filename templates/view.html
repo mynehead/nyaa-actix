@@ -161,9 +161,40 @@
 					{% if comment.edited_time %}
 					<small data-timestamp-swap data-timestamp-title data-timestamp="{{ comment.edited_time | date(format="%s") }}" title="{{ comment.edited_time }}">(edited)</small>
 					{% endif %}
+					{% if item.can_edit or item.can_delete %}
+					<div class="comment-actions">
+						{% if item.can_edit %}
+						<button class="btn btn-xs edit-comment" title="Edit"{% if item.editable_until %} data-until="{{ item.editable_until }}"{% endif %}>Edit</button>
+						{% endif %}
+						{% if item.can_delete %}
+						<form class="delete-comment-form" action="/view/{{ torrent.id }}/comment/{{ comment.id }}/delete" method="POST">
+							<button name="submit" type="submit" class="btn btn-danger btn-xs" title="Delete">Delete</button>
+						</form>
+						{% endif %}
+					</div>
+					{% endif %}
 				</div>
 				<div class="row comment-body">
 					<div markdown-text class="comment-content" id="torrent-comment{{ comment.id }}">{{- comment.text -}}</div>
+					{% if item.can_edit %}
+					<form class="edit-comment-box" action="/view/{{ torrent.id }}/comment/{{ comment.id }}/edit" method="POST">
+						<div class="row">
+							<div class="col-md-12">
+								<div class="form-group">
+									<textarea class="form-control" name="comment" required>{{ comment.text }}</textarea>
+								</div>
+							</div>
+						</div>
+						<div class="row">
+							<div class="col-md-12">
+								<input type="submit" value="Submit" class="btn btn-success btn-sm">
+								<button class="btn btn-sm edit-waiting" disabled style="display:none"></button>
+								<button type="button" class="btn btn-default btn-sm pull-right edit-comment">Cancel</button>
+								<span class="edit-error text-danger"></span>
+							</div>
+						</div>
+					</form>
+					{% endif %}
 				</div>
 			</div>
 		</div>

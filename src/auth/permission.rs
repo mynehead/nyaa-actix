@@ -30,6 +30,10 @@ pub enum Permission {
     BanIpRanges,
     /// Read, answer, close and reopen every user's support tickets (/admin/tickets).
     HandleTickets,
+    /// Delete other users' comments (upstream: superadmins only).
+    DeleteComments,
+    /// Upload without the new-account upload rate limit (upstream: trusted users).
+    SkipUploadLimit,
     /// Turn off a lower-ranked user's two-factor sign-in, for someone who lost their
     /// authenticator and recovery codes. Not moderators: a taken-over moderator account
     /// must not be able to strip others' second factor.
@@ -37,7 +41,7 @@ pub enum Permission {
 }
 
 impl Permission {
-    pub const ALL: [Permission; 13] = [
+    pub const ALL: [Permission; 15] = [
         Permission::SetTrustedFlag,
         Permission::ModerateTorrents,
         Permission::BanUsers,
@@ -50,6 +54,8 @@ impl Permission {
         Permission::NukeUsers,
         Permission::BanIpRanges,
         Permission::HandleTickets,
+        Permission::DeleteComments,
+        Permission::SkipUploadLimit,
         Permission::ResetTwoFactor,
     ];
 }
@@ -59,11 +65,13 @@ impl UserLevel {
     pub fn grants(self, p: Permission) -> bool {
         use Permission::*;
         let needed = match p {
-            SetTrustedFlag => UserLevel::Trusted,
+            SetTrustedFlag | SkipUploadLimit => UserLevel::Trusted,
             ModerateTorrents | BanUsers | ViewAdminPages | CreateGroups | ChangeUserClass | HandleTickets => {
                 UserLevel::Moderator
             }
-            SeeIps | DecideTrusted | GrantModerator | NukeUsers | BanIpRanges | ResetTwoFactor => UserLevel::SuperAdmin,
+            SeeIps | DecideTrusted | GrantModerator | NukeUsers | BanIpRanges | DeleteComments | ResetTwoFactor => {
+                UserLevel::SuperAdmin
+            }
         };
         self >= needed
     }
@@ -103,7 +111,7 @@ mod tests {
     #[test]
     fn levels_grant_what_upstream_allows() {
         assert_eq!(granted(UserLevel::Regular), vec![]);
-        assert_eq!(granted(UserLevel::Trusted), vec![SetTrustedFlag]);
+        assert_eq!(granted(UserLevel::Trusted), vec![SetTrustedFlag, SkipUploadLimit]);
         assert_eq!(
             granted(UserLevel::Moderator),
             vec![
@@ -113,7 +121,8 @@ mod tests {
                 ViewAdminPages,
                 CreateGroups,
                 ChangeUserClass,
-                HandleTickets
+                HandleTickets,
+                SkipUploadLimit
             ]
         );
         assert_eq!(granted(UserLevel::SuperAdmin), Permission::ALL.to_vec());

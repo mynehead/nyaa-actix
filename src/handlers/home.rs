@@ -226,6 +226,8 @@ mod tests {
             tracker_urls: vec![],
             trusted_proxies: vec![],
             ratelimit_account_age: 0,
+            editing_time_limit: 0,
+            upload_limit: Default::default(),
             meili: None,
             tracker: None,
             trusted: Default::default(),
