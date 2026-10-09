@@ -744,7 +744,7 @@ pub async fn avatar_post(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use actix_session::{storage::CookieSessionStore, SessionMiddleware};
     use actix_web::{
@@ -770,7 +770,7 @@ mod tests {
         pool
     }
 
-    fn config(test: &str) -> Config {
+    pub(crate) fn config(test: &str) -> Config {
         let avatars = std::env::temp_dir().join(format!("nyaa-avatar-test-{}-{}", std::process::id(), test));
         Config {
             database_url: String::new(),
@@ -815,6 +815,7 @@ mod tests {
                         Storage::local(&$cfg.avatar_storage_path, &$cfg.avatar_storage_path).unwrap(),
                     ))
                     .app_data(web::Data::new(tera))
+                    .app_data(web::Data::new(crate::utils::gravatar::GravatarProxy::new()))
                     .wrap(SessionMiddleware::new(CookieSessionStore::default(), Key::from(&[7u8; 64])))
                     .route("/login/{id}", web::get().to(login_as))
                     .route("/login", web::post().to(login_post))
@@ -1297,39 +1298,44 @@ mod tests {
         let mut user = User { avatar_time: None, ..User::by_id(&mut pool().get().unwrap(), 1).unwrap().unwrap() };
         assert_eq!(user.avatar_url(&cfg), "/static/img/avatar/default.png");
         cfg.enable_gravatar = true;
-        // md5("alice@example.com")
-        assert_eq!(
-            user.avatar_url(&cfg),
-            "https://www.gravatar.com/avatar/c160f8cc69a4f0bf2b0362752353d060\
-            ?s=120&d=http%3A%2F%2Flocalhost%3A8080%2Fstatic%2Fimg%2Favatar%2Fdefault.png&r=pg"
-        );
+        // Served by the site itself; no hash in the page
+        assert_eq!(user.avatar_url(&cfg), "/avatar/1");
         user.avatar_time = Some(chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap().naive_utc());
         assert_eq!(user.avatar_url(&cfg), "/avatar/1?v=1700000000");
     }
 
-    #[::core::prelude::v1::test]
-    fn gravatar_self_hosted_url_and_sha256() {
-        let mut cfg = config("gravatar-self-hosted");
+    #[actix_web::test]
+    async fn gravatar_is_proxied_from_the_configured_service() {
+        let (pool, mut cfg) = (pool(), config("gravatar-proxy"));
         cfg.enable_gravatar = true;
-        cfg.gravatar_url = "https://avatars.example.org/avatar".into();
-        let user = User { avatar_time: None, ..User::by_id(&mut pool().get().unwrap(), 1).unwrap().unwrap() };
-        let url = user.avatar_url(&cfg);
-        assert!(
-            url.starts_with("https://avatars.example.org/avatar/c160f8cc69a4f0bf2b0362752353d060?s=120&d="),
-            "{}",
-            url
-        );
         cfg.gravatar_sha256 = true;
+        let (base, paths, _) = crate::utils::gravatar::tests::fake_service("200 OK", "image/jpeg", b"jpg".to_vec());
+        cfg.gravatar_url = base;
+        let (app, _) = app!(pool, cfg);
+        let res = test::call_service(&app, test::TestRequest::get().uri("/avatar/1").to_request()).await;
+        assert_eq!(res.status(), 200);
+        assert_eq!(res.headers().get("content-type").unwrap(), "image/jpeg");
+        assert_eq!(test::read_body(res).await, "jpg");
         // sha256("alice@example.com")
-        let url = user.avatar_url(&cfg);
-        assert!(
-            url.starts_with(
-                "https://avatars.example.org/avatar/ff8d9819fc0e12bf0d24892e45987e249a28dce836a85cad60e28eaaa8c6d976?"
-            ),
-            "{}",
-            url
+        assert_eq!(
+            paths.lock().unwrap()[0],
+            "/avatar/ff8d9819fc0e12bf0d24892e45987e249a28dce836a85cad60e28eaaa8c6d976?s=120&d=404&r=pg"
         );
-        assert!(!url.contains("alice"), "{}", url);
+
+        // No Gravatar there: the default avatar
+        cfg.gravatar_url = crate::utils::gravatar::tests::fake_service("404 Not Found", "text/html", vec![]).0;
+        let (app, _) = app!(pool, cfg);
+        let res = test::call_service(&app, test::TestRequest::get().uri("/avatar/1").to_request()).await;
+        assert_eq!(res.status(), 302);
+        assert_eq!(res.headers().get("location").unwrap(), "/static/img/avatar/default.png");
+        // Unknown users and a disabled ENABLE_GRAVATAR stay a 404
+        let res = test::call_service(&app, test::TestRequest::get().uri("/avatar/999").to_request()).await;
+        assert_eq!(res.status(), 404);
+        cfg.enable_gravatar = false;
+        let (app, _) = app!(pool, cfg);
+        let res = test::call_service(&app, test::TestRequest::get().uri("/avatar/1").to_request()).await;
+        assert_eq!(res.status(), 404);
+        std::fs::remove_dir_all(&cfg.avatar_storage_path).ok();
     }
 
     #[::core::prelude::v1::test]

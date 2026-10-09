@@ -1,6 +1,7 @@
 pub mod avatar;
 pub mod context;
 pub mod flash;
+pub mod gravatar;
 pub mod pagination;
 pub mod proxy;
 pub mod tera_filters;
