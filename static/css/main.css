@@ -101,12 +101,14 @@ table.torrent-list td:nth-child(4) {
 }
 table.torrent-list td:nth-child(6),
 body.dark table.torrent-list > tbody > tr.success > td:nth-child(6),
-body.dark table.torrent-list > tbody > tr.danger > td:nth-child(6) {
+body.dark table.torrent-list > tbody > tr.danger > td:nth-child(6),
+body.dark table.torrent-list > tbody > tr.info > td:nth-child(6) {
 	color: green;
 }
 table.torrent-list td:nth-child(7),
 body.dark table.torrent-list > tbody > tr.success > td:nth-child(7),
-body.dark table.torrent-list > tbody > tr.danger > td:nth-child(7) {
+body.dark table.torrent-list > tbody > tr.danger > td:nth-child(7),
+body.dark table.torrent-list > tbody > tr.info > td:nth-child(7) {
 	color: red;
 }
 
@@ -547,6 +549,23 @@ body.dark div.panel-danger > .panel-heading {
 	background-color: #714b4b; /* == remake entry in torrent list + hover */
 }
 
+/* best (same blue as the site banners, .alert-info) */
+body.dark .torrent-list > tbody > tr.info > td {
+	color: inherit;
+	background-color: rgba(36, 127, 204, 0.16);
+}
+body.dark .torrent-list > tbody > tr.info:hover > td {
+	background-color: rgba(36, 127, 204, 0.24);
+}
+body.dark div.panel-info,
+body.dark div.panel-info > .panel-heading {
+	border-color: #2c3d4c; /* == best entry in torrent list */
+}
+body.dark div.panel-info > .panel-heading {
+	color: #e2e2e2;
+	background-color: #185586; /* == dark .alert-info */
+}
+
 /* deleted */
 body.dark .torrent-list > tbody > tr.deleted > td {
 	background-color: rgba(255, 255, 255, 0.20);
@@ -878,9 +897,10 @@ body.dark .table-hover > tbody > tr:hover {
 	background-color: rgba(255, 255, 255, 0.08);
 }
 
-/* trusted and remake rows color their cells; keep the row hover from stacking under that */
+/* trusted, remake and best rows color their cells; keep the row hover from stacking under that */
 body.dark .table-hover > tbody > tr.success:hover,
-body.dark .table-hover > tbody > tr.danger:hover {
+body.dark .table-hover > tbody > tr.danger:hover,
+body.dark .table-hover > tbody > tr.info:hover {
 	background-color: transparent;
 }
 

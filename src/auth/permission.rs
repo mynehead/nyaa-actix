@@ -38,10 +38,12 @@ pub enum Permission {
     /// authenticator and recovery codes. Not moderators: a taken-over moderator account
     /// must not be able to strip others' second factor.
     ResetTwoFactor,
+    /// Mark a release as "Best" (blue row), a staff pick on top of upstream's flags.
+    MarkBest,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 15] = [
+    pub const ALL: [Permission; 16] = [
         Permission::SetTrustedFlag,
         Permission::ModerateTorrents,
         Permission::BanUsers,
@@ -57,6 +59,7 @@ impl Permission {
         Permission::DeleteComments,
         Permission::SkipUploadLimit,
         Permission::ResetTwoFactor,
+        Permission::MarkBest,
     ];
 }
 
@@ -66,9 +69,8 @@ impl UserLevel {
         use Permission::*;
         let needed = match p {
             SetTrustedFlag | SkipUploadLimit => UserLevel::Trusted,
-            ModerateTorrents | BanUsers | ViewAdminPages | CreateGroups | ChangeUserClass | HandleTickets => {
-                UserLevel::Moderator
-            }
+            ModerateTorrents | BanUsers | ViewAdminPages | CreateGroups | ChangeUserClass | HandleTickets
+            | MarkBest => UserLevel::Moderator,
             SeeIps | DecideTrusted | GrantModerator | NukeUsers | BanIpRanges | DeleteComments | ResetTwoFactor => {
                 UserLevel::SuperAdmin
             }
@@ -122,7 +124,8 @@ mod tests {
                 CreateGroups,
                 ChangeUserClass,
                 HandleTickets,
-                SkipUploadLimit
+                SkipUploadLimit,
+                MarkBest
             ]
         );
         assert_eq!(granted(UserLevel::SuperAdmin), Permission::ALL.to_vec());

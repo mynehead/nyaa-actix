@@ -33,6 +33,7 @@ struct FeedItem {
     comments: i32,
     trusted: &'static str,
     remake: &'static str,
+    best: &'static str,
 }
 
 fn xml(s: &str) -> String {
@@ -93,6 +94,7 @@ pub fn render_rss(
                 comments: t.comment_count,
                 trusted: yes_no(t.is_trusted()),
                 remake: yes_no(t.is_remake()),
+                best: yes_no(t.is_best()),
             }
         })
         .collect();
