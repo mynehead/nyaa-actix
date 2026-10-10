@@ -90,19 +90,20 @@ impl Torrent {
         self.flags & TorrentFlags::BANNED.bits() != 0
     }
 
-    /// Listing row class, as upstream: deleted (grey), hidden (orange), remake (red), trusted (green);
-    /// plus best (blue, like the site banners), which outranks trusted.
+    /// Listing row class: deleted (grey), hidden (orange), best (blue, like the site banners),
+    /// trusted (green), remake (red). As on nyaa.si, a trusted remake stays green in the list;
+    /// the torrent page panel still shows it red (view.html).
     pub fn row_class(&self) -> &'static str {
         if self.is_deleted() || self.is_banned() {
             "deleted"
         } else if self.is_hidden() {
             "warning"
-        } else if self.is_remake() {
-            "danger"
         } else if self.is_best() {
             "info"
         } else if self.is_trusted() {
             "success"
+        } else if self.is_remake() {
+            "danger"
         } else {
             "default"
         }
@@ -343,10 +344,11 @@ mod tests {
             "deleted"
         );
         assert_eq!(torrent(TorrentFlags::HIDDEN | TorrentFlags::REMAKE, 0).row_class(), "warning");
-        assert_eq!(torrent(TorrentFlags::TRUSTED | TorrentFlags::REMAKE, 0).row_class(), "danger");
+        assert_eq!(torrent(TorrentFlags::TRUSTED | TorrentFlags::REMAKE, 0).row_class(), "success");
+        assert_eq!(torrent(TorrentFlags::REMAKE, 0).row_class(), "danger");
         assert_eq!(torrent(TorrentFlags::TRUSTED, 0).row_class(), "success");
         assert_eq!(torrent(TorrentFlags::TRUSTED | TorrentFlags::BEST, 0).row_class(), "info");
-        assert_eq!(torrent(TorrentFlags::REMAKE | TorrentFlags::BEST, 0).row_class(), "danger");
+        assert_eq!(torrent(TorrentFlags::REMAKE | TorrentFlags::BEST, 0).row_class(), "info");
         assert_eq!(torrent(TorrentFlags::empty(), 0).row_class(), "default");
     }
 
