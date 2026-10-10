@@ -68,6 +68,75 @@ docker compose exec postgres pg_dump -U nyaa nyaa > nyaa-$(date +%F).sql
 The `site-data` volume holds uploaded torrents and avatars when storage is local; back it
 up too (or use S3).
 
+## Maintenance
+
+There are three levels, from least to most disruptive:
+
+| What you need | How | Visitors see |
+| --- | --- | --- |
+| Stop changes for a while (big import, moderation clean-up) | `MAINTENANCE_MODE=true` | the site as usual with a notice; posts, uploads and registration are turned back |
+| Close the site but keep it running (check a deploy before opening) | also `MAINTENANCE_MODE_OFFLINE=true` | `static/maintenance.html` as a 503 with `Retry-After`; moderators and admins log in at `/login` and see the read-only site |
+| The site container is stopped or restarting (update, database work) | the reverse proxy below | the same page, served by the proxy |
+
+Settings are read on start, so after changing them in `.env` run `docker compose up -d site`;
+the proxy covers the seconds the site needs to restart. `MAINTENANCE_MODE_MESSAGE` replaces
+the page's text, and `MAINTENANCE_MODE_RETRY_AFTER` sets the seconds in `Retry-After`
+(default 300), which tells crawlers and RSS readers to come back later rather than drop pages.
+
+The tracker is a separate service on port 6969 and is not affected by any of these:
+clients keep announcing while the site is offline or stopped. Do not route announces through
+the maintenance fallback below, since a torrent client cannot read an HTML page. Only
+restarting the tracker itself matters: it then refuses announces until the site has sent it
+the whitelist again, so restart the tracker while the site is up.
+
+### A maintenance page while the site is down
+
+Without a proxy, a stopped site means a browser error. Put the proxy in front of port 8080
+and have it serve `static/maintenance.html` whenever it cannot reach the site. The page is
+self-contained (no other files needed), and the site's own 503s pass through unchanged.
+Copy `static/maintenance.html` to the proxy host, here `/srv/nyaa/maintenance.html`.
+
+Caddy (2.8 or later):
+
+```caddyfile
+nyaa.example {
+	reverse_proxy 127.0.0.1:8080
+	handle_errors 502 503 504 {
+		root * /srv/nyaa
+		rewrite * /maintenance.html
+		header Retry-After 300
+		header Cache-Control no-store
+		file_server {
+			status 503
+		}
+	}
+}
+```
+
+nginx:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    # Only nginx's own errors (site unreachable); the site's 503 page passes through
+    error_page 502 504 =503 /maintenance.html;
+}
+location = /maintenance.html {
+    internal;
+    root /srv/nyaa;
+    add_header Retry-After 300 always;
+    add_header Cache-Control no-store always;
+}
+```
+
+With the proxy in place, a full maintenance run is:
+
+```sh
+docker compose stop site          # visitors get the maintenance page from the proxy
+docker compose exec postgres ...  # database work, backups, and so on
+docker compose up -d --build site # migrations run on start, then the site answers again
+```
+
 ## Notes
 
 - The site container runs as an unprivileged user (uid 10001) and writes only to `/data`.

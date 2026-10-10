@@ -78,7 +78,8 @@ pub struct Config {
 
 /// Upstream's maintenance mode: every page still shows, with `message` on top, but nothing
 /// can be changed: form posts are turned back with the message and the API answers 503.
-/// Logging in (and out) still works while `logins` is on.
+/// Logging in (and out) still works while `logins` is on. With `offline` on top, only
+/// moderators and up see the site; everyone else gets a 503 maintenance page.
 #[derive(Clone, Debug)]
 pub struct MaintenanceConfig {
     /// MAINTENANCE_MODE
@@ -87,6 +88,11 @@ pub struct MaintenanceConfig {
     pub message: String,
     /// MAINTENANCE_MODE_LOGINS
     pub logins: bool,
+    /// MAINTENANCE_MODE_OFFLINE: everyone below moderator gets the 503 maintenance page
+    /// (static/maintenance.html) instead of the read-only site.
+    pub offline: bool,
+    /// MAINTENANCE_MODE_RETRY_AFTER: seconds sent as Retry-After with every 503.
+    pub retry_after: u32,
 }
 
 impl Default for MaintenanceConfig {
@@ -95,6 +101,8 @@ impl Default for MaintenanceConfig {
             enabled: false,
             message: "Site is currently in read-only maintenance mode.".into(),
             logins: true,
+            offline: false,
+            retry_after: 300,
         }
     }
 }
@@ -107,6 +115,11 @@ impl MaintenanceConfig {
             enabled: flag("MAINTENANCE_MODE", d.enabled),
             message: env::var("MAINTENANCE_MODE_MESSAGE").ok().filter(|m| !m.trim().is_empty()).unwrap_or(d.message),
             logins: flag("MAINTENANCE_MODE_LOGINS", d.logins),
+            offline: flag("MAINTENANCE_MODE_OFFLINE", d.offline),
+            retry_after: env::var("MAINTENANCE_MODE_RETRY_AFTER")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(d.retry_after),
         }
     }
 }

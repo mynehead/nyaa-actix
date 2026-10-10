@@ -9,6 +9,8 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY src src
 COPY migrations migrations
+# Built into the binary for MAINTENANCE_MODE_OFFLINE
+COPY static/maintenance.html static/maintenance.html
 # Cache the registry and target dir between builds; copy the binary out of the cache mount.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
