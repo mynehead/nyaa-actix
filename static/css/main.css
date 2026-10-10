@@ -549,17 +549,17 @@ body.dark div.panel-danger > .panel-heading {
 	background-color: #714b4b; /* == remake entry in torrent list + hover */
 }
 
-/* best (same blue as the site banners, .alert-info) */
+/* best (the site banners' blue, saturated enough to read as blue on the dark background) */
 body.dark .torrent-list > tbody > tr.info > td {
 	color: inherit;
-	background-color: rgba(36, 127, 204, 0.16);
+	background-color: rgba(0, 110, 255, 0.22);
 }
 body.dark .torrent-list > tbody > tr.info:hover > td {
-	background-color: rgba(36, 127, 204, 0.24);
+	background-color: rgba(0, 110, 255, 0.30);
 }
 body.dark div.panel-info,
 body.dark div.panel-info > .panel-heading {
-	border-color: #2c3d4c; /* == best entry in torrent list */
+	border-color: #233a5c; /* == best entry in torrent list */
 }
 body.dark div.panel-info > .panel-heading {
 	color: #e2e2e2;
