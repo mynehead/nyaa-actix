@@ -66,7 +66,7 @@ pub fn index_settings(max_hits: i64) -> Value {
         "searchableAttributes": ["display_name", "word_parts"],
         "filterableAttributes": [
             "main_category_id", "sub_category_id", "uploader_id", "group_id",
-            "hidden", "anonymous", "remake", "trusted", "complete", "deleted"
+            "hidden", "anonymous", "remake", "trusted", "complete", "deleted", "best"
         ],
         "sortableAttributes": [
             "id", "display_name", "filesize", "comment_count",
@@ -99,6 +99,7 @@ pub struct TorrentDoc {
     pub remake: bool,
     pub trusted: bool,
     pub complete: bool,
+    pub best: bool,
     /// Deleted or banned: listings drop both unless a moderator is looking.
     pub deleted: bool,
 }
@@ -124,6 +125,7 @@ impl TorrentDoc {
             remake: has(TorrentFlags::REMAKE),
             trusted: has(TorrentFlags::TRUSTED),
             complete: has(TorrentFlags::COMPLETE),
+            best: has(TorrentFlags::BEST),
             deleted: has(TorrentFlags::DELETED) || has(TorrentFlags::BANNED),
         }
     }
@@ -204,6 +206,7 @@ pub fn filter(q: &SearchQuery, r: &Resolved) -> Vec<String> {
         1 => f.push("remake = false".into()),
         2 => f.push("trusted = true".into()),
         3 => f.push("trusted = true AND complete = true".into()),
+        4 => f.push("best = true".into()),
         _ => {}
     }
     if !q.include_deleted {

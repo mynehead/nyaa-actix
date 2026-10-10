@@ -305,6 +305,7 @@ mod tests {
             trusted: Default::default(),
             tickets: Default::default(),
             mfa: Default::default(),
+            captcha: None,
             email_blacklist: Default::default(),
         }
     }

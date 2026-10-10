@@ -1,4 +1,5 @@
 {% extends "layout.html" %}
+{% import "macros.html" as macros %}
 {% block title %}Login :: {{ config.site_name }}{% endblock %}
 {% block metatags %}
 <meta property="og:description" content="Log in to {{ config.site_name }}!">
@@ -29,6 +30,14 @@
 				</div>
 			</div>
 		</div>
+
+		{% if config.captcha %}
+		<div class="row">
+			<div class="form-group col-md-4">
+				{{ macros::captcha() }}
+			</div>
+		</div>
+		{% endif %}
 
 		{% if config.allow_password_reset %}
 		<div class="row">

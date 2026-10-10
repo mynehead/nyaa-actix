@@ -1,4 +1,5 @@
 mod auth;
+mod captcha;
 mod cli;
 mod config;
 mod db;
@@ -170,6 +171,7 @@ async fn main() -> std::io::Result<()> {
             .route("/login/2fa", web::post().to(handlers::two_factor::login_2fa_post))
             .route("/register", web::get().to(handlers::account::register_get))
             .route("/register", web::post().to(handlers::account::register_post))
+            .route("/captcha/challenge", web::get().to(captcha::challenge))
             .route("/logout", web::post().to(handlers::account::logout))
             .route("/user/activate/{payload}", web::get().to(handlers::account::activate))
             .route("/password-reset", web::get().to(handlers::account::password_reset_request_get))

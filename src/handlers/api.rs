@@ -271,6 +271,7 @@ pub async fn info(
         "is_trusted": t.is_trusted(),
         "is_complete": t.is_complete(),
         "is_remake": t.is_remake(),
+        "is_best": t.is_best(),
     })))
 }
 

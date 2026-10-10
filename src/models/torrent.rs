@@ -19,6 +19,8 @@ bitflags::bitflags! {
         const DELETED       = 0x20;
         const BANNED        = 0x40;
         const COMMENT_LOCKED = 0x80;
+        // Our own: a bit upstream doesn't use, so its rows read as not best
+        const BEST          = 0x100;
     }
 }
 
@@ -80,11 +82,16 @@ impl Torrent {
         self.flags & TorrentFlags::DELETED.bits() != 0
     }
 
+    pub fn is_best(&self) -> bool {
+        self.flags & TorrentFlags::BEST.bits() != 0
+    }
+
     pub fn is_banned(&self) -> bool {
         self.flags & TorrentFlags::BANNED.bits() != 0
     }
 
-    /// Listing row class, as upstream: deleted (grey), hidden (orange), remake (red), trusted (green).
+    /// Listing row class, as upstream: deleted (grey), hidden (orange), remake (red), trusted (green);
+    /// plus best (blue, like the site banners), which outranks trusted.
     pub fn row_class(&self) -> &'static str {
         if self.is_deleted() || self.is_banned() {
             "deleted"
@@ -92,6 +99,8 @@ impl Torrent {
             "warning"
         } else if self.is_remake() {
             "danger"
+        } else if self.is_best() {
+            "info"
         } else if self.is_trusted() {
             "success"
         } else {
@@ -157,11 +166,12 @@ pub struct EditFlags {
     pub anonymous: bool,
     pub trusted: bool,
     pub comment_locked: bool,
+    pub best: bool,
 }
 
 /// Flags after an edit, as upstream: anyone who may edit sets hidden, remake, complete
 /// and anonymous; only trusted users change the trusted flag, and only moderators the
-/// comment lock. Deleted and banned are left alone (see [`danger_action`]).
+/// comment lock; moderators also set best. Deleted and banned are left alone (see [`danger_action`]).
 pub fn edited_flags(old: i32, edit: &EditFlags, editor: &User) -> i32 {
     let mut flags = TorrentFlags::from_bits_retain(old);
     flags.set(TorrentFlags::HIDDEN, edit.hidden);
@@ -173,6 +183,9 @@ pub fn edited_flags(old: i32, edit: &EditFlags, editor: &User) -> i32 {
     }
     if editor.can(Permission::ModerateTorrents) {
         flags.set(TorrentFlags::COMMENT_LOCKED, edit.comment_locked);
+    }
+    if editor.can(Permission::MarkBest) {
+        flags.set(TorrentFlags::BEST, edit.best);
     }
     flags.bits()
 }
@@ -332,6 +345,8 @@ mod tests {
         assert_eq!(torrent(TorrentFlags::HIDDEN | TorrentFlags::REMAKE, 0).row_class(), "warning");
         assert_eq!(torrent(TorrentFlags::TRUSTED | TorrentFlags::REMAKE, 0).row_class(), "danger");
         assert_eq!(torrent(TorrentFlags::TRUSTED, 0).row_class(), "success");
+        assert_eq!(torrent(TorrentFlags::TRUSTED | TorrentFlags::BEST, 0).row_class(), "info");
+        assert_eq!(torrent(TorrentFlags::REMAKE | TorrentFlags::BEST, 0).row_class(), "danger");
         assert_eq!(torrent(TorrentFlags::empty(), 0).row_class(), "default");
     }
 
@@ -375,6 +390,13 @@ mod tests {
         // Trusted users set trusted; moderators also set the lock
         assert_eq!(edited_flags(old, &edit, &user(1, 1)), (TorrentFlags::COMMENT_LOCKED | TorrentFlags::REMAKE).bits());
         assert_eq!(edited_flags(old, &edit, &user(1, 2)), TorrentFlags::REMAKE.bits());
+        // Only moderators set or clear best; others keep what is there
+        let best = TorrentFlags::BEST.bits();
+        let mark = EditFlags { best: true, ..Default::default() };
+        assert_eq!(edited_flags(0, &mark, &user(1, 1)), 0);
+        assert_eq!(edited_flags(best, &EditFlags::default(), &user(1, 1)), best);
+        assert_eq!(edited_flags(0, &mark, &user(1, 2)), best);
+        assert_eq!(edited_flags(best, &EditFlags::default(), &user(1, 2)), 0);
         // Deleted and banned are never touched by an edit
         let deleted = (TorrentFlags::DELETED | TorrentFlags::BANNED).bits();
         assert_eq!(edited_flags(deleted, &EditFlags::default(), &user(1, 3)), deleted);

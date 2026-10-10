@@ -26,11 +26,28 @@ fn user_filter(
     move |value, _| Ok(f(&from_value::<User>(value, name)?))
 }
 
+/// Upstream's `static_cachebuster`: a static file's URL with its modification time, so
+/// browsers fetch a stylesheet or script again after it changes instead of using a stale copy.
+fn static_cachebuster(value: &Value, _: &HashMap<String, Value>) -> Result<Value> {
+    let url: String = from_value(value, "static_cachebuster")?;
+    let mtime = url
+        .strip_prefix('/')
+        .and_then(|path| std::fs::metadata(path).ok())
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
+    Ok(Value::String(match mtime {
+        Some(t) => format!("{url}?t={}", t.as_secs()),
+        None => url,
+    }))
+}
+
 pub fn register(tera: &mut Tera) {
+    tera.register_filter("static_cachebuster", static_cachebuster);
     tera.register_filter("is_trusted", torrent_filter("is_trusted", |t| Value::Bool(t.is_trusted())));
     tera.register_filter("is_anonymous", torrent_filter("is_anonymous", |t| Value::Bool(t.is_anonymous())));
     tera.register_filter("is_remake", torrent_filter("is_remake", |t| Value::Bool(t.is_remake())));
     tera.register_filter("is_hidden", torrent_filter("is_hidden", |t| Value::Bool(t.is_hidden())));
+    tera.register_filter("is_best", torrent_filter("is_best", |t| Value::Bool(t.is_best())));
     tera.register_filter("is_complete", torrent_filter("is_complete", |t| Value::Bool(t.is_complete())));
     tera.register_filter("is_deleted", torrent_filter("is_deleted", |t| Value::Bool(t.is_deleted() || t.is_banned())));
     tera.register_filter("row_class", torrent_filter("row_class", |t| to_value(t.row_class()).unwrap()));
@@ -59,6 +76,15 @@ mod tests {
         let mut tera = tera::Tera::new("templates/**/*").expect("templates should parse");
         super::register(&mut tera);
         assert!(tera.get_template_names().count() > 10);
+    }
+
+    #[test]
+    fn cachebuster_adds_the_modification_time() {
+        let bust = |url: &str| super::static_cachebuster(&url.into(), &Default::default()).unwrap();
+        let busted = bust("/static/css/main.css");
+        let t = busted.as_str().unwrap().strip_prefix("/static/css/main.css?t=").expect("has ?t=");
+        assert!(t.parse::<u64>().unwrap() > 0);
+        assert_eq!(bust("/static/missing.css"), "/static/missing.css");
     }
 }
 
@@ -109,6 +135,7 @@ mod render_tests {
             trusted: Default::default(),
             tickets: Default::default(),
             mfa: Default::default(),
+            captcha: None,
             email_blacklist: Default::default(),
         }
     }

@@ -57,3 +57,11 @@
 		{% endif %}
 	</div>
 {%- endmacro form_field %}
+
+{# The ALTCHA captcha (static/altcha), self-hosted: the widget fetches a challenge from
+   /captcha/challenge, solves it and puts the solution in an "altcha" form field. #}
+{% macro captcha() -%}
+<link rel="stylesheet" href="/static/altcha/altcha.css">
+<script type="module" src="/static/altcha/setup.js"></script>
+<altcha-widget challenge="/captcha/challenge" name="altcha"></altcha-widget>
+{%- endmacro captcha %}

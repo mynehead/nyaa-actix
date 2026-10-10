@@ -27,7 +27,7 @@ pub struct SearchQuery {
     pub group_id: Option<i32>,
     pub main_category: Option<i32>,
     pub sub_category: Option<i32>,
-    pub quality_filter: u8, // 0=all,1=no-remake,2=trusted,3=trusted+complete
+    pub quality_filter: u8, // 0=all,1=no-remake,2=trusted,3=trusted+complete,4=best
     pub sort: SearchSort,
     pub order: SearchOrder,
     pub page: i64,
@@ -254,6 +254,9 @@ fn filtered(q: &SearchQuery, r: &Resolved) -> nyaa_torrents::BoxedQuery<'static,
             query = query
                 .filter(nyaa_torrents::flags.bitand(trusted_bit).ne(0))
                 .filter(nyaa_torrents::flags.bitand(complete_bit).ne(0));
+        }
+        4 => {
+            query = query.filter(nyaa_torrents::flags.bitand(TorrentFlags::BEST.bits()).ne(0));
         }
         _ => {}
     }

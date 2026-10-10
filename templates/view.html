@@ -7,7 +7,7 @@
 <meta property="og:description" content="{{ category_names[cat_id] | default(value=cat_id) }} | {{ torrent | filesize_human }} | Uploaded by {{ uploader_name }} on {{ torrent.created_time | date(format="%Y-%m-%d") }}">
 {% endblock %}
 {% block body %}
-{% if torrent | is_deleted %}{% set panel_class = "deleted" %}{% elif torrent | is_remake %}{% set panel_class = "danger" %}{% elif torrent | is_trusted %}{% set panel_class = "success" %}{% else %}{% set panel_class = "default" %}{% endif %}
+{% if torrent | is_deleted %}{% set panel_class = "deleted" %}{% elif torrent | is_remake %}{% set panel_class = "danger" %}{% elif torrent | is_best %}{% set panel_class = "info" %}{% elif torrent | is_trusted %}{% set panel_class = "success" %}{% else %}{% set panel_class = "default" %}{% endif %}
 <div class="panel panel-{{ panel_class }}">
 	<div class="panel-heading"{% if torrent | is_hidden %} style="background-color: darkgray;"{% endif %}>
 		<h3 class="panel-title">

@@ -810,6 +810,8 @@ pub struct EditForm {
     pub is_trusted: bool,
     #[serde(default, deserialize_with = "checkbox")]
     pub is_comment_locked: bool,
+    #[serde(default, deserialize_with = "checkbox")]
+    pub is_best: bool,
     /// The group select ("0" for none); absent when the page showed no select,
     /// which keeps the torrent's group.
     #[serde(default, skip_serializing)]
@@ -851,6 +853,7 @@ impl EditForm {
             is_complete: t.is_complete(),
             is_trusted: t.is_trusted(),
             is_comment_locked: t.is_comment_locked(),
+            is_best: t.is_best(),
             ..Default::default()
         }
     }
@@ -863,6 +866,7 @@ impl EditForm {
             anonymous: self.is_anonymous,
             trusted: self.is_trusted,
             comment_locked: self.is_comment_locked,
+            best: self.is_best,
         }
     }
 
@@ -1090,6 +1094,7 @@ pub async fn edit_torrent_post(
         edit.anonymous &= torrent.uploader_id.is_some();
         let new_flags = edited_flags(torrent.flags, &edit, &editor);
         let lock_changed = (new_flags ^ torrent.flags) & TorrentFlags::COMMENT_LOCKED.bits() != 0;
+        let best_changed = (new_flags ^ torrent.flags) & TorrentFlags::BEST.bits() != 0;
         conn.transaction::<_, diesel::result::Error, _>(|conn| {
             diesel::update(nyaa_torrents::table.find(torrent.id))
                 .set((
@@ -1113,6 +1118,19 @@ pub async fn edit_torrent_post(
                         "Torrent {} marked as {}",
                         torrent_link(torrent.id),
                         if locked { "comments locked" } else { "comments unlocked" }
+                    ),
+                )?;
+            }
+            // Only moderators can change best (edited_flags); logged like the lock
+            if best_changed {
+                let best = new_flags & TorrentFlags::BEST.bits() != 0;
+                AdminLog::add(
+                    conn,
+                    editor.id,
+                    &format!(
+                        "Torrent {} {}",
+                        torrent_link(torrent.id),
+                        if best { "marked as best" } else { "no longer marked as best" }
                     ),
                 )?;
             }
@@ -1409,6 +1427,7 @@ mod tests {
                 trusted: Default::default(),
                 tickets: Default::default(),
                 mfa: Default::default(),
+                captcha: None,
                 email_blacklist: Default::default(),
             }
         }
@@ -1508,6 +1527,7 @@ mod tests {
             assert!(page.contains("<option value=\"1_2\" selected>"), "{page}");
             assert!(page.contains("(by <a href=\"/user/owner\">owner</a>)"), "{page}");
             assert!(page.contains("name=\"is_comment_locked\""), "moderators see the lock");
+            assert!(page.contains("name=\"is_best\""), "moderators see best");
             assert!(page.contains("name=\"ban\""));
         }
 
@@ -1628,6 +1648,7 @@ mod tests {
             )
             .unwrap();
             assert!(!page.contains("name=\"is_trusted\"") && !page.contains("name=\"ban\""), "{page}");
+            assert!(!page.contains("name=\"is_best\""), "only moderators mark best");
 
             let res = test::call_service(
                 &app,

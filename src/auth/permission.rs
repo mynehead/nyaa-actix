@@ -40,10 +40,12 @@ pub enum Permission {
     ResetTwoFactor,
     /// Make and revoke invite codes on /admin/invites (REGISTRATION_MODE=invite).
     CreateInvites,
+    /// Mark a release as "Best" (blue row), a staff pick on top of upstream's flags.
+    MarkBest,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 16] = [
+    pub const ALL: [Permission; 17] = [
         Permission::SetTrustedFlag,
         Permission::ModerateTorrents,
         Permission::BanUsers,
@@ -60,6 +62,7 @@ impl Permission {
         Permission::SkipUploadLimit,
         Permission::ResetTwoFactor,
         Permission::CreateInvites,
+        Permission::MarkBest,
     ];
 }
 
@@ -70,7 +73,7 @@ impl UserLevel {
         let needed = match p {
             SetTrustedFlag | SkipUploadLimit => UserLevel::Trusted,
             ModerateTorrents | BanUsers | ViewAdminPages | CreateGroups | ChangeUserClass | HandleTickets
-            | CreateInvites => UserLevel::Moderator,
+            | CreateInvites | MarkBest => UserLevel::Moderator,
             SeeIps | DecideTrusted | GrantModerator | NukeUsers | BanIpRanges | DeleteComments | ResetTwoFactor => {
                 UserLevel::SuperAdmin
             }
@@ -125,7 +128,8 @@ mod tests {
                 ChangeUserClass,
                 HandleTickets,
                 SkipUploadLimit,
-                CreateInvites
+                CreateInvites,
+                MarkBest
             ]
         );
         assert_eq!(granted(UserLevel::SuperAdmin), Permission::ALL.to_vec());
