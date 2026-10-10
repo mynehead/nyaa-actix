@@ -68,8 +68,8 @@ pub struct Config {
     pub tickets: TicketConfig,
     /// Two-factor sign-in (MFA_REQUIRED_LEVEL, MFA_ISSUER_NAME).
     pub mfa: crate::auth::mfa::MfaConfig,
-    /// Upstream USE_RECAPTCHA and the RECAPTCHA_* keys; None shows no captcha.
-    pub recaptcha: Option<crate::captcha::Recaptcha>,
+    /// The ALTCHA captcha on login and registration (USE_CAPTCHA); None shows none.
+    pub captcha: Option<crate::captcha::Captcha>,
     /// Upstream EMAIL_BLACKLIST and EMAIL_SERVER_BLACKLIST: email providers registration turns away.
     pub email_blacklist: crate::auth::email_blacklist::EmailBlacklist,
 }
@@ -256,6 +256,7 @@ impl Config {
         let flag = |key: &str, default: bool| env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default);
         let non_empty = |key: &str| env::var(key).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
         Config {
+            captcha: crate::captcha::Captcha::from_env(&secret_key),
             database_url: env::var("DATABASE_URL").unwrap_or_else(|_| "nyaa.db".into()),
             secret_key,
             mfa: crate::auth::mfa::MfaConfig::from_env(&site_name),
@@ -307,7 +308,6 @@ impl Config {
             tracker: crate::tracker::Tracker::from_env(),
             trusted: TrustedConfig::from_env(),
             tickets: TicketConfig::from_env(),
-            recaptcha: crate::captcha::Recaptcha::from_env(),
             email_blacklist: crate::auth::email_blacklist::EmailBlacklist::from_env(),
         }
     }
@@ -347,7 +347,7 @@ impl Config {
             trusted: Default::default(),
             tickets: Default::default(),
             mfa: Default::default(),
-            recaptcha: None,
+            captcha: None,
             email_blacklist: Default::default(),
         }
     }

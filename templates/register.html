@@ -62,11 +62,10 @@
 			</div>
 		</div>
 
-		{% if config.recaptcha_public_key %}
+		{% if config.captcha %}
 		<div class="row">
 			<div class="col-md-4">
-				{{ macros::recaptcha_script() }}
-				{{ macros::recaptcha(site_key=config.recaptcha_public_key) }}
+				{{ macros::captcha() }}
 			</div>
 		</div>
 		{% endif %}
