@@ -130,11 +130,14 @@ pub struct RegistrationConfig {
     pub mode: RegistrationMode,
     /// INVITE_EXPIRY_DAYS: how long a new invite code stays valid.
     pub invite_expiry_days: i64,
+    /// INVITES_FOR_TRUSTED: invites every Trusted user gets once (0 = none; moderators can
+    /// still give individual users invites on their page).
+    pub invites_for_trusted: i64,
 }
 
 impl Default for RegistrationConfig {
     fn default() -> Self {
-        RegistrationConfig { mode: RegistrationMode::Open, invite_expiry_days: 7 }
+        RegistrationConfig { mode: RegistrationMode::Open, invite_expiry_days: 7, invites_for_trusted: 2 }
     }
 }
 
@@ -154,6 +157,11 @@ impl RegistrationConfig {
                 .and_then(|v| v.parse().ok())
                 .filter(|&d: &i64| d > 0)
                 .unwrap_or(d.invite_expiry_days),
+            invites_for_trusted: env::var("INVITES_FOR_TRUSTED")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .filter(|&n: &i64| n >= 0)
+                .unwrap_or(d.invites_for_trusted),
         }
     }
 }

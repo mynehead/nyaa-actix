@@ -147,6 +147,13 @@ diesel::table! {
 }
 
 diesel::table! {
+    invite_allowances (user_id) {
+        user_id -> Integer,
+        extra -> Integer,
+    }
+}
+
+diesel::table! {
     invites (id) {
         id -> Integer,
         code_hash -> Text,
@@ -318,6 +325,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     site_banners,
     ip_range_bans,
     invites,
+    invite_allowances,
     user_sessions,
     user_mfa,
     user_recovery_codes,

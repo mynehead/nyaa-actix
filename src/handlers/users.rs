@@ -92,6 +92,14 @@ pub async fn view_user(
         ctx.insert("ip_banned", &ip_banned);
         let invited_by = crate::models::Invite::inviter_of(&mut conn, profile_user.id).map_err(internal_error)?;
         ctx.insert("invited_by", &invited_by);
+        if moderator.can(Permission::CreateInvites) {
+            let now = chrono::Utc::now().naive_utc();
+            let left =
+                crate::models::Invite::remaining(&mut conn, &profile_user, cfg.registration.invites_for_trusted, now)
+                    .map_err(internal_error)?;
+            ctx.insert("give_invites_form", &true);
+            ctx.insert("profile_user_invites", &left);
+        }
         if moderator.can(Permission::ResetTwoFactor) {
             let two_factor =
                 crate::auth::mfa::UserMfa::is_enabled(&mut conn, profile_user.id).map_err(internal_error)?;
