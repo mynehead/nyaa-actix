@@ -5,6 +5,7 @@ pub mod banners;
 pub mod feeds;
 pub mod groups;
 pub mod home;
+pub mod invites;
 pub mod reports;
 pub mod site;
 pub mod tickets;

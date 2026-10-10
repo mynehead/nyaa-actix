@@ -86,6 +86,7 @@
 								{% if can.handle_tickets %}<li><a href="/admin/tickets">Tickets</a></li>{% endif %}
 								<li><a href="/admin/log">Log</a></li>
 								<li><a href="/admin/bans">Bans</a></li>
+								{% if can.create_invites %}<li><a href="/invites">Invites</a></li>{% endif %}
 								<li><a href="/admin/trusted">Trusted</a></li>
 								<li><a href="/admin/banners">Banners</a></li>
 							</ul>
@@ -123,6 +124,14 @@
 										Profile
 									</a>
 								</li>
+								{% if config.registration_mode == "invite" or can.create_invites %}
+								<li>
+									<a href="/invites">
+										<i class="fa fa-envelope fa-fw"></i>
+										Invites
+									</a>
+								</li>
+								{% endif %}
 								<li>
 									<a href="/tickets">
 										<i class="fa fa-life-ring fa-fw"></i>
@@ -158,12 +167,14 @@
 										Login
 									</a>
 								</li>
+								{% if config.registration_mode != "closed" %}
 								<li>
 									<a href="/register">
 										<i class="fa fa-pencil fa-fw"></i>
 										Register
 									</a>
 								</li>
+								{% endif %}
 							</ul>
 						</li>
 						{% endif %}

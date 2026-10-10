@@ -13,11 +13,11 @@ use tera::Tera;
 use crate::auth::email_blacklist::BLACKLISTED;
 use crate::auth::mfa::UserMfa;
 use crate::auth::CurrentUser;
-use crate::config::Config;
+use crate::config::{Config, RegistrationMode};
 use crate::db::schema::users;
 use crate::db::{DbConnection, DbPool};
 use crate::middleware::auth::{login_user, logout_everywhere, logout_user, session_auth_method, AuthMethod};
-use crate::models::{password_matches, Ban, NewUser, User, UserStatus};
+use crate::models::{password_matches, Ban, Invite, NewUser, User, UserStatus};
 use crate::storage::{Kind, Storage};
 use crate::utils::context::base_context;
 use crate::utils::throttle::Throttle;
@@ -37,8 +37,27 @@ pub struct RegisterForm {
     pub email: String,
     pub password: String,
     pub password_confirm: String,
+    /// The invite code, with REGISTRATION_MODE=invite.
+    #[serde(default)]
+    pub invite: String,
     #[serde(default)]
     pub altcha: String,
+}
+
+/// `?invite=CODE` on the link an inviter hands out.
+#[derive(Debug, Deserialize)]
+pub struct RegisterQuery {
+    #[serde(default)]
+    pub invite: String,
+}
+
+const INVALID_INVITE: &str = "This invite code is invalid, used up or expired.";
+
+/// The register page with what every render of it needs.
+fn register_context(cfg: &Config) -> tera::Context {
+    let mut ctx = base_context(cfg, None);
+    ctx.insert("errors", &Vec::<String>::new());
+    ctx
 }
 
 pub async fn login_get(
@@ -139,12 +158,13 @@ pub async fn register_get(
     CurrentUser(current_user): CurrentUser,
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
+    query: web::Query<RegisterQuery>,
 ) -> Result<HttpResponse> {
     if current_user.is_some() {
         return Ok(HttpResponse::Found().insert_header(("Location", "/")).finish());
     }
-    let mut ctx = base_context(&cfg, None);
-    ctx.insert("errors", &Vec::<String>::new());
+    let mut ctx = register_context(&cfg);
+    ctx.insert("invite", query.invite.trim());
     let html = tmpl.render("register.html", &ctx).map_err(internal_error)?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
@@ -158,21 +178,28 @@ pub async fn register_post(
     form: web::Form<RegisterForm>,
 ) -> Result<HttpResponse> {
     let ip = client_key(&req);
+    if cfg.registration.mode == RegistrationMode::Closed {
+        let html = tmpl.render("register.html", &register_context(&cfg)).map_err(internal_error)?;
+        return Ok(HttpResponse::Forbidden().content_type("text/html").body(html));
+    }
+    // Wrong invite codes count here too, so codes can't be guessed faster than accounts made
     if REGISTRATIONS_BY_IP.is_blocked(&ip) {
-        let mut ctx = base_context(&cfg, None);
+        let mut ctx = register_context(&cfg);
         ctx.insert("errors", &["Too many registrations from your address. Try again later."]);
         ctx.insert("username", &form.username);
         ctx.insert("email", &form.email);
+        ctx.insert("invite", &form.invite);
         let html = tmpl.render("register.html", &ctx).map_err(internal_error)?;
         return Ok(HttpResponse::TooManyRequests().content_type("text/html").body(html));
     }
     REGISTRATIONS_BY_IP.hit(&ip);
     // Upstream's RegisterForm captcha, checked before any name or address is looked up
     if let Err(error) = crate::captcha::check_form(&cfg, &form.altcha) {
-        let mut ctx = base_context(&cfg, None);
+        let mut ctx = register_context(&cfg);
         ctx.insert("errors", &[error]);
         ctx.insert("username", &form.username);
         ctx.insert("email", &form.email);
+        ctx.insert("invite", &form.invite);
         let html = tmpl.render("register.html", &ctx).map_err(internal_error)?;
         return Ok(HttpResponse::BadRequest().content_type("text/html").body(html));
     }
@@ -180,6 +207,21 @@ pub async fn register_post(
     let mut conn = pool.get().map_err(internal_error)?;
     let (username, email) = (form.username.trim(), form.email.trim());
     let mut errors = register_errors(username, email, &form.password, &form.password_confirm);
+    let now = chrono::Utc::now().naive_utc();
+    let invite = match cfg.registration.mode {
+        RegistrationMode::Invite => {
+            let invite = Invite::usable_by_code(&mut conn, &form.invite, now).map_err(internal_error)?;
+            match &invite {
+                None => errors.push(INVALID_INVITE.into()),
+                Some(i) if !i.allows_email(email) => {
+                    errors.push("This invite code is for a different email address.".into())
+                }
+                Some(_) => {}
+            }
+            invite
+        }
+        _ => None,
+    };
     if User::username_taken(&mut conn, username).map_err(internal_error)? {
         errors.push("Username is already taken.".into());
     }
@@ -194,10 +236,11 @@ pub async fn register_post(
     }
 
     let render_errors = |errors: &[String]| -> Result<HttpResponse> {
-        let mut ctx = base_context(&cfg, None);
+        let mut ctx = register_context(&cfg);
         ctx.insert("errors", errors);
         ctx.insert("username", username);
         ctx.insert("email", email);
+        ctx.insert("invite", form.invite.trim());
         let html = tmpl.render("register.html", &ctx).map_err(internal_error)?;
         Ok(HttpResponse::BadRequest().content_type("text/html").body(html))
     };
@@ -209,17 +252,31 @@ pub async fn register_post(
     let mut new_user = web::block(move || NewUser::new(&name, Some(&mail), &password)).await?;
     new_user.registration_ip = client_ip(&req);
     // In raid mode the account waits for a moderator; with email verification, for its
-    // activation link
-    let raid_mode = cfg.raid_mode.limit_register;
-    let verification = if raid_mode { None } else { cfg.mail.verification().cloned() };
+    // activation link. An invite already vouches for the account, so raid mode doesn't
+    // apply, and one bound to this address has verified it.
+    let raid_mode = cfg.raid_mode.limit_register && invite.is_none();
+    let email_vouched = invite.as_ref().is_some_and(|i| i.email.is_some());
+    let verification = if raid_mode || email_vouched { None } else { cfg.mail.verification().cloned() };
     if raid_mode || verification.is_some() {
         new_user.status = UserStatus::Inactive as i32;
     }
-    // Two sign-ups for the same name or email at once: the second hits the UNIQUE index
-    match diesel::insert_into(users::table).values(&new_user).execute(&mut conn) {
+    let inserted = conn.transaction::<_, diesel::result::Error, _>(|conn| {
+        diesel::insert_into(users::table).values(&new_user).execute(conn)?;
+        if let Some(invite) = &invite {
+            let user_id = users::table.filter(users::username.eq(&new_user.username)).select(users::id).first(conn)?;
+            // Two sign-ups with one code at once: the second gets nothing
+            if !Invite::claim(conn, invite.id, user_id, now)? {
+                return Err(diesel::result::Error::RollbackTransaction);
+            }
+        }
+        Ok(())
+    });
+    match inserted {
+        // Two sign-ups for the same name or email at once: the second hits the UNIQUE index
         Err(diesel::result::Error::DatabaseError(diesel::result::DatabaseErrorKind::UniqueViolation, _)) => {
             return render_errors(&["Username or email is already taken.".to_string()]);
         }
+        Err(diesel::result::Error::RollbackTransaction) => return render_errors(&[INVALID_INVITE.to_string()]),
         result => result.map_err(internal_error)?,
     };
 
@@ -228,8 +285,7 @@ pub async fn register_post(
         .ok_or_else(|| actix_web::error::ErrorInternalServerError("Failed to fetch user"))?;
 
     if raid_mode {
-        let mut ctx = base_context(&cfg, None);
-        ctx.insert("errors", &Vec::<String>::new());
+        let mut ctx = register_context(&cfg);
         ctx.insert("raid_message", &cfg.raid_mode.register_message);
         ctx.insert("registered", &user.username);
         let html = tmpl.render("register.html", &ctx).map_err(internal_error)?;
@@ -606,7 +662,7 @@ pub struct ProfileForm {
 type FieldErrors = HashMap<&'static str, Vec<String>>;
 
 /// Good enough to catch typos; there is no verification mail yet to prove it works.
-fn looks_like_email(s: &str) -> bool {
+pub(crate) fn looks_like_email(s: &str) -> bool {
     let Some((local, domain)) = s.split_once('@') else { return false };
     !local.is_empty()
         && !domain.contains('@')
@@ -836,6 +892,7 @@ pub(crate) mod tests {
             gravatar_sha256: false,
             maintenance: Default::default(),
             raid_mode: Default::default(),
+            registration: Default::default(),
             site_url: "http://localhost:8080".into(),
             tracker_urls: vec![],
             trusted_proxies: vec![],
@@ -1449,9 +1506,13 @@ pub(crate) mod tests {
         ($pool:expr, $verify:expr) => {
             mail_app!($pool, $verify, false)
         };
-        ($pool:expr, $verify:expr, $raid:expr) => {{
+        ($pool:expr, $verify:expr, $raid:expr) => {
+            mail_app!($pool, $verify, $raid, crate::config::RegistrationMode::Open)
+        };
+        ($pool:expr, $verify:expr, $raid:expr, $mode:expr) => {{
             let mut cfg = config("mail");
             cfg.raid_mode.limit_register = $raid;
+            cfg.registration.mode = $mode;
             cfg.mail = crate::mail::MailConfig {
                 mailer: Some(crate::mail::Mailer::Log { from: "noreply@nyaa.test".parse().unwrap() }),
                 use_email_verification: $verify,
@@ -1608,5 +1669,114 @@ pub(crate) mod tests {
         assert!(alice(&pool).verify_password("newpass1"));
         // Used once, the link is dead
         assert_eq!(test::call_service(&app, get(&good)).await.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// Stores an invite from alice; gives its code.
+    fn invite(pool: &DbPool, email: Option<&str>, expires_in_days: i64) -> String {
+        let (code, code_hash) = crate::models::new_invite_code();
+        let now = chrono::Utc::now().naive_utc();
+        let new = crate::models::NewInvite {
+            code_hash,
+            inviter_id: 1,
+            email: email.map(str::to_owned),
+            created_time: now,
+            expires_time: now + chrono::Duration::days(expires_in_days),
+        };
+        Invite::insert(&mut pool.get().unwrap(), &new).unwrap();
+        code
+    }
+
+    /// Posts the register form from `ip`, so these tests don't share the per-address limit;
+    /// gives the status and page.
+    macro_rules! register_with {
+        ($app:expr, $ip:expr, $username:expr, $email:expr, $code:expr) => {{
+            let req = test::TestRequest::post()
+                .uri("/register")
+                .peer_addr(format!("{}:1234", $ip).parse().unwrap())
+                .set_form([
+                    ("username", $username),
+                    ("email", $email),
+                    ("password", PASSWORD),
+                    ("password_confirm", PASSWORD),
+                    ("invite", AsRef::<str>::as_ref($code)),
+                ])
+                .to_request();
+            let res = test::call_service(&$app, req).await;
+            let status = res.status();
+            (status, body_of(test::read_body(res).await))
+        }};
+    }
+
+    #[actix_web::test]
+    async fn invite_mode_needs_a_valid_unused_code() {
+        let pool = pool();
+        let mut cfg = config("invite");
+        cfg.registration.mode = crate::config::RegistrationMode::Invite;
+        let (app, _) = app!(pool, cfg);
+        let ip = "10.20.0.1";
+        let (status, page) = register_with!(app, ip, "carl", "carl@example.com", "");
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(page.contains(INVALID_INVITE) && page.contains("name=\"invite\""), "{page}");
+        let (status, _) = register_with!(app, ip, "carl", "carl@example.com", "made-up");
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let expired = invite(&pool, None, -1);
+        let (status, _) = register_with!(app, ip, "carl", "carl@example.com", &expired);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let bound = invite(&pool, Some("Dave@Example.com"), 7);
+        let (status, page) = register_with!(app, ip, "carl", "carl@example.com", &bound);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(page.contains("for a different email address"), "{page}");
+
+        let code = invite(&pool, None, 7);
+        let (status, _) = register_with!(app, ip, "carl", "carl@example.com", &code);
+        assert_eq!(status, StatusCode::FOUND);
+        let carl = User::by_username(&mut pool.get().unwrap(), "carl").unwrap().unwrap();
+        assert!(carl.is_active());
+        assert_eq!(Invite::inviter_of(&mut pool.get().unwrap(), carl.id).unwrap().as_deref(), Some("alice"));
+        // One account per code
+        let (status, page) = register_with!(app, ip, "erin", "erin@example.com", &code);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(page.contains(INVALID_INVITE), "{page}");
+        // Revoked codes are dead too
+        let revoked = invite(&pool, None, 7);
+        let id = Invite::usable_by_code(&mut pool.get().unwrap(), &revoked, chrono::Utc::now().naive_utc())
+            .unwrap()
+            .unwrap()
+            .id;
+        assert!(Invite::revoke(&mut pool.get().unwrap(), id).unwrap());
+        let (status, _) = register_with!(app, ip, "erin", "erin@example.com", &revoked);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[actix_web::test]
+    async fn closed_registration_turns_everyone_away() {
+        let pool = pool();
+        let mut cfg = config("closed");
+        cfg.registration.mode = crate::config::RegistrationMode::Closed;
+        let (app, _) = app!(pool, cfg);
+        let code = invite(&pool, None, 7);
+        let (status, page) = register_with!(app, "10.20.0.2", "carl", "carl@example.com", &code);
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(page.contains("Registration is closed."), "{page}");
+        assert!(User::by_username(&mut pool.get().unwrap(), "carl").unwrap().is_none());
+    }
+
+    #[actix_web::test]
+    async fn invited_accounts_skip_raid_mode_and_bound_ones_verification() {
+        let pool = pool();
+        let app = mail_app!(pool, true, true, crate::config::RegistrationMode::Invite);
+        let ip = "10.20.0.3";
+        // Bound to the address: active and signed in right away
+        let code = invite(&pool, Some("carl@example.com"), 7);
+        let (status, _) = register_with!(app, ip, "carl", "carl@example.com", &code);
+        assert_eq!(status, StatusCode::FOUND);
+        assert!(User::by_username(&mut pool.get().unwrap(), "carl").unwrap().unwrap().is_active());
+        // Not bound: no raid mode, but the address still has to be verified
+        let code = invite(&pool, None, 7);
+        let (status, page) = register_with!(app, ip, "dave", "dave@example.com", &code);
+        assert_eq!(status, StatusCode::OK);
+        assert!(!page.contains("Registration is currently being limited."), "{page}");
+        let dave = User::by_username(&mut pool.get().unwrap(), "dave").unwrap().unwrap();
+        assert_eq!(dave.status, UserStatus::Inactive as i32);
     }
 }

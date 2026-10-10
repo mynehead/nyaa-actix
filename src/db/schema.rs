@@ -147,6 +147,27 @@ diesel::table! {
 }
 
 diesel::table! {
+    invite_allowances (user_id) {
+        user_id -> Integer,
+        extra -> Integer,
+    }
+}
+
+diesel::table! {
+    invites (id) {
+        id -> Integer,
+        code_hash -> Text,
+        inviter_id -> Integer,
+        email -> Nullable<Text>,
+        created_time -> Timestamp,
+        expires_time -> Timestamp,
+        used_by -> Nullable<Integer>,
+        used_time -> Nullable<Timestamp>,
+        revoked -> Bool,
+    }
+}
+
+diesel::table! {
     ip_range_bans (id) {
         id -> Integer,
         cidr -> Text,
@@ -303,6 +324,8 @@ diesel::allow_tables_to_appear_in_same_query!(
     trusted_reviews,
     site_banners,
     ip_range_bans,
+    invites,
+    invite_allowances,
     user_sessions,
     user_mfa,
     user_recovery_codes,

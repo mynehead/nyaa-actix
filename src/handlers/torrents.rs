@@ -1413,6 +1413,7 @@ mod tests {
                 gravatar_sha256: false,
                 maintenance: Default::default(),
                 raid_mode: Default::default(),
+                registration: Default::default(),
                 site_url: String::new(),
                 tracker_urls: vec![],
                 trusted_proxies: vec![],

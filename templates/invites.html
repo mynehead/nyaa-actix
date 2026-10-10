@@ -1,0 +1,68 @@
+{% extends "layout.html" %}
+{% block title %}Invites :: {{ config.site_name }}{% endblock %}
+{% block body %}
+	<h3>Invites</h3>
+	{% if config.registration_mode != "invite" and can.create_invites %}
+	<div class="alert alert-info" role="alert">Registration is currently <strong>{{ config.registration_mode }}</strong>; codes are only asked for with <code>REGISTRATION_MODE=invite</code>.</div>
+	{% endif %}
+	{% if new_invite_link %}
+	<div class="alert alert-success" role="alert">
+		<p>New invite. Copy the link now; it can't be shown again.</p>
+		<input class="form-control" type="text" readonly value="{{ new_invite_link }}" onfocus="this.select()">
+	</div>
+	{% endif %}
+	{% if invites_remaining is number %}
+	<p>You have <strong>{{ invites_remaining }}</strong> invite{{ invites_remaining | pluralize }} left. Revoked and expired codes come back.</p>
+	{% endif %}
+	<p class="text-muted">Each code makes one account and expires after {{ invite_expiry_days }} day{{ invite_expiry_days | pluralize }}. A code bound to an email address only works for that address, which then needs no verification mail.</p>
+	{% if invites_remaining is not number or invites_remaining > 0 %}
+	<form method="POST" action="/invites" class="form-inline" style="margin-bottom: 15px">
+		<div class="form-group">
+			<label class="sr-only" for="invite_email">Email</label>
+			<input class="form-control" id="invite_email" name="email" type="email" placeholder="Email (optional)">
+		</div>
+		<button class="btn btn-primary" type="submit">Create invite</button>
+	</form>
+	{% endif %}
+	{% if invites %}
+	<div class="table-responsive">
+		<table class="table table-bordered table-hover table-striped">
+			<thead>
+			<tr>
+				<th style="width: 75px">#</th>
+				{% if can.create_invites %}<th>Invited by</th>{% endif %}
+				<th>Email</th>
+				<th>Used by</th>
+				<th style="width: 175px">Created</th>
+				<th style="width: 175px">Expires</th>
+				<th style="width: 90px">State</th>
+				<th style="width: 75px">Action</th>
+			</tr>
+			</thead>
+			<tbody>
+			{% for invite in invites %}
+			<tr{% if invite.state != "open" and invite.state != "used" %} class="text-muted"{% endif %}>
+				<td>{{ invite.id }}</td>
+				{% if can.create_invites %}<td><a href="/user/{{ invite.inviter_name | urlencode }}">{{ invite.inviter_name }}</a></td>{% endif %}
+				<td>{{ invite.email | default(value="-") }}</td>
+				<td>{% if invite.used_by_name %}<a href="/user/{{ invite.used_by_name | urlencode }}">{{ invite.used_by_name }}</a>{% else %}-{% endif %}</td>
+				<td class="center">{{ invite.created_time | date(format="%Y-%m-%d %H:%M:%S") }}</td>
+				<td class="center">{{ invite.expires_time | date(format="%Y-%m-%d %H:%M:%S") }}</td>
+				<td>{{ invite.state }}</td>
+				<td class="center">
+					{% if invite.state == "open" %}
+					<form method="POST" action="/invites/{{ invite.id }}/revoke">
+						<button class="btn btn-danger btn-xs" type="submit">Revoke</button>
+					</form>
+					{% endif %}
+				</td>
+			</tr>
+			{% endfor %}
+			</tbody>
+		</table>
+	</div>
+	{% endif %}
+
+	{% set page_url = "/invites" %}
+	{% include "admin/pagination.html" %}
+{% endblock %}

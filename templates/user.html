@@ -32,6 +32,10 @@
 						<dd>{{ profile_user | level_str }}</dd>
 						<dt>User status:</dt>
 						<dd>{{ profile_user | status_str }}</dd>
+						{%- if invited_by -%}
+						<dt>Invited by:</dt>
+						<dd><a href="/user/{{ invited_by | urlencode }}">{{ invited_by }}</a></dd>
+						{%- endif -%}
 						{%- if can.see_ips and ban_form -%}
 						<dt>Last login IP:</dt>
 						<dd>{{ last_login_ip | default(value="") }}</dd>
@@ -69,6 +73,18 @@
 				{% endif %}
 			</form>
 			<br>
+			{% if give_invites_form %}
+			<form method="POST" action="/user/{{ profile_user.username | urlencode }}/invites" class="form-inline">
+				<p>Invites left: {% if profile_user_invites is number %}{{ profile_user_invites }}{% else %}no limit{% endif %}</p>
+				{% if profile_user_invites is number %}
+				<div class="form-group">
+					<label class="sr-only" for="invite_amount">Invites</label>
+					<input class="form-control" id="invite_amount" name="amount" type="number" min="-100" max="100" value="1" style="width: 90px">
+				</div>
+				<input class="btn btn-default" type="submit" value="Give invites">
+				{% endif %}
+			</form>
+			{% endif %}
 			{% endif %}
 		</div>
 		{% if ban_form %}
