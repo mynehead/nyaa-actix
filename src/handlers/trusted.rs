@@ -66,6 +66,10 @@ pub async fn request_trusted(
     cfg: web::Data<Config>,
     form: Option<web::Form<TrustedForm>>,
 ) -> Result<HttpResponse> {
+    if !cfg.trusted.applications {
+        flash::push(&session, "info", "", "Trusted applications are closed. Moderators grant trusted status.");
+        return Ok(redirect("/trusted"));
+    }
     let Some(user) = user else {
         return Ok(redirect("/login"));
     };
@@ -307,7 +311,7 @@ mod tests {
             meili: None,
             count_cache: None,
             tracker: None,
-            trusted: TrustedConfig { min_uploads: 0, min_downloads: 0, reapply_cooldown_days: 90 },
+            trusted: TrustedConfig { applications: true, min_uploads: 0, min_downloads: 0, reapply_cooldown_days: 90 },
             tickets: Default::default(),
             mfa: Default::default(),
             captcha: None,
@@ -319,12 +323,15 @@ mod tests {
 
     /// The trusted routes plus a login shortcut; returns the app and a session cookie for `user`.
     macro_rules! app {
-        ($pool:expr, $user:expr) => {{
+        ($pool:expr, $user:expr) => {
+            app!($pool, $user, config())
+        };
+        ($pool:expr, $user:expr, $config:expr) => {{
             let mut tera = Tera::new("templates/**/*").unwrap();
             crate::utils::tera_filters::register(&mut tera);
             let app = test::init_service(
                 App::new()
-                    .app_data(web::Data::new(config()))
+                    .app_data(web::Data::new($config))
                     .app_data(web::Data::new($pool.clone()))
                     .app_data(web::Data::new(tera))
                     .wrap(SessionMiddleware::new(CookieSessionStore::default(), Key::from(&[7u8; 64])))
@@ -451,5 +458,23 @@ mod tests {
         assert_eq!(res.headers().get("Location").unwrap(), "/login");
         let res = test::call_service(&app, get("/admin/trusted").to_request()).await;
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[actix_web::test]
+    #[allow(unused_assignments)]
+    async fn applications_can_be_turned_off() {
+        let pool = pool();
+        let mut cfg = config();
+        cfg.trusted.applications = false;
+        let (app, mut c) = app!(pool, 1, cfg);
+        let (_, _, page) = send!(app, c, get("/trusted"));
+        assert!(!page.contains("/trusted/request") && !page.contains("href=\"/trusted\""), "{page}");
+        assert!(page.contains("Moderators grant it"), "{page}");
+        let (status, location, _) =
+            send!(app, c, post("/trusted/request", &[("why_give_trusted", LONG), ("why_want_trusted", LONG)]));
+        assert_eq!((status, location.as_str()), (StatusCode::FOUND, "/trusted"));
+        let (_, _, page) = send!(app, c, get("/trusted"));
+        assert!(page.contains("Trusted applications are closed"), "{page}");
+        assert_eq!(TrustedApplication::list(&mut pool.get().unwrap(), TrustedListFilter::Open, 1, 20).unwrap().1, 0);
     }
 }

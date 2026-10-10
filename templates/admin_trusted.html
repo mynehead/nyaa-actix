@@ -7,6 +7,9 @@
 {% block title %}Trusted Applications :: {{ config.site_name }}{% endblock %}
 {% block body %}
 {% set base = "/admin/trusted" %}{% if list_filter %}{% set base = base ~ "/" ~ list_filter %}{% endif %}
+{% if not config.trusted_applications %}
+<div class="alert alert-info">New applications are turned off (TRUSTED_APPLICATIONS=false). Grant Trusted with "Change User Class" on the user's page.</div>
+{% endif %}
 <ul class="nav nav-tabs" role="tablist">
 	{{ self::filter_tab(name="", label="Open", list_filter=list_filter) }}
 	{{ self::filter_tab(name="new", label="New", list_filter=list_filter) }}

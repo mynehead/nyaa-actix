@@ -117,6 +117,7 @@ pub fn base_context(cfg: &Config, current_user: Option<&User>) -> tera::Context 
             "allow_password_reset": cfg.mail.password_reset().is_some(),
             "registration_mode": cfg.registration.mode,
             "captcha": cfg.captcha.is_some(),
+            "trusted_applications": cfg.trusted.applications,
         }),
     );
     let cats = nav_categories(&cfg.site_flavor);

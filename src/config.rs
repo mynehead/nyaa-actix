@@ -268,6 +268,9 @@ impl TicketConfig {
 
 #[derive(Clone, Debug)]
 pub struct TrustedConfig {
+    /// TRUSTED_APPLICATIONS: whether users may apply at /trusted/request. When off, moderators
+    /// grant Trusted through "Change User Class"; existing applications stay readable for them.
+    pub applications: bool,
     /// TRUSTED_MIN_UPLOADS: non-remake uploads needed to apply.
     pub min_uploads: i64,
     /// TRUSTED_MIN_DOWNLOADS: total downloads of those uploads needed to apply.
@@ -278,7 +281,7 @@ pub struct TrustedConfig {
 
 impl Default for TrustedConfig {
     fn default() -> Self {
-        TrustedConfig { min_uploads: 10, min_downloads: 10000, reapply_cooldown_days: 90 }
+        TrustedConfig { applications: true, min_uploads: 10, min_downloads: 10000, reapply_cooldown_days: 90 }
     }
 }
 
@@ -287,6 +290,7 @@ impl TrustedConfig {
         let num = |key: &str, default: i64| env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default);
         let d = TrustedConfig::default();
         TrustedConfig {
+            applications: env::var("TRUSTED_APPLICATIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(d.applications),
             min_uploads: num("TRUSTED_MIN_UPLOADS", d.min_uploads),
             min_downloads: num("TRUSTED_MIN_DOWNLOADS", d.min_downloads),
             reapply_cooldown_days: num("TRUSTED_REAPPLY_COOLDOWN", d.reapply_cooldown_days),

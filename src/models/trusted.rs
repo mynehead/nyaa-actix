@@ -359,7 +359,7 @@ mod tests {
     #[test]
     fn requirements_skip_remakes() {
         let mut conn = conn();
-        let cfg = TrustedConfig { min_uploads: 2, min_downloads: 100, reapply_cooldown_days: 90 };
+        let cfg = TrustedConfig { applications: true, min_uploads: 2, min_downloads: 100, reapply_cooldown_days: 90 };
         add_torrent(&mut conn, 1, 0, 60);
         add_torrent(&mut conn, 2, TorrentFlags::REMAKE.bits(), 1000);
         assert!(!satisfies_trusted_reqs(&mut conn, 1, &cfg).unwrap());
@@ -371,7 +371,7 @@ mod tests {
     #[test]
     fn review_then_accept_makes_user_trusted() {
         let mut conn = conn();
-        let cfg = TrustedConfig { min_uploads: 0, min_downloads: 0, reapply_cooldown_days: 90 };
+        let cfg = TrustedConfig { applications: true, min_uploads: 0, min_downloads: 0, reapply_cooldown_days: 90 };
         let u = user(&mut conn, 1);
         assert!(trusted_deny_reasons(&mut conn, &u, &cfg).unwrap().is_empty());
         TrustedApplication::submit(&mut conn, 1, "give", "want").unwrap();
@@ -407,7 +407,7 @@ mod tests {
     #[test]
     fn rejection_starts_cooldown() {
         let mut conn = conn();
-        let cfg = TrustedConfig { min_uploads: 0, min_downloads: 0, reapply_cooldown_days: 90 };
+        let cfg = TrustedConfig { applications: true, min_uploads: 0, min_downloads: 0, reapply_cooldown_days: 90 };
         TrustedApplication::submit(&mut conn, 1, "give", "want").unwrap();
         let app = TrustedApplication::by_id(&mut conn, 1).unwrap().unwrap();
         assert!(app.decide(&mut conn, 2, false).unwrap());

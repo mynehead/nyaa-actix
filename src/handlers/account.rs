@@ -1090,10 +1090,15 @@ pub(crate) mod tests {
     async fn repeated_failed_logins_lock_the_account_for_a_while() {
         let (pool, cfg) = (pool(), config("throttle"));
         let (app, _) = app!(pool, cfg);
-        // A user no other test logs in as: the counters are process-wide. Username and
-        // email count against the same account.
+        // A user no other test logs in as: the counters are process-wide and keyed by user id,
+        // and another test's successful login as its third user (id 3) would clear them.
+        // Username and email count against the same account.
         diesel::insert_into(users::table)
             .values(&NewUser::new("carol", Some("carol@example.com"), PASSWORD))
+            .execute(&mut pool.get().unwrap())
+            .unwrap();
+        diesel::update(users::table.filter(users::username.eq("carol")))
+            .set(users::id.eq(9_001))
             .execute(&mut pool.get().unwrap())
             .unwrap();
         for i in 0..10 {
