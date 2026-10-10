@@ -1138,6 +1138,12 @@ pub async fn edit_torrent_post(
         })
         .map_err(internal_error)?;
         crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), torrent.id);
+        flash::push(
+            &session,
+            "success",
+            "",
+            "Torrent has been successfully edited! Changes might take a few minutes to show up.",
+        );
         return Ok(redirect(&view_url));
     }
 
