@@ -10,7 +10,11 @@
 	</div>
 	<div class="row">
 		<div class="col-md-12">
-			<a href="/trusted/request" class="btn btn-success btn-lg">Request Trusted Status</a>
+			{% if config.trusted_applications %}
+				<a href="/trusted/request" class="btn btn-success btn-lg">Request Trusted Status</a>
+			{% else %}
+				<p>Trusted status is not open to applications. Moderators grant it to uploaders they know.</p>
+			{% endif %}
 		</div>
 	</div>
 </div>

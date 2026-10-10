@@ -68,7 +68,9 @@
 							<ul class="dropdown-menu">
 								<li{% if active_page is defined and active_page == "rules" %} class="active"{% endif %}><a href="/rules">Rules</a></li>
 								<li{% if active_page is defined and active_page == "help" %} class="active"{% endif %}><a href="/help">Help</a></li>
+								{% if config.trusted_applications %}
 								<li{% if active_page is defined and active_page == "trusted" %} class="active"{% endif %}><a href="/trusted">Trusted</a></li>
+								{% endif %}
 							</ul>
 						</li>
 						<li><a href="{% if rss_url is defined %}{{ rss_url }}{% else %}/?page=rss{% endif %}">RSS</a></li>
