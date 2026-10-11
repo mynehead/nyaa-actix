@@ -79,6 +79,15 @@ impl ApiKey {
         Ok(n > 0)
     }
 
+    pub fn count(conn: &mut DbConnection, user_id: i32) -> QueryResult<i64> {
+        user_api_keys::table.filter(user_api_keys::user_id.eq(user_id)).count().get_result(conn)
+    }
+
+    /// Deletes all of the user's keys (moderators, on the user page); how many there were.
+    pub fn revoke_all(conn: &mut DbConnection, user_id: i32) -> QueryResult<usize> {
+        diesel::delete(user_api_keys::table.filter(user_api_keys::user_id.eq(user_id))).execute(conn)
+    }
+
     /// Whether `key` is one of the user's keys; records the use when it is.
     pub fn check(conn: &mut DbConnection, user_id: i32, key: &str) -> QueryResult<bool> {
         let n = diesel::update(
@@ -118,6 +127,10 @@ mod tests {
         assert!(!ApiKey::revoke(&mut conn, 2, keys[0].id).unwrap(), "not b's key");
         assert!(ApiKey::revoke(&mut conn, 1, keys[0].id).unwrap());
         assert!(!ApiKey::check(&mut conn, 1, &key).unwrap(), "revoked");
+        let other = ApiKey::create(&mut conn, 1, "other").unwrap().unwrap();
+        assert_eq!(ApiKey::count(&mut conn, 1).unwrap(), 1);
+        assert_eq!(ApiKey::revoke_all(&mut conn, 1).unwrap(), 1);
+        assert!(!ApiKey::check(&mut conn, 1, &other).unwrap(), "revoked by a moderator");
 
         for _ in 0..MAX_KEYS {
             assert!(ApiKey::create(&mut conn, 2, "k").unwrap().is_some());

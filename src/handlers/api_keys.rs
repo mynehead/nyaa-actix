@@ -3,16 +3,18 @@
 
 use actix_session::Session;
 use actix_web::{web, HttpRequest, HttpResponse, Result};
+use diesel::Connection;
 use serde::Deserialize;
 use tera::Tera;
 
 use crate::auth::api_key::{ApiKey, MAX_KEYS, MAX_NAME_LEN};
+use crate::auth::policy::can_ban;
 use crate::auth::LoggedIn;
 use crate::config::Config;
 use crate::db::DbPool;
 use crate::handlers::account::redirect;
 use crate::handlers::two_factor::password_ok;
-use crate::models::User;
+use crate::models::{user_link, AdminLog, User};
 use crate::utils::context::base_context;
 use crate::utils::{flash, internal_error, with_conn};
 
@@ -98,6 +100,35 @@ pub async fn revoke(
     Ok(redirect(PAGE_URL))
 }
 
+/// "Revoke API keys" on the user page: moderators, on users they may ban.
+pub async fn moderator_revoke(
+    LoggedIn(moderator): LoggedIn,
+    session: Session,
+    pool: web::Data<DbPool>,
+    path: web::Path<String>,
+) -> Result<HttpResponse> {
+    let name = path.into_inner();
+    let user = with_conn(&pool, move |conn| User::by_username(conn, &name))
+        .await?
+        .ok_or_else(|| actix_web::error::ErrorNotFound("User not found"))?;
+    if !can_ban(&moderator, &user) {
+        return Err(actix_web::error::ErrorForbidden("Not allowed"));
+    }
+    let (moderator_id, user_id, link) = (moderator.id, user.id, user_link(&user.username));
+    let revoked = with_conn(&pool, move |conn| {
+        conn.transaction::<_, diesel::result::Error, _>(|conn| {
+            let n = ApiKey::revoke_all(conn, user_id)?;
+            if n > 0 {
+                AdminLog::add(conn, moderator_id, &format!("Revoked the API keys of {link}"))?;
+            }
+            Ok(n)
+        })
+    })
+    .await?;
+    flash::push(&session, "success", "", &format!("Revoked {revoked} API key(s) of {}.", user.username));
+    Ok(redirect(&format!("/user/{}", urlencoding::encode(&user.username))))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,5 +189,54 @@ mod tests {
         let id = ApiKey::list(&mut pool.get().unwrap(), user_id).unwrap()[0].id;
         body(post(&format!("/profile/api-keys/{id}/revoke"), &[])).await;
         assert!(!ApiKey::check(&mut pool.get().unwrap(), user_id, key).unwrap());
+    }
+
+    #[actix_web::test]
+    async fn moderators_revoke_all_keys_of_lower_users() {
+        let pool = Pool::builder().max_size(1).build(crate::db::DbManager::new(&crate::db::test_url())).unwrap();
+        let mut ids = vec![];
+        {
+            let mut conn = pool.get().unwrap();
+            crate::db::run_migrations(&mut conn).unwrap();
+            for (name, level) in [("target", 0), ("modo", 2)] {
+                let mut user = NewUser::new(name, None, "hunter22");
+                user.level = level;
+                diesel::insert_into(users::table).values(&user).execute(&mut conn).unwrap();
+                ids.push(
+                    users::table.filter(users::username.eq(name)).select(users::id).first::<i32>(&mut conn).unwrap(),
+                );
+            }
+            ApiKey::create(&mut conn, ids[0], "a").unwrap();
+            ApiKey::create(&mut conn, ids[1], "b").unwrap();
+        }
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(pool.clone()))
+                .wrap(SessionMiddleware::new(CookieSessionStore::default(), Key::from(&[7u8; 64])))
+                .route("/test-login/{id}", web::get().to(login_as))
+                .route("/user/{username}/revoke-api-keys", web::post().to(moderator_revoke)),
+        )
+        .await;
+        let revoke_as = |id: i32, target: &'static str| {
+            let app = &app;
+            async move {
+                let login =
+                    test::call_service(app, test::TestRequest::get().uri(&format!("/test-login/{id}")).to_request())
+                        .await;
+                let cookie = login.response().cookies().next().unwrap().into_owned();
+                let req = test::TestRequest::post()
+                    .uri(&format!("/user/{target}/revoke-api-keys"))
+                    .cookie(cookie)
+                    .to_request();
+                test::call_service(app, req).await.status().as_u16()
+            }
+        };
+        assert_eq!(revoke_as(ids[0], "modo").await, 403, "not a moderator");
+        assert_eq!(revoke_as(ids[1], "target").await, 302);
+        let mut conn = pool.get().unwrap();
+        assert_eq!(ApiKey::count(&mut conn, ids[0]).unwrap(), 0);
+        assert_eq!(ApiKey::count(&mut conn, ids[1]).unwrap(), 1);
+        let logged: i64 = crate::db::schema::adminlog::table.count().get_result(&mut conn).unwrap();
+        assert_eq!(logged, 1);
     }
 }

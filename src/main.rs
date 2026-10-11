@@ -172,6 +172,7 @@ async fn main() -> std::io::Result<()> {
             .route("/user/{username}/nuke/torrents", web::post().to(handlers::users::nuke_torrents_post))
             .route("/user/{username}/nuke/comments", web::post().to(handlers::users::nuke_comments_post))
             .route("/user/{username}/reset-2fa", web::post().to(handlers::two_factor::admin_reset_post))
+            .route("/user/{username}/revoke-api-keys", web::post().to(handlers::api_keys::moderator_revoke))
             .route("/user/{username}/comments", web::get().to(handlers::users::view_user_comments))
             // Account
             // Account pages sit at the root like upstream; /account/* redirects for old links

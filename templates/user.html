@@ -171,6 +171,12 @@
 						</div>
 					</form>
 					{% endif %}
+					{% if profile_user_api_keys %}
+					<hr>
+					<form method="POST" action="/user/{{ profile_user.username | urlencode }}/revoke-api-keys" onsubmit="return confirm('Revoke all {{ profile_user_api_keys }} API keys of {{ profile_user.username }}?')">
+						<input class="btn btn-warning" id="revoke_api_keys" type="submit" value="Revoke API keys ({{ profile_user_api_keys }})">
+					</form>
+					{% endif %}
 					{% if profile_user_two_factor %}
 					<hr>
 					<form method="POST" action="/user/{{ profile_user.username | urlencode }}/reset-2fa" onsubmit="return confirm('Turn off two-factor sign-in for {{ profile_user.username }}? They can then log in with the password alone.')">
