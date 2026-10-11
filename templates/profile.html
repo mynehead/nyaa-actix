@@ -31,6 +31,9 @@
 	<li role="presentation">
 		<a href="#two-factor" id="two-factor-tab" role="tab" data-toggle="tab" aria-controls="profile" aria-expanded="false">Two-factor</a>
 	</li>
+	<li role="presentation">
+		<a href="#api-keys" id="api-keys-tab" role="tab" data-toggle="tab" aria-controls="profile" aria-expanded="false">API keys</a>
+	</li>
 </ul>
 
 <div class="tab-content">
@@ -133,6 +136,14 @@
 				<p>Two-factor sign-in is <strong>off</strong>. Turn it on so that logging in also needs a code from an app on your phone.</p>
 				<a class="btn btn-primary" href="/profile/2fa">Set up two-factor sign-in</a>
 				{% endif %}
+			</div>
+		</div>
+	</div>
+	<div class="tab-pane fade" role="tabpanel" id="api-keys" aria-labelledby="api-keys-tab">
+		<div class="row">
+			<div class="form-group col-md-6">
+				<p>Upload scripts and other tools can sign in to the API with a key instead of your password.{% if two_factor %} With two-factor sign-in on, the API only accepts keys.{% endif %}</p>
+				<a class="btn btn-default" href="/profile/api-keys">Manage API keys</a>
 			</div>
 		</div>
 	</div>

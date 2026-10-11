@@ -1,7 +1,7 @@
 //! Upstream's JSON API: `/api/info/<id or hash>` and `/api/upload` (also at
 //! `/api/v2/upload`), with the same fields so its client scripts work unchanged. Requests
-//! sign in with HTTP Basic auth (username or email, and password) and never use the
-//! session cookie, which is why the CSRF guard leaves `/api/` alone. No answer carries
+//! sign in with HTTP Basic auth (username or email, and password or API key) and never use
+//! the session cookie, which is why the CSRF guard leaves `/api/` alone. No answer carries
 //! `WWW-Authenticate`, so browsers never remember the credentials and send them along
 //! with a cross-site form.
 
@@ -16,6 +16,8 @@ use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::auth::api_key::{self, ApiKey};
+use crate::auth::mfa::UserMfa;
 use crate::auth::Permission;
 use crate::config::Config;
 use crate::db::schema::{nyaa_main_categories, nyaa_statistics};
@@ -25,17 +27,20 @@ use crate::handlers::torrents::{create_torrent, read_field, EditForm, Upload, MA
 use crate::models::{password_matches, MainCategory, Statistic, Torrent, User};
 use crate::storage::{Kind, Storage};
 use crate::torrent::FileNode;
-use crate::utils::{client_ip, internal_error};
+use crate::utils::{client_ip, internal_error, with_conn};
 
 fn error(status: StatusCode, errors: serde_json::Value) -> HttpResponse {
     HttpResponse::build(status).json(json!({ "errors": errors }))
 }
 
-/// The user named by the request's Basic auth, or the error to answer with. Failed
-/// passwords count towards the same limits as the login form.
+/// The user named by the request's Basic auth, or the error to answer with. The password
+/// may be one of the user's API keys; the account password itself is refused for accounts
+/// with two-factor sign-in (or that must have it), which need a key. Failed passwords count
+/// towards the same limits as the login form.
 /// The error response is boxed: `HttpResponse` is large.
-async fn api_user(req: &HttpRequest, pool: &DbPool) -> std::result::Result<User, Box<HttpResponse>> {
+async fn api_user(req: &HttpRequest, pool: &DbPool, cfg: &Config) -> std::result::Result<User, Box<HttpResponse>> {
     let bad = || Box::new(error(StatusCode::FORBIDDEN, json!(["Bad authorization"])));
+    let server_error = |e: actix_web::Error| Box::new(HttpResponse::from_error(e));
     let credentials = req
         .headers()
         .get(header::AUTHORIZATION)
@@ -47,49 +52,65 @@ async fn api_user(req: &HttpRequest, pool: &DbPool) -> std::result::Result<User,
         return Err(bad());
     };
 
-    let mut conn = pool.get().map_err(|e| Box::new(HttpResponse::from_error(internal_error(e))))?;
-    let user = User::by_username_or_email(&mut conn, username)
-        .map_err(|e| Box::new(HttpResponse::from_error(internal_error(e))))?;
-    drop(conn);
+    let name = username.to_string();
+    let user = with_conn(pool, move |conn| User::by_username_or_email(conn, &name)).await.map_err(server_error)?;
+
+    // A key needs no slow hash and no failure limit: 192 random bits can't be guessed
+    let by_key = match &user {
+        Some(u) if api_key::looks_like_key(password) => {
+            let (user_id, key) = (u.id, password.to_string());
+            with_conn(pool, move |conn| ApiKey::check(conn, user_id, &key)).await.map_err(server_error)?
+        }
+        _ => false,
+    };
 
     let ip = crate::handlers::account::client_key(req);
     let account = match &user {
         Some(u) => format!("user:{}", u.id),
         None => format!("name:{}", username.trim().to_lowercase()),
     };
-    if LOGIN_FAILURES_BY_IP.is_blocked(&ip) || LOGIN_FAILURES_BY_ACCOUNT.is_blocked(&account) {
-        return Err(Box::new(error(
-            StatusCode::TOO_MANY_REQUESTS,
-            json!(["Too many failed login attempts. Try again in 15 minutes."]),
-        )));
-    }
-    let (checked, password) = (user.clone(), password.to_string());
-    let password_ok = web::block(move || password_matches(checked.as_ref(), &password))
-        .await
-        .map_err(|e| Box::new(HttpResponse::from_error(internal_error(e))))?;
-    match user {
-        Some(u) if password_ok => {
-            LOGIN_FAILURES_BY_ACCOUNT.clear(&account);
-            if u.is_banned() {
-                Err(Box::new(error(StatusCode::FORBIDDEN, json!(["Your account has been banned."]))))
-            } else if !u.is_active() {
-                Err(Box::new(error(StatusCode::FORBIDDEN, json!(["Your account is not active."]))))
-            } else {
-                Ok(u)
-            }
+    let password_ok = by_key || {
+        if LOGIN_FAILURES_BY_IP.is_blocked(&ip) || LOGIN_FAILURES_BY_ACCOUNT.is_blocked(&account) {
+            return Err(Box::new(error(
+                StatusCode::TOO_MANY_REQUESTS,
+                json!(["Too many failed login attempts. Try again in 15 minutes."]),
+            )));
         }
-        _ => {
-            LOGIN_FAILURES_BY_IP.hit(&ip);
-            LOGIN_FAILURES_BY_ACCOUNT.hit(&account);
-            Err(Box::new(error(StatusCode::FORBIDDEN, json!(["Incorrect username or password"]))))
+        let (checked, password) = (user.clone(), password.to_string());
+        web::block(move || password_matches(checked.as_ref(), &password))
+            .await
+            .map_err(|e| server_error(internal_error(e)))?
+    };
+    let Some(u) = user.filter(|_| password_ok) else {
+        LOGIN_FAILURES_BY_IP.hit(&ip);
+        LOGIN_FAILURES_BY_ACCOUNT.hit(&account);
+        return Err(Box::new(error(StatusCode::FORBIDDEN, json!(["Incorrect username or password"]))));
+    };
+    LOGIN_FAILURES_BY_ACCOUNT.clear(&account);
+    if u.is_banned() {
+        return Err(Box::new(error(StatusCode::FORBIDDEN, json!(["Your account has been banned."]))));
+    }
+    if !u.is_active() {
+        return Err(Box::new(error(StatusCode::FORBIDDEN, json!(["Your account is not active."]))));
+    }
+    if !by_key {
+        let user_id = u.id;
+        let two_factor = cfg.mfa.required_for(u.level())
+            || with_conn(pool, move |conn| UserMfa::is_enabled(conn, user_id)).await.map_err(server_error)?;
+        if two_factor {
+            return Err(Box::new(error(
+                StatusCode::FORBIDDEN,
+                json!(["Accounts with two-factor sign-in need an API key. Make one on your profile page."]),
+            )));
         }
     }
+    Ok(u)
 }
 
 /// Unwraps [`api_user`] inside a handler.
 macro_rules! api_user {
-    ($req:expr, $pool:expr) => {
-        match api_user($req, $pool).await {
+    ($req:expr, $pool:expr, $cfg:expr) => {
+        match api_user($req, $pool, $cfg).await {
             Ok(user) => user,
             Err(response) => return Ok(*response),
         }
@@ -149,7 +170,7 @@ pub async fn upload(
     storage: web::Data<Storage>,
     mut payload: Multipart,
 ) -> Result<HttpResponse> {
-    let user = api_user!(&req, &pool);
+    let user = api_user!(&req, &pool, &cfg);
 
     let (mut torrent_file, mut torrent_data) = (None, None);
     let mut fields = 0;
@@ -200,7 +221,7 @@ pub async fn info(
     storage: web::Data<Storage>,
     path: web::Path<String>,
 ) -> Result<HttpResponse> {
-    let viewer = api_user!(&req, &pool);
+    let viewer = api_user!(&req, &pool, &cfg);
     let invalid = || Ok(error(StatusCode::BAD_REQUEST, json!(["Query was not a valid id or hash."])));
 
     let query = path.into_inner().trim().to_ascii_lowercase();
@@ -512,6 +533,22 @@ mod tests {
             );
         }
         assert_eq!(call(atest::TestRequest::get().uri(&format!("/api/info/{id}")).to_request()).await.0, 403);
+
+        // With two-factor on, the password no longer works; an API key does, for its owner only
+        let key = {
+            let mut conn = pool.get().unwrap();
+            UserMfa::enable(&mut conn, 904, &[0; 32], 0, &[]).unwrap();
+            ApiKey::create(&mut conn, 904, "script").unwrap().unwrap()
+        };
+        let (status, refused) = call(get(format!("/api/info/{id}"), "other")).await;
+        assert_eq!(status, 403);
+        assert!(refused["errors"][0].as_str().unwrap().contains("need an API key"), "{refused}");
+        let with_key = |user: &str, key: &str| {
+            atest::TestRequest::get().uri(&format!("/api/info/{id}")).insert_header(basic(user, key)).to_request()
+        };
+        assert_eq!(call(with_key("other", &key)).await.0, 200);
+        assert_eq!(call(with_key("up", &key)).await.0, 403, "someone else's key");
+        assert_eq!(call(with_key("other", &api_key::new_key())).await.0, 403);
 
         // The feed lists it with upstream's nyaa: fields
         macro_rules! feed {

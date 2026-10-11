@@ -168,7 +168,7 @@ pub async fn page(
 }
 
 /// Checks the password off the async workers; wrong ones count like failed logins.
-async fn password_ok(req: &HttpRequest, user: &User, password: &str) -> Result<bool> {
+pub(crate) async fn password_ok(req: &HttpRequest, user: &User, password: &str) -> Result<bool> {
     let account = format!("user:{}", user.id);
     if LOGIN_FAILURES_BY_ACCOUNT.is_blocked(&account) || LOGIN_FAILURES_BY_IP.is_blocked(&client_key(req)) {
         return Ok(false);
