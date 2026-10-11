@@ -407,7 +407,8 @@ mod tests {
                 "INSERT INTO users (id, username, email, password_hash, status, level) VALUES \
                  (901, 'up', 'up@example.com', '{hash}', 1, 0), (902, 'mod', NULL, '{hash}', 1, 2), \
                  (903, 'gone', NULL, '{hash}', 2, 0), (904, 'other', NULL, '{hash}', 1, 0), \
-                 (905, 'limited', NULL, '{hash}', 1, -1)"
+                 (905, 'limited', NULL, '{hash}', 1, -1), \\
+                 (906, 'idle', NULL, '{hash}', 0, 0)"
             ))
             .execute(&mut conn)
             .unwrap();
@@ -595,6 +596,14 @@ mod tests {
         // Anonymous uploads don't show under their uploader's name, as on profiles
         assert!(!feed!("/?page=rss&u=up").1.contains("<item>"));
         assert_eq!(feed!("/?page=rss&user=nobody").0, 404);
+
+        // Inactive accounts are refused; ten wrong passwords lock the account
+        let idle = |password: &str| post("/api/upload", Some(("idle", password)), body(Some(data), Some(&file)));
+        assert_eq!(call(idle("secret1")).await, (403, json!({"errors": ["Your account is not active."]})));
+        for _ in 0..10 {
+            assert_eq!(call(idle("wrong")).await.0, 403);
+        }
+        assert_eq!(call(idle("secret1")).await.0, 429);
         std::fs::remove_dir_all(dir).ok();
     }
 }
