@@ -28,7 +28,17 @@ use tera::Tera;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
+    // Load .env before the logger reads RUST_LOG and LOG_FILE from it.
+    dotenvy::dotenv().ok();
+    let mut logger = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
+    if let Some(path) = std::env::var_os("LOG_FILE").filter(|p| !p.is_empty()) {
+        let file = std::fs::OpenOptions::new().create(true).append(true).open(&path).unwrap_or_else(|e| {
+            eprintln!("Can't open LOG_FILE {}: {e}", path.to_string_lossy());
+            std::process::exit(1);
+        });
+        logger.target(env_logger::Target::Pipe(Box::new(file)));
+    }
+    logger.init();
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(result) = cli::run(&args).await {
