@@ -5,6 +5,7 @@
 use actix_session::Session;
 use actix_web::http::StatusCode;
 use actix_web::{web, HttpResponse, Result};
+use diesel::Connection;
 use serde::Deserialize;
 use tera::Tera;
 
@@ -295,14 +296,14 @@ pub async fn view_ticket(
 
 #[derive(Debug, Deserialize)]
 pub struct TicketActionForm {
-    /// reply, close or reopen
+    /// reply, close, reopen or delete
     pub action: String,
     #[serde(default)]
     pub message: String,
 }
 
 /// POST /tickets/{id}: reply, close or reopen. The opener and staff may do all three; staff
-/// actions on someone else's ticket go to the admin log.
+/// actions on someone else's ticket go to the admin log. Admins can also delete tickets.
 pub async fn ticket_post(
     LoggedIn(user): LoggedIn,
     session: Session,
@@ -344,6 +345,18 @@ pub async fn ticket_post(
             ("Reopened", "Ticket reopened.")
         }
         "close" | "reopen" => return Ok(redirect(&here)),
+        "delete" if user.can(Permission::DeleteTickets) => {
+            let opener = User::by_id(&mut conn, ticket.user_id).map_err(err)?;
+            let opener = opener.map_or_else(|| "[deleted user]".to_string(), |u| user_link(&u.username));
+            let log = format!("Ticket #{}: Deleted ticket by {opener}", ticket.id);
+            conn.transaction::<_, diesel::result::Error, _>(|conn| {
+                ticket.delete(conn)?;
+                AdminLog::add(conn, user.id, &log)
+            })
+            .map_err(err)?;
+            flash::push(&session, "success", "", "Ticket deleted.");
+            return Ok(redirect("/admin/tickets"));
+        }
         _ => return Err(actix_web::error::ErrorBadRequest("Unknown action")),
     };
     if as_staff {
@@ -704,6 +717,40 @@ mod tests {
         }
         let (app, mut cookie) = app!(pool, config(3, 20), Some(3));
         let (status, _) = send!(app, get("/admin/tickets/bogus"), &mut cookie);
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[actix_web::test]
+    async fn only_admins_delete_tickets() {
+        let pool = pool();
+        diesel::sql_query(
+            "INSERT INTO users (id, username, password_hash, status, level) VALUES (4, 'admin', 'x', 1, 3)",
+        )
+        .execute(&mut pool.get().unwrap())
+        .unwrap();
+        let (app, mut alice) = app!(pool, config(3, 20), Some(1));
+        let form = [("category", "other"), ("subject", "Please delete"), ("message", "Hello")];
+        send!(app, post("/tickets/new", &form), &mut alice);
+        let (_, html) = send!(app, get("/tickets/1"), &mut alice);
+        assert!(!html.contains("Delete ticket"), "{html}");
+        // Neither the opener nor a moderator can delete it
+        let (status, _) = send!(app, post("/tickets/1", &[("action", "delete")]), &mut alice);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (app3, mut moder) = app!(pool, config(3, 20), Some(3));
+        let (_, html) = send!(app3, get("/tickets/1"), &mut moder);
+        assert!(!html.contains("Delete ticket"), "{html}");
+        let (status, _) = send!(app3, post("/tickets/1", &[("action", "delete")]), &mut moder);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(count(&pool), (1, 1));
+
+        let (app4, mut admin) = app!(pool, config(3, 20), Some(4));
+        let (_, html) = send!(app4, get("/tickets/1"), &mut admin);
+        assert!(html.contains("value=\"delete\""), "{html}");
+        let (status, _) = send!(app4, post("/tickets/1", &[("action", "delete")]), &mut admin);
+        assert_eq!(status, StatusCode::FOUND);
+        assert_eq!(count(&pool), (0, 0));
+        assert_eq!(log_lines(&pool), vec!["Ticket #1: Deleted ticket by [alice](/user/alice)"]);
+        let (status, _) = send!(app, get("/tickets/1"), &mut alice);
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
