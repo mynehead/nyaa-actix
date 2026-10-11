@@ -4,3 +4,4 @@ pub mod ip_ban;
 pub mod ip_range_ban;
 pub mod maintenance;
 pub mod mfa_required;
+pub mod request_log;
