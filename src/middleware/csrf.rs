@@ -73,42 +73,7 @@ mod tests {
     }
 
     async fn status(site_url: &str, req: atest::TestRequest) -> u16 {
-        let cfg = Config {
-            database_url: String::new(),
-            secret_key: String::new(),
-            site_name: "Nyaa".into(),
-            global_site_name: "Nyaa".into(),
-            site_flavor: "nyaa".into(),
-            sister_site_url: None,
-            results_per_page: 75,
-            max_pages: 0,
-            torrent_storage_path: String::new(),
-            avatar_storage_path: String::new(),
-            enable_gravatar: false,
-            show_stats: true,
-            max_files_view: 1000,
-            required_announce_url: None,
-            gravatar_url: crate::config::DEFAULT_GRAVATAR_URL.into(),
-            gravatar_sha256: false,
-            maintenance: Default::default(),
-            raid_mode: Default::default(),
-            registration: Default::default(),
-            site_url: site_url.into(),
-            tracker_urls: vec![],
-            trusted_proxies: vec![],
-            meili: None,
-            count_cache: None,
-            tracker: None,
-            ratelimit_account_age: 0,
-            editing_time_limit: 0,
-            upload_limit: Default::default(),
-            mail: Default::default(),
-            trusted: Default::default(),
-            tickets: Default::default(),
-            mfa: Default::default(),
-            captcha: None,
-            email_blacklist: Default::default(),
-        };
+        let cfg = Config { site_url: site_url.into(), ..Config::for_tests() };
         let app = atest::init_service(
             App::new()
                 .app_data(web::Data::new(cfg))

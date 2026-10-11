@@ -212,18 +212,29 @@ impl User {
         Ok(n > 0)
     }
 
+    /// The user with this email address, ignoring case, as upstream's MySQL collation does.
     pub fn by_email(conn: &mut DbConnection, addr: &str) -> QueryResult<Option<User>> {
-        users::table.filter(users::email.eq(addr)).first(conn).optional()
+        // The exact match too: SQLite's lower() only folds ASCII, Rust's every letter
+        users::table
+            .filter(users::email.eq(addr).or(lower_nullable(users::email).eq(addr.to_lowercase())))
+            .first(conn)
+            .optional()
     }
 
+    /// Login lookup: an exact name first, then the name or email address ignoring case.
     pub fn by_username_or_email(conn: &mut DbConnection, val: &str) -> QueryResult<Option<User>> {
-        let by_name = users::table.filter(users::username.eq(val)).first(conn).optional()?;
+        let by_name = User::by_username(conn, val)?;
         if by_name.is_some() {
             return Ok(by_name);
         }
-        users::table.filter(users::email.eq(val)).first(conn).optional()
+        if let Some(user) = User::by_username_ignoring_case(conn, val)? {
+            return Ok(Some(user));
+        }
+        User::by_email(conn, val)
     }
 }
+
+diesel::define_sql_function!(#[sql_name = "lower"] fn lower_nullable(x: diesel::sql_types::Nullable<diesel::sql_types::Text>) -> diesel::sql_types::Nullable<diesel::sql_types::Text>);
 
 #[derive(Debug, Insertable)]
 #[diesel(table_name = users)]
@@ -278,6 +289,24 @@ mod tests {
         // Tera filters read users back from that JSON
         let back: User = serde_json::from_value(json).unwrap();
         assert_eq!(back.username, "alice");
+    }
+
+    #[test]
+    fn email_and_login_lookups_ignore_case() {
+        let pool =
+            diesel::r2d2::Pool::builder().max_size(1).build(crate::db::DbManager::new(&crate::db::test_url())).unwrap();
+        let conn = &mut pool.get().unwrap();
+        crate::db::run_migrations(conn).unwrap();
+        diesel::insert_into(users::table)
+            .values(&NewUser::new("Alice", Some("Alice@Example.com"), "x"))
+            .execute(conn)
+            .unwrap();
+        let name = |u: Option<User>| u.map(|u| u.username);
+        assert_eq!(name(User::by_email(conn, "alice@example.COM").unwrap()).as_deref(), Some("Alice"));
+        assert_eq!(name(User::by_email(conn, "Alice@Example.com").unwrap()).as_deref(), Some("Alice"));
+        assert_eq!(name(User::by_username_or_email(conn, "alice").unwrap()).as_deref(), Some("Alice"));
+        assert_eq!(name(User::by_username_or_email(conn, "ALICE@example.com").unwrap()).as_deref(), Some("Alice"));
+        assert!(User::by_email(conn, "bob@example.com").unwrap().is_none());
     }
 
     #[test]

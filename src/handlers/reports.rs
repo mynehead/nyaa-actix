@@ -11,6 +11,7 @@ use crate::auth::{CurrentUser, Moderator, Permission};
 use crate::config::Config;
 use crate::db::schema::nyaa_torrents;
 use crate::db::DbPool;
+use crate::handlers::account::redirect;
 use crate::models::{
     torrent_link, user_link, validate_reason, AdminLog, Group, GroupReport, Report, Torrent, TorrentFlags, User,
     REPORTS_PER_PAGE, REPORT_INVALID, REPORT_VALID,
@@ -247,10 +248,6 @@ fn reporter_link(conn: &mut crate::db::DbConnection, user_id: Option<i32>) -> Qu
     Ok(user.map_or_else(|| "[deleted user]".to_string(), |u| user_link(&u.username)))
 }
 
-fn redirect(location: &str) -> HttpResponse {
-    HttpResponse::Found().insert_header(("Location", location)).finish()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,9 +290,6 @@ mod tests {
         Config {
             torrent_storage_path: storage.to_string_lossy().into_owned(),
             ratelimit_account_age: account_age,
-            editing_time_limit: 0,
-            upload_limit: Default::default(),
-            mail: Default::default(),
             ..Config::for_tests()
         }
     }

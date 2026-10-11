@@ -16,8 +16,9 @@ use crate::search::search;
 use crate::utils::context::base_context;
 use crate::utils::context::SearchState;
 use crate::utils::pagination::Pagination;
-use crate::utils::{flash, internal_error, sanitize_text, unpack_ip};
+use crate::utils::{flash, internal_error, sanitize_text, unpack_ip, with_conn};
 use diesel::prelude::*;
+use diesel::sql_types::Integer;
 
 #[derive(Debug, Deserialize)]
 pub struct UserSearchParams {
@@ -353,14 +354,26 @@ fn nuke_target(
     pool: &DbPool,
     username: &str,
 ) -> Result<(User, User, diesel::r2d2::PooledConnection<crate::db::DbManager>)> {
-    let mut conn = pool.get().map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut conn = pool.get().map_err(internal_error)?;
     let user = User::by_username(&mut conn, username)
-        .map_err(actix_web::error::ErrorInternalServerError)?
+        .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("User not found"))?;
     if !admin.can(Permission::NukeUsers) || !can_ban(&admin, &user) {
         return Err(actix_web::error::ErrorForbidden("Not allowed"));
     }
     Ok((admin, user, conn))
+}
+
+diesel::infix_operator!(BitOr, " | ", Integer);
+
+/// Pushes the nuked torrents to Meilisearch in batches, off the request threads.
+async fn reindex(pool: &DbPool, cfg: &web::Data<Config>, ids: Vec<i32>) -> Result<()> {
+    let cfg = cfg.clone();
+    with_conn(pool, move |conn| {
+        crate::search::index::torrents_changed(conn, cfg.meili.as_ref(), &ids);
+        Ok::<_, diesel::result::Error>(())
+    })
+    .await
 }
 
 /// "Nuke Torrents": deletes and bans every torrent of the user, as upstream's
@@ -375,17 +388,14 @@ pub async fn nuke_torrents_post(
     let (admin, user, mut conn) = nuke_target(admin, &pool, &path.into_inner())?;
     let ids: Vec<i32> = conn
         .transaction::<_, diesel::result::Error, _>(|conn| {
-            let torrents: Vec<(i32, i32)> = nyaa_torrents::table
+            let ids: Vec<i32> = nyaa_torrents::table
                 .filter(nyaa_torrents::uploader_id.eq(user.id))
-                .select((nyaa_torrents::id, nyaa_torrents::flags))
+                .select(nyaa_torrents::id)
                 .load(conn)?;
             let banned = (TorrentFlags::DELETED | TorrentFlags::BANNED).bits();
-            for &(id, flags) in &torrents {
-                diesel::update(nyaa_torrents::table.find(id))
-                    .set(nyaa_torrents::flags.eq(flags | banned))
-                    .execute(conn)?;
-            }
-            let ids: Vec<i32> = torrents.into_iter().map(|(id, _)| id).collect();
+            diesel::update(nyaa_torrents::table.filter(nyaa_torrents::uploader_id.eq(user.id)))
+                .set(nyaa_torrents::flags.eq(BitOr::new(nyaa_torrents::flags, banned.into_sql::<Integer>())))
+                .execute(conn)?;
             diesel::update(nyaa_statistics::table.filter(nyaa_statistics::torrent_id.eq_any(&ids)))
                 .set((nyaa_statistics::seed_count.eq(0), nyaa_statistics::leech_count.eq(0)))
                 .execute(conn)?;
@@ -398,11 +408,12 @@ pub async fn nuke_torrents_post(
             }
             Ok(ids)
         })
-        .map_err(actix_web::error::ErrorInternalServerError)?;
-    for id in ids {
-        crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), id);
+        .map_err(internal_error)?;
+    drop(conn);
+    for &id in &ids {
         crate::tracker::torrent_changed(cfg.tracker.as_ref(), id);
     }
+    reindex(&pool, &cfg, ids).await?;
     flash::push(&session, "success", "", &format!("Torrents of {} have been nuked.", user.username));
     Ok(HttpResponse::SeeOther().insert_header(("Location", format!("/user/{}", user.username))).finish())
 }
@@ -438,10 +449,9 @@ pub async fn nuke_comments_post(
             }
             Ok(torrent_ids)
         })
-        .map_err(actix_web::error::ErrorInternalServerError)?;
-    for id in torrent_ids {
-        crate::search::index::torrent_changed(&mut conn, cfg.meili.as_ref(), id);
-    }
+        .map_err(internal_error)?;
+    drop(conn);
+    reindex(&pool, &cfg, torrent_ids).await?;
     flash::push(&session, "success", "", &format!("Comments of {} have been nuked.", user.username));
     Ok(HttpResponse::SeeOther().insert_header(("Location", format!("/user/{}", user.username))).finish())
 }
@@ -545,42 +555,7 @@ mod tests {
     }
 
     fn config() -> Config {
-        Config {
-            database_url: String::new(),
-            secret_key: String::new(),
-            site_name: "Nyaa".into(),
-            global_site_name: "Nyaa".into(),
-            site_flavor: "nyaa".into(),
-            sister_site_url: None,
-            results_per_page: 75,
-            max_pages: 0,
-            torrent_storage_path: String::new(),
-            avatar_storage_path: String::new(),
-            enable_gravatar: false,
-            show_stats: true,
-            max_files_view: 1000,
-            required_announce_url: None,
-            gravatar_url: crate::config::DEFAULT_GRAVATAR_URL.into(),
-            gravatar_sha256: false,
-            maintenance: Default::default(),
-            raid_mode: Default::default(),
-            registration: Default::default(),
-            site_url: String::new(),
-            tracker_urls: vec![],
-            trusted_proxies: vec![],
-            meili: None,
-            count_cache: None,
-            tracker: None,
-            ratelimit_account_age: 0,
-            editing_time_limit: 0,
-            upload_limit: Default::default(),
-            mail: Default::default(),
-            trusted: Default::default(),
-            tickets: Default::default(),
-            mfa: Default::default(),
-            captcha: None,
-            email_blacklist: Default::default(),
-        }
+        Config::for_tests()
     }
 
     macro_rules! app {

@@ -11,6 +11,7 @@ use tera::Tera;
 use crate::auth::{CurrentUser, LoggedIn, Moderator, Permission};
 use crate::config::{Config, TicketConfig};
 use crate::db::{DbConnection, DbPool};
+use crate::handlers::account::redirect;
 use crate::models::{
     parse_torrent_ids, parse_usernames, user_link, validate_message, validate_subject, AdminLog, Ticket,
     TicketCategory, TicketFilter, Torrent, User, TICKETS_PER_PAGE, TICKET_CATEGORIES, TICKET_CLOSED,
@@ -28,10 +29,6 @@ fn render(tmpl: &Tera, name: &str, ctx: &tera::Context, status: StatusCode) -> R
 /// `{"torrent": "Torrent Report", ...}` for the ticket lists.
 fn category_titles() -> std::collections::HashMap<&'static str, &'static str> {
     TICKET_CATEGORIES.iter().map(|c| (c.key, c.title)).collect()
-}
-
-fn redirect(location: &str) -> HttpResponse {
-    HttpResponse::Found().insert_header(("Location", location)).finish()
 }
 
 /// "24 hours", "1 hour", "90 minutes": a rate-limit window for messages.

@@ -125,7 +125,7 @@ impl Torrent {
             && info.len() > info.find("://").unwrap() + 3
             && !info.chars().any(|c| "<>\"".contains(c) || c.is_whitespace())
         {
-            let text = percent_encoding::percent_decode_str(info).decode_utf8_lossy();
+            let text = String::from_utf8_lossy(&urlencoding::decode_binary(info.as_bytes())).into_owned();
             return format!("<a rel=\"noopener noreferrer nofollow\" href=\"{}\">{}</a>", escape(info), escape(&text));
         }
         escape(info)
