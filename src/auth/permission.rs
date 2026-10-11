@@ -30,6 +30,8 @@ pub enum Permission {
     BanIpRanges,
     /// Read, answer, close and reopen every user's support tickets (/admin/tickets).
     HandleTickets,
+    /// Delete support tickets for good, with their messages (admins only; staff otherwise close them).
+    DeleteTickets,
     /// Delete other users' comments (upstream: superadmins only).
     DeleteComments,
     /// Upload without the new-account upload rate limit (upstream: trusted users).
@@ -52,7 +54,7 @@ pub enum Permission {
 }
 
 impl Permission {
-    pub const ALL: [Permission; 20] = [
+    pub const ALL: [Permission; 21] = [
         Permission::SetTrustedFlag,
         Permission::ModerateTorrents,
         Permission::BanUsers,
@@ -65,6 +67,7 @@ impl Permission {
         Permission::NukeUsers,
         Permission::BanIpRanges,
         Permission::HandleTickets,
+        Permission::DeleteTickets,
         Permission::DeleteComments,
         Permission::SkipUploadLimit,
         Permission::SkipAccountAge,
@@ -85,9 +88,8 @@ impl UserLevel {
             SetTrustedFlag | SkipUploadLimit => UserLevel::Trusted,
             ModerateTorrents | BanUsers | ViewAdminPages | CreateGroups | ChangeUserClass | HandleTickets
             | CreateInvites | MarkBest | SkipAccountAge => UserLevel::Moderator,
-            SeeIps | DecideTrusted | GrantModerator | NukeUsers | BanIpRanges | DeleteComments | ResetTwoFactor => {
-                UserLevel::SuperAdmin
-            }
+            SeeIps | DecideTrusted | GrantModerator | NukeUsers | BanIpRanges | DeleteTickets | DeleteComments
+            | ResetTwoFactor => UserLevel::SuperAdmin,
         };
         self >= needed
     }

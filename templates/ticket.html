@@ -71,5 +71,10 @@
 		<button type="submit" name="action" value="reopen" class="btn btn-default btn-sm">Reopen ticket</button>
 	</form>
 	{% endif %}
+	{% if can.delete_tickets %}
+	<form method="POST" action="/tickets/{{ ticket.id }}" class="ticket-status-form" onsubmit="return confirm('Delete ticket #{{ ticket.id }} and all its messages? This cannot be undone.');">
+		<button type="submit" name="action" value="delete" class="btn btn-danger btn-sm">Delete ticket</button>
+	</form>
+	{% endif %}
 </div>
 {% endblock %}

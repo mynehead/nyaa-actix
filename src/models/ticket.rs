@@ -378,6 +378,11 @@ impl Ticket {
             .map(|_| ())
     }
 
+    /// Deletes the ticket; its messages and torrent and user lists go with it (ON DELETE CASCADE).
+    pub fn delete(&self, conn: &mut DbConnection) -> QueryResult<()> {
+        diesel::delete(support_tickets::table.find(self.id)).execute(conn).map(|_| ())
+    }
+
     /// Tickets the user opened since `since`, for the rate limit.
     pub fn opened_since(conn: &mut DbConnection, user_id: i32, since: NaiveDateTime) -> QueryResult<i64> {
         support_tickets::table
