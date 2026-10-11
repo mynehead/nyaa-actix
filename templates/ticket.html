@@ -58,7 +58,7 @@
 	<form method="POST" action="/tickets/{{ ticket.id }}">
 		<div class="form-group">
 			<label class="control-label" for="message">Reply</label>
-			<textarea class="form-control" id="message" name="message" rows="6" maxlength="65535" required>{{ message }}</textarea>
+			<textarea class="form-control" id="message" name="message" rows="6" maxlength="500" required>{{ message }}</textarea>
 		</div>
 		<button type="submit" name="action" value="reply" class="btn btn-success">Send reply</button>
 	</form>
