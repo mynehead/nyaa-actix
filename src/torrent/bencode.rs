@@ -20,6 +20,8 @@ pub enum BencodeError {
     InvalidLength,
     #[error("Nesting deeper than {MAX_DEPTH} levels")]
     TooDeep,
+    #[error("Invalid file size")]
+    InvalidSize,
 }
 
 /// Real torrents nest a handful of levels; the cap stops crafted input
