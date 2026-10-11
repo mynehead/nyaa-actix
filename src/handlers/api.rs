@@ -407,7 +407,7 @@ mod tests {
                 "INSERT INTO users (id, username, email, password_hash, status, level) VALUES \
                  (901, 'up', 'up@example.com', '{hash}', 1, 0), (902, 'mod', NULL, '{hash}', 1, 2), \
                  (903, 'gone', NULL, '{hash}', 2, 0), (904, 'other', NULL, '{hash}', 1, 0), \
-                 (905, 'limited', NULL, '{hash}', 1, -1), \\
+                 (905, 'limited', NULL, '{hash}', 1, -1), \
                  (906, 'idle', NULL, '{hash}', 0, 0)"
             ))
             .execute(&mut conn)

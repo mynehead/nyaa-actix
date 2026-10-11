@@ -25,7 +25,7 @@
 //! `nyaa-actix reset-2fa <username>` turns off the user's two-factor sign-in, for an admin
 //! who lost both the authenticator and the recovery codes. The admin log records it.
 //!
-//! `nyaa-actix set-level <username> <regular|trusted|moderator|admin>` changes an existing
+//! `nyaa-actix set-level <username> <limited|regular|trusted|moderator|admin>` changes an existing
 //! account's level, for example to make yourself admin. The admin log records it.
 
 use diesel::prelude::*;
@@ -41,7 +41,7 @@ const USAGE: &str =
        nyaa-actix reindex
        nyaa-actix unban-ip-range <range>
        nyaa-actix reset-2fa <username>
-       nyaa-actix set-level <username> <regular|trusted|moderator|admin>";
+       nyaa-actix set-level <username> <limited|regular|trusted|moderator|admin>";
 
 /// Runs the subcommand named in `args` (program name already stripped).
 /// Returns None when there is no subcommand, so the caller starts the server.
