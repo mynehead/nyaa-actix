@@ -34,6 +34,9 @@ pub enum Permission {
     DeleteComments,
     /// Upload without the new-account upload rate limit (upstream: trusted users).
     SkipUploadLimit,
+    /// Report torrents and groups from an account younger than RATELIMIT_ACCOUNT_AGE
+    /// (staff; upstream has no exemption).
+    SkipAccountAge,
     /// Turn off a lower-ranked user's two-factor sign-in, for someone who lost their
     /// authenticator and recovery codes. Not moderators: a taken-over moderator account
     /// must not be able to strip others' second factor.
@@ -49,7 +52,7 @@ pub enum Permission {
 }
 
 impl Permission {
-    pub const ALL: [Permission; 19] = [
+    pub const ALL: [Permission; 20] = [
         Permission::SetTrustedFlag,
         Permission::ModerateTorrents,
         Permission::BanUsers,
@@ -64,6 +67,7 @@ impl Permission {
         Permission::HandleTickets,
         Permission::DeleteComments,
         Permission::SkipUploadLimit,
+        Permission::SkipAccountAge,
         Permission::ResetTwoFactor,
         Permission::CreateInvites,
         Permission::MarkBest,
@@ -80,7 +84,7 @@ impl UserLevel {
             Upload | UseApiKeys => UserLevel::Regular,
             SetTrustedFlag | SkipUploadLimit => UserLevel::Trusted,
             ModerateTorrents | BanUsers | ViewAdminPages | CreateGroups | ChangeUserClass | HandleTickets
-            | CreateInvites | MarkBest => UserLevel::Moderator,
+            | CreateInvites | MarkBest | SkipAccountAge => UserLevel::Moderator,
             SeeIps | DecideTrusted | GrantModerator | NukeUsers | BanIpRanges | DeleteComments | ResetTwoFactor => {
                 UserLevel::SuperAdmin
             }
@@ -136,6 +140,7 @@ mod tests {
                 ChangeUserClass,
                 HandleTickets,
                 SkipUploadLimit,
+                SkipAccountAge,
                 CreateInvites,
                 MarkBest,
                 Upload,

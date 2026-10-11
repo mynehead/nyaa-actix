@@ -21,9 +21,10 @@ use crate::utils::flash;
 use crate::utils::pagination::Pagination;
 
 /// Whether `user` may see the Report button and send reports: logged in, and the account is
-/// older than RATELIMIT_ACCOUNT_AGE (upstream `g.user.age > config['RATELIMIT_ACCOUNT_AGE']`).
+/// older than RATELIMIT_ACCOUNT_AGE (upstream `g.user.age > config['RATELIMIT_ACCOUNT_AGE']`),
+/// unless staff ([`Permission::SkipAccountAge`]).
 pub fn can_report(user: Option<&User>, cfg: &Config) -> bool {
-    user.is_some_and(|u| u.age_secs() > cfg.ratelimit_account_age)
+    user.is_some_and(|u| u.can(Permission::SkipAccountAge) || u.age_secs() > cfg.ratelimit_account_age)
 }
 
 #[derive(Debug, Deserialize)]
@@ -266,10 +267,11 @@ mod tests {
         let pool = Pool::builder().max_size(1).build(crate::db::DbManager::new(&crate::db::test_url())).unwrap();
         let mut conn = pool.get().unwrap();
         crate::db::run_migrations(&mut conn).unwrap();
-        // User 4 signed up just now; the others a month ago
+        // Users 4 (regular), 6 (moderator) and 8 (trusted) signed up just now; the others a month ago
         diesel::sql_query("INSERT INTO users (id, username, password_hash, status, level, created_time) VALUES \
                            (1, 'owner', 'x', 1, 1, '2026-01-01 00:00:00'), (2, 'reporter', 'x', 1, 0, '2026-01-01 00:00:00'), \
-                           (3, 'mod', 'x', 1, 2, '2026-01-01 00:00:00'), (4, 'newbie', 'x', 1, 0, CURRENT_TIMESTAMP)")
+                           (3, 'mod', 'x', 1, 2, '2026-01-01 00:00:00'), (4, 'newbie', 'x', 1, 0, CURRENT_TIMESTAMP), \
+                           (6, 'newmod', 'x', 1, 2, CURRENT_TIMESTAMP), (8, 'newtrusted', 'x', 1, 1, CURRENT_TIMESTAMP)")
             .execute(&mut conn).unwrap();
         diesel::sql_query(format!(
             "INSERT INTO nyaa_torrents (id, info_hash, display_name, torrent_name, information, description, \
@@ -391,7 +393,8 @@ mod tests {
     #[actix_web::test]
     async fn report_button_needs_an_account_older_than_the_limit() {
         let pool = pool();
-        for (user, button) in [(None, false), (Some(4), false), (Some(2), true)] {
+        // Staff skip the age limit, trusted users don't (as upstream)
+        for (user, button) in [(None, false), (Some(4), false), (Some(8), false), (Some(2), true), (Some(6), true)] {
             let (app, mut cookie) = app!(pool, user);
             let view = page!(app, "/view/5", &mut cookie);
             assert_eq!(view.contains("data-target=\"#reportModal\""), button, "{user:?}");
