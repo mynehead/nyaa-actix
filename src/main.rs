@@ -19,7 +19,7 @@ use actix_session::{storage::CookieSessionStore, SessionMiddleware};
 use actix_web::{
     cookie::{time::Duration as CookieDuration, Key},
     http::StatusCode,
-    middleware::{DefaultHeaders, ErrorHandlers, Logger},
+    middleware::{DefaultHeaders, ErrorHandlers},
     web, App, HttpServer,
 };
 use socket2::{Domain, Protocol, Socket, Type};
@@ -103,7 +103,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(tmpl_data.clone())
             .app_data(range_bans.clone())
             .wrap(ErrorHandlers::new().handler(StatusCode::NOT_FOUND, handlers::site::not_found))
-            .wrap(Logger::default())
+            .wrap(middleware::request_log::logger())
             .wrap(actix_web::middleware::from_fn(middleware::ip_ban::reject_banned_ip))
             .wrap(actix_web::middleware::from_fn(middleware::csrf::reject_cross_site))
             .wrap(security_headers())

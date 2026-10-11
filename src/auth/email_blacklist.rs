@@ -80,7 +80,7 @@ impl EmailBlacklist {
         let mx = match resolver.mx_lookup(domain).await {
             Ok(mx) => mx,
             Err(e) => {
-                log::error!("Unable to query MX records for email: {email} ({e}) - ignoring");
+                log::error!("Unable to query MX records for domain {domain} ({e}) - ignoring");
                 return false;
             }
         };
@@ -89,12 +89,15 @@ impl EmailBlacklist {
             match resolver.lookup_ip(mx.exchange.clone()).await {
                 Ok(ips) => {
                     if let Some(ip) = ips.iter().find(|ip| self.servers.contains(ip)) {
-                        log::warn!("Rejected email {email} due to blacklisted mailserver ({ip}, {})", mx.exchange);
+                        log::warn!(
+                            "Rejected an email at {domain} due to blacklisted mailserver ({ip}, {})",
+                            mx.exchange
+                        );
                         return true;
                     }
                 }
                 Err(e) => {
-                    log::warn!("Failed to query A records for mailserver: {} ({email}, {e}) - ignoring", mx.exchange)
+                    log::warn!("Failed to query A records for mailserver: {} ({domain}, {e}) - ignoring", mx.exchange)
                 }
             }
         }
