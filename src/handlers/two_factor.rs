@@ -5,6 +5,7 @@
 use actix_session::Session;
 use actix_web::{web, HttpRequest, HttpResponse, Result};
 use diesel::prelude::*;
+use diesel::r2d2::PooledConnection;
 use serde::Deserialize;
 use tera::Tera;
 
@@ -12,14 +13,14 @@ use crate::auth::mfa::{self, SecondFactor, UserMfa, RECOVERY_CODES_LOW};
 use crate::auth::policy::can_ban;
 use crate::auth::{LoggedIn, Permission};
 use crate::config::Config;
-use crate::db::{DbConnection, DbPool};
+use crate::db::{DbConnection, DbManager, DbPool};
 use crate::handlers::account::{
     client_key, redirect, MfaPending, LOGIN_FAILURES_BY_ACCOUNT, LOGIN_FAILURES_BY_IP, MFA_PENDING_KEY,
 };
 use crate::middleware::auth::{login_user, logout_everywhere, AuthMethod};
 use crate::models::{user_link, AdminLog, User};
 use crate::utils::context::base_context;
-use crate::utils::{client_ip, flash, internal_error};
+use crate::utils::{client_ip, flash, internal_error, with_conn};
 
 const SETUP_URL: &str = crate::middleware::mfa_required::SETUP_URL;
 /// The not yet confirmed secret shown on the setup page, Base32. Kept in the (encrypted)
@@ -206,8 +207,8 @@ pub async fn enable_post(
     cfg: web::Data<Config>,
     form: web::Form<ConfirmForm>,
 ) -> Result<HttpResponse> {
-    let mut conn = pool.get().map_err(internal_error)?;
-    if UserMfa::is_enabled(&mut conn, user.id).map_err(internal_error)? {
+    let user_id = user.id;
+    if with_conn(&pool, move |conn| UserMfa::is_enabled(conn, user_id)).await? {
         return Ok(redirect(SETUP_URL));
     }
     let secret = session.get::<String>(SETUP_SECRET_KEY).ok().flatten().and_then(|s| mfa::secret_from_base32(&s));
@@ -227,6 +228,7 @@ pub async fn enable_post(
     let codes = mfa::new_recovery_codes();
     let hashes: Vec<String> = codes.iter().map(|c| mfa::hash_recovery_code(c)).collect();
     let encrypted = mfa::encrypt_secret(&cfg.secret_key, user.id, &secret);
+    let mut conn = pool.get().map_err(internal_error)?;
     UserMfa::enable(&mut conn, user.id, &encrypted, step, &hashes).map_err(internal_error)?;
     session.remove(SETUP_SECRET_KEY);
     // Sessions signed in with the password alone end; this one starts over as two-factor
@@ -238,27 +240,30 @@ pub async fn enable_post(
 
 /// Checks password and a current code (or recovery code, which is used up) before
 /// changing two-factor; pushes the flash and gives None when either is wrong.
+/// Returns a connection for the change, taken after the password check so none waits on it.
 async fn confirm(
     req: &HttpRequest,
     session: &Session,
-    conn: &mut DbConnection,
+    pool: &DbPool,
     cfg: &Config,
     user: &User,
     form: &ConfirmForm,
-) -> Result<Option<UserMfa>> {
-    let Some(mfa) = UserMfa::get(conn, user.id).map_err(internal_error)? else {
+) -> Result<Option<PooledConnection<DbManager>>> {
+    let user_id = user.id;
+    let Some(mfa) = with_conn(pool, move |conn| UserMfa::get(conn, user_id)).await? else {
         return Ok(None);
     };
     if !password_ok(req, user, &form.current_password).await? {
         flash::push(session, "danger", "Change failed!", "Incorrect password.");
         return Ok(None);
     }
-    if mfa.verify(conn, &cfg.secret_key, &form.code).map_err(internal_error)?.is_none() {
+    let mut conn = pool.get().map_err(internal_error)?;
+    if mfa.verify(&mut conn, &cfg.secret_key, &form.code).map_err(internal_error)?.is_none() {
         LOGIN_FAILURES_BY_ACCOUNT.hit(&format!("user:{}", user.id));
         flash::push(session, "danger", "Change failed!", "Invalid code.");
         return Ok(None);
     }
-    Ok(Some(mfa))
+    Ok(Some(conn))
 }
 
 pub async fn disable_post(
@@ -273,10 +278,9 @@ pub async fn disable_post(
         flash::push(&session, "danger", "", "Your account class must use two-factor sign-in.");
         return Ok(redirect(SETUP_URL));
     }
-    let mut conn = pool.get().map_err(internal_error)?;
-    if confirm(&req, &session, &mut conn, &cfg, &user, &form).await?.is_none() {
+    let Some(mut conn) = confirm(&req, &session, &pool, &cfg, &user, &form).await? else {
         return Ok(redirect(SETUP_URL));
-    }
+    };
     UserMfa::disable(&mut conn, user.id).map_err(internal_error)?;
     log::info!("User {} turned off two-factor sign-in", user.id);
     flash::push(&session, "success", "Two-factor sign-in turned off.", "");
@@ -292,10 +296,9 @@ pub async fn recovery_codes_post(
     cfg: web::Data<Config>,
     form: web::Form<ConfirmForm>,
 ) -> Result<HttpResponse> {
-    let mut conn = pool.get().map_err(internal_error)?;
-    if confirm(&req, &session, &mut conn, &cfg, &user, &form).await?.is_none() {
+    let Some(mut conn) = confirm(&req, &session, &pool, &cfg, &user, &form).await? else {
         return Ok(redirect(SETUP_URL));
-    }
+    };
     let codes = replace_recovery_codes(&mut conn, user.id).map_err(internal_error)?;
     log::info!("User {} made new recovery codes", user.id);
     codes_page(&tmpl, &cfg, &user, &codes)

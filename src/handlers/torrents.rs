@@ -21,7 +21,7 @@ use crate::models::{
 };
 use crate::torrent::{parse_torrent, rebuild_torrent};
 use crate::utils::context::base_context;
-use crate::utils::{client_ip, flash, internal_error, sanitize_string, sanitize_text, unpack_ip};
+use crate::utils::{client_ip, flash, internal_error, sanitize_string, sanitize_text, unpack_ip, with_conn};
 
 pub async fn view_torrent(
     CurrentUser(current_user): CurrentUser,
@@ -33,26 +33,14 @@ pub async fn view_torrent(
     path: web::Path<i32>,
 ) -> Result<HttpResponse> {
     let torrent_id = path.into_inner();
-    let mut conn = pool.get().map_err(internal_error)?;
-
-    let torrent = Torrent::by_id(&mut conn, torrent_id)
-        .map_err(internal_error)?
+    let torrent = with_conn(&pool, move |conn| Torrent::by_id(conn, torrent_id))
+        .await?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))?;
 
     check_visible(&torrent, &current_user)?;
 
-    let html = render_view(
-        &mut conn,
-        &tmpl,
-        &cfg,
-        &storage,
-        &torrent,
-        current_user.as_ref(),
-        "",
-        None,
-        &flash::take(&session),
-    )
-    .await?;
+    let page = ViewPage { torrent, user: current_user, comment_text: String::new(), comment_error: None };
+    let html = page.render(&pool, &tmpl, &cfg, &storage, flash::take(&session)).await?;
     Ok(HttpResponse::Ok().content_type("text/html").body(html))
 }
 
@@ -93,9 +81,11 @@ pub async fn post_comment(
     if !(COMMENT_MIN_LEN..=COMMENT_MAX_LEN).contains(&len) {
         let error =
             format!("Comment must be at least {COMMENT_MIN_LEN} characters long and {COMMENT_MAX_LEN} at most.");
-        let html =
-            render_view(&mut conn, &tmpl, &cfg, &storage, &torrent, Some(&user), &form.comment, Some(&error), &[])
-                .await?;
+        // No pooled connection may wait on the store
+        drop(conn);
+        let page =
+            ViewPage { torrent, user: Some(user), comment_text: form.comment.clone(), comment_error: Some(error) };
+        let html = page.render(&pool, &tmpl, &cfg, &storage, vec![]).await?;
         return Ok(HttpResponse::BadRequest().content_type("text/html").body(html));
     }
 
@@ -249,32 +239,54 @@ pub async fn delete_comment(
     Ok(redirect(&format!("/view/{torrent_id}#comments")))
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn render_view(
+/// The torrent page, with the comment form's text and error when a comment was refused.
+struct ViewPage {
+    torrent: Torrent,
+    user: Option<User>,
+    comment_text: String,
+    comment_error: Option<String>,
+}
+
+impl ViewPage {
+    /// Reads the file list from the store first, holding no database connection while it
+    /// waits, then does the queries and rendering on the blocking threads.
+    async fn render(
+        self,
+        pool: &DbPool,
+        tmpl: &web::Data<Tera>,
+        cfg: &web::Data<Config>,
+        storage: &Storage,
+        flashes: Vec<flash::Flash>,
+    ) -> Result<String> {
+        let torrent_id = self.torrent.id;
+        // Missing or unreadable means "not available"
+        let info = storage.get(Kind::TorrentInfo, torrent_id).await.unwrap_or_else(|e| {
+            log::warn!("Reading info dict of torrent {torrent_id}: {e}");
+            None
+        });
+        let (tmpl, cfg) = (tmpl.clone(), cfg.clone());
+        with_conn(pool, move |conn| render_view(conn, &tmpl, &cfg, info.as_deref(), &self, &flashes)).await
+    }
+}
+
+fn render_view(
     conn: &mut DbConnection,
     tmpl: &Tera,
     cfg: &Config,
-    storage: &Storage,
-    torrent: &Torrent,
-    current_user: Option<&User>,
-    comment_text: &str,
-    comment_error: Option<&str>,
+    info: Option<&[u8]>,
+    page: &ViewPage,
     flashes: &[flash::Flash],
-) -> Result<String> {
+) -> anyhow::Result<String> {
+    let torrent = &page.torrent;
     let torrent_id = torrent.id;
-    let current_user = current_user.cloned();
+    let current_user = page.user.clone();
 
-    let stats = nyaa_statistics::table
-        .find(torrent_id)
-        .first::<crate::models::Statistic>(conn)
-        .optional()
-        .map_err(internal_error)?;
+    let stats = nyaa_statistics::table.find(torrent_id).first::<crate::models::Statistic>(conn).optional()?;
 
     let comments: Vec<crate::models::Comment> = nyaa_comments::table
         .filter(nyaa_comments::torrent_id.eq(torrent_id))
         .order(nyaa_comments::created_time.asc())
-        .load(conn)
-        .map_err(internal_error)?;
+        .load(conn)?;
 
     // Anonymous uploads only name their uploader to that uploader and moderators
     let can_see_uploader = !torrent.is_anonymous()
@@ -282,7 +294,7 @@ async fn render_view(
             .as_ref()
             .is_some_and(|u| u.can(Permission::ModerateTorrents) || Some(u.id) == torrent.uploader_id);
     let uploader: Option<User> = match torrent.uploader_id {
-        Some(uid) if can_see_uploader => User::by_id(conn, uid).map_err(internal_error)?,
+        Some(uid) if can_see_uploader => User::by_id(conn, uid)?,
         _ => None,
     };
 
@@ -309,25 +321,19 @@ async fn render_view(
     let main_category = crate::db::schema::nyaa_main_categories::table
         .find(torrent.main_category_id)
         .first::<crate::models::MainCategory>(conn)
-        .optional()
-        .map_err(internal_error)?;
-    let sub_category = crate::models::get_sub_category(conn, torrent.main_category_id, torrent.sub_category_id)
-        .map_err(internal_error)?;
+        .optional()?;
+    let sub_category = crate::models::get_sub_category(conn, torrent.main_category_id, torrent.sub_category_id)?;
 
-    // File list from the stored info dict; missing or unreadable means "not available"
-    let info = storage.get(Kind::TorrentInfo, torrent_id).await.unwrap_or_else(|e| {
-        log::warn!("Reading info dict of torrent {torrent_id}: {e}");
-        None
-    });
+    // File list from the stored info dict
     let (files, file_count) =
-        info.and_then(|info| crate::torrent::file_tree(&info)).map_or((None, 0), |(tree, count)| (Some(tree), count));
+        info.and_then(crate::torrent::file_tree).map_or((None, 0), |(tree, count)| (Some(tree), count));
 
     let magnet = torrent.magnet_uri(&torrent.display_name, &cfg.trackers());
     let can_edit = torrent.can_edit(current_user.as_ref());
 
     // The group the torrent was released under, shown below the submitter
     let group = match torrent.group_id {
-        Some(gid) => crate::models::Group::by_id(conn, gid).map_err(internal_error)?,
+        Some(gid) => crate::models::Group::by_id(conn, gid)?,
         None => None,
     };
     // Upstream shows the uploader's IP next to the submitter to administrators only
@@ -351,7 +357,7 @@ async fn render_view(
     ctx.insert("comments", &comments);
     // Upstream's "Hide comments by default" preference collapses the comments panel
     let hide_comments = match &current_user {
-        Some(u) => User::hide_comments(conn, u.id).map_err(internal_error)?,
+        Some(u) => User::hide_comments(conn, u.id)?,
         None => false,
     };
     ctx.insert("hide_comments", &hide_comments);
@@ -361,12 +367,12 @@ async fn render_view(
     ctx.insert("title", group.as_ref().map_or(torrent.display_name.as_str(), |g| g.strip_tag(&torrent.display_name)));
     ctx.insert("magnet", &magnet);
     ctx.insert("can_comment", &can_comment(torrent, current_user.as_ref()));
-    ctx.insert("comment_text", comment_text);
-    ctx.insert("comment_error", &comment_error);
+    ctx.insert("comment_text", &page.comment_text);
+    ctx.insert("comment_error", &page.comment_error);
     ctx.insert("can_report", &crate::handlers::reports::can_report(current_user.as_ref(), cfg));
     ctx.insert("flash_messages", flashes);
 
-    tmpl.render("view.html", &ctx).map_err(internal_error)
+    Ok(tmpl.render("view.html", &ctx)?)
 }
 
 /// Deleted and banned torrents are only visible to moderators.
@@ -386,10 +392,8 @@ pub async fn download_torrent(
     path: web::Path<i32>,
 ) -> Result<HttpResponse> {
     let torrent_id = path.into_inner();
-    let mut conn = pool.get().map_err(internal_error)?;
-
-    let torrent = Torrent::by_id(&mut conn, torrent_id)
-        .map_err(internal_error)?
+    let torrent = with_conn(&pool, move |conn| Torrent::by_id(conn, torrent_id))
+        .await?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))?;
     check_visible(&torrent, &current_user)?;
 

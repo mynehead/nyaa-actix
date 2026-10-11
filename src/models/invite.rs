@@ -148,6 +148,13 @@ impl Invite {
         Ok(Some((own + i64::from(extra) - spent).max(0)))
     }
 
+    /// Locks `user_id`'s row until the transaction ends, so two requests can't both read
+    /// the same allowance and then both spend it (PostgreSQL's READ COMMITTED allows that).
+    /// A no-op write, because it works on SQLite too, where `FOR UPDATE` doesn't exist.
+    pub fn lock_user(conn: &mut DbConnection, user_id: i32) -> QueryResult<()> {
+        diesel::update(users::table.find(user_id)).set(users::id.eq(user_id)).execute(conn).map(|_| ())
+    }
+
     /// The invites moderators gave `user_id` so far.
     pub fn extra(conn: &mut DbConnection, user_id: i32) -> QueryResult<i32> {
         Ok(invite_allowances::table.find(user_id).select(invite_allowances::extra).first(conn).optional()?.unwrap_or(0))
@@ -155,6 +162,7 @@ impl Invite {
 
     /// Gives `user_id` `amount` more invites (negative takes some back, not below zero).
     pub fn give(conn: &mut DbConnection, user_id: i32, amount: i32) -> QueryResult<()> {
+        Self::lock_user(conn, user_id)?;
         let extra = (Self::extra(conn, user_id)? + amount).max(0);
         let updated = diesel::update(invite_allowances::table.find(user_id))
             .set(invite_allowances::extra.eq(extra))
