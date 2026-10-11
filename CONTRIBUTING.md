@@ -23,14 +23,14 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-Tests use in-memory SQLite. CI runs them a second time on PostgreSQL; to do that locally,
-point `TEST_DATABASE_URL` at a server where you may create databases (every test gets its
-own `nyaa_test_*` database, and the next run drops them):
+Tests run on PostgreSQL. Point `TEST_DATABASE_URL` (in the shell or in `.env`) at a server
+where you may create databases (every test gets its own `nyaa_test_*` database, and the
+next run drops them):
 
 ```sh
 TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres cargo test
 ```
 
-Fixtures are written in SQLite's SQL. `X'..'` blobs work on both (the test template adds a
-cast), but `datetime('now', ..)` and a hand-picked `id` that a later insert would also get
-do not, since PostgreSQL numbers new rows from 1 whatever ids are already taken.
+In fixtures, `X'..'` blobs work (the test template adds a cast), but a hand-picked `id`
+that a later insert would also get does not, since PostgreSQL numbers new rows from 1
+whatever ids are already taken.

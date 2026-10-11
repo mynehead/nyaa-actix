@@ -181,7 +181,6 @@ impl User {
     }
 
     pub fn set_hide_comments(conn: &mut DbConnection, uid: i32, hide: bool) -> QueryResult<usize> {
-        // Update, else insert: REPLACE INTO only exists on SQLite
         conn.transaction(|conn| {
             let updated = diesel::update(user_preferences::table.find(uid))
                 .set(user_preferences::hide_comments.eq(hide as i32))
@@ -219,7 +218,7 @@ impl User {
 
     /// The user with this email address, ignoring case, as upstream's MySQL collation does.
     pub fn by_email(conn: &mut DbConnection, addr: &str) -> QueryResult<Option<User>> {
-        // The exact match too: SQLite's lower() only folds ASCII, Rust's every letter
+        // The exact match too, in case PostgreSQL's and Rust's lowercasing differ
         users::table
             .filter(users::email.eq(addr).or(lower_nullable(users::email).eq(addr.to_lowercase())))
             .first(conn)

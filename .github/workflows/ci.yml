@@ -17,7 +17,7 @@ jobs:
           MEILI_NO_ANALYTICS: "true"
         ports:
           - 7700:7700
-      # For the Postgres migration test and the "Test on PostgreSQL" step
+      # The tests' database server
       postgres:
         image: postgres:17
         env:
@@ -60,14 +60,10 @@ jobs:
           TRACKER_TEST_ANNOUNCE_URL: http://127.0.0.1:6969/announce
           MEILI_TEST_URL: http://127.0.0.1:7700
           MEILI_TEST_KEY: ci-master-key-1234567890
-          TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/nyaa_test
-      # The same tests on PostgreSQL, each in a database of its own (`db::test_url`)
-      - name: Test on PostgreSQL
-        run: cargo test --locked
-        env:
+          # Each test gets a database of its own (`db::test_url`)
           TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
 
-  # The owner builds on Windows (MSVC), where bundled SQLite and libpq are compiled from source
+  # The owner builds on Windows (MSVC), where the bundled libpq is compiled from source
   build-windows:
     runs-on: windows-latest
     steps:

@@ -150,7 +150,7 @@ impl Invite {
 
     /// Locks `user_id`'s row until the transaction ends, so two requests can't both read
     /// the same allowance and then both spend it (PostgreSQL's READ COMMITTED allows that).
-    /// A no-op write, because it works on SQLite too, where `FOR UPDATE` doesn't exist.
+    /// A no-op write; it locks the row like `FOR UPDATE` would.
     pub fn lock_user(conn: &mut DbConnection, user_id: i32) -> QueryResult<()> {
         diesel::update(users::table.find(user_id)).set(users::id.eq(user_id)).execute(conn).map(|_| ())
     }

@@ -1,7 +1,7 @@
 //! Optional Meilisearch index of torrents, in the role upstream gives Elasticsearch.
 //!
-//! SQLite stays the source of truth: the index only picks which torrent ids match and in
-//! what order, and the rows themselves are loaded from SQLite. Uploads and edits push the
+//! The database stays the source of truth: the index only picks which torrent ids match and in
+//! what order, and the rows themselves are loaded from the database. Uploads and edits push the
 //! changed torrent, a background task pushes changed tracker stats, and `nyaa-actix reindex`
 //! rebuilds the whole index. Talks to Meilisearch's HTTP API directly.
 
@@ -16,7 +16,7 @@ use super::db::{SearchOrder, SearchQuery, SearchSort};
 use super::syntax::{Resolved, Text};
 use crate::models::{Statistic, Torrent, TorrentFlags};
 
-/// How long a listing waits for Meilisearch before falling back to SQLite.
+/// How long a listing waits for Meilisearch before falling back to the database.
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// A Meilisearch server and the index torrents live in.
@@ -29,7 +29,7 @@ pub struct Meili {
     max_hits: i64,
     agent: ureq::Agent,
     /// Whether the index is known to hold every torrent. Until it is (and whenever an
-    /// update fails to reach it), listings search SQLite instead; see `index::check`.
+    /// update fails to reach it), listings search the database instead; see `index::check`.
     ready: Arc<AtomicBool>,
     /// Set when an update failed to reach the index, so the next check rebuilds it.
     stale: Arc<AtomicBool>,
@@ -296,7 +296,7 @@ impl Meili {
     }
 
     /// Reads MEILI_URL, MEILI_KEY, MEILI_INDEX and MEILI_MAX_HITS. None when MEILI_URL is
-    /// unset or empty, which keeps search on SQLite.
+    /// unset or empty, which keeps search on the database.
     pub fn from_env() -> Option<Self> {
         let url = std::env::var("MEILI_URL").ok().filter(|u| !u.trim().is_empty())?;
         let index = std::env::var("MEILI_INDEX").ok().filter(|i| !i.is_empty()).unwrap_or_else(|| "torrents".into());
@@ -363,7 +363,7 @@ impl Meili {
 
     /// Torrent ids for one page of a listing, in order, and the number of matches.
     pub fn search(&self, q: &SearchQuery, r: &Resolved) -> MeiliResult<(Vec<i32>, i64)> {
-        // A page waits on this; past the timeout SQLite answers instead
+        // A page waits on this; past the timeout the database answers instead
         let r = self.call_within(
             "POST",
             &format!("/indexes/{}/search", self.index),
@@ -389,7 +389,7 @@ impl Meili {
         self.ready.store(ready, Ordering::Relaxed);
     }
 
-    /// An update didn't reach the index: search SQLite until it has been rebuilt.
+    /// An update didn't reach the index: search the database until it has been rebuilt.
     pub fn mark_stale(&self) {
         self.stale.store(true, Ordering::Relaxed);
         self.set_ready(false);

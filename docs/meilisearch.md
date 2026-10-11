@@ -1,14 +1,14 @@
 # Search with Meilisearch
 
-Meilisearch is optional. Without it, search runs on SQLite as before. With it, text
+Meilisearch is optional. Without it, search runs on the database as before. With it, text
 searches and the seeders, leechers and downloads sorts go to Meilisearch, which answers
 them without scanning every torrent. Plain listings (no search term, sorted by date, name
-or size) stay on SQLite, where they are already fast. This is the role Elasticsearch
+or size) stay on the database, where they are already fast. This is the role Elasticsearch
 plays in upstream nyaa.
 
-SQLite stays the source of truth. Meilisearch only decides which torrent ids match and in
-what order; the rows are then loaded from SQLite. If Meilisearch is down, slow (over 2 s)
-or misconfigured, the site logs a warning and searches SQLite instead.
+The database stays the source of truth. Meilisearch only decides which torrent ids match and in
+what order; the rows are then loaded from the database. If Meilisearch is down, slow (over 2 s)
+or misconfigured, the site logs a warning and searches the database instead.
 
 ## Settings
 
@@ -26,7 +26,7 @@ or misconfigured, the site logs a warning and searches SQLite instead.
   `MEILI_STATS_SYNC_SECS`, the server compares the number of torrents in the index with
   the database. When the index is missing, holds a different number of torrents, or an
   update failed to reach it, the server rebuilds it in the background and searches
-  SQLite until that is done. So setting `MEILI_URL` on an existing database, or
+  the database until that is done. So setting `MEILI_URL` on an existing database, or
   Meilisearch being down during an upload, needs no manual step.
 - An upload, an edit, and a delete, ban or undelete on the edit page push that torrent
   to the index right away.
@@ -90,7 +90,7 @@ MEILI_TEST_URL=http://127.0.0.1:7700 MEILI_TEST_KEY=testmasterkey1234567890 carg
 (On Windows PowerShell: `$env:MEILI_TEST_URL="http://127.0.0.1:7700"; $env:MEILI_TEST_KEY="..."; cargo test`.)
 
 It builds a throwaway index from a small database, checks that Meilisearch returns the
-same torrents in the same order as SQLite for searches, category and quality filters,
+same torrents in the same order as the database for searches, category and quality filters,
 sorts and paging, and that edits and stats changes reach the index, then deletes the
 index. CI runs Meilisearch as a service container, so the test always runs there.
 
@@ -109,5 +109,5 @@ releases.
 As in upstream's Elasticsearch setup, words are also split where letters meet digits or
 lower case meets upper case, and numbers match without leading zeros: `2` finds
 "Name2", "S02E05" and "- 02", `264` finds "x264", `Name` finds "DisplayName". Other
-pieces of words don't match, unlike the SQLite search: `dragon` finds "Dragon Ball" but
+pieces of words don't match, unlike the database search: `dragon` finds "Dragon Ball" but
 `ragon` does not.
