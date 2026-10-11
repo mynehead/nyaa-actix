@@ -468,7 +468,7 @@ mod tests {
         assert!(html.contains("No group reports."), "{html}");
 
         diesel::sql_query("UPDATE users SET level = 3 WHERE id = 3").execute(&mut pool.get().unwrap()).unwrap();
-        assert!(page!(app, "/admin/reports", &mut cookie).contains("(127.0.0.1)"));
+        assert!(page!(app, "/admin/reports", &mut cookie).contains("<small class=\"text-muted\">127.0.0.1</small>"));
     }
 
     #[actix_web::test]

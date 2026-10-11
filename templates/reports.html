@@ -27,7 +27,7 @@
 
 {% block title %}Reports :: {{ config.site_name }}{% endblock %}
 {% block body %}
-{# Upstream reports.html, plus a second table for group reports #}
+{# Upstream reports.html with the uploader in its own column, plus a second table for group reports #}
 	<div class="table">
 		<table class="table table-bordered table-hover table-striped table-condensed">
 			<thead>
@@ -35,6 +35,7 @@
 				<th>#</th>
 				<th>Reported by</th>
 				<th>Torrent</th>
+				<th>Uploader</th>
 				<th>Reason</th>
 				<th>Date</th>
 				<th>Action</th>
@@ -44,27 +45,28 @@
 			{% for row in reports %}
 			<tr class="reports-row">
 				<td>{{ row.report.id }}</td>
-				<td>
+				<td class="text-nowrap">
 					{% if row.reporter %}
 					<a href="/user/{{ row.reporter.username | urlencode }}">{{ row.reporter.username }}</a>
 					{% if row.reporter.level >= 1 %}
-					<span class="label label-success pull-right">Trusted</span>
+					<span class="label label-success">Trusted</span>
 					{% endif %}
 					{% else %}
 					[deleted user]
 					{% endif %}
 				</td>
-				<td>
-					<a href="/view/{{ row.torrent.id }}">{{ row.torrent.display_name }}</a>
+				<td><a href="/view/{{ row.torrent.id }}">{{ row.torrent.display_name }}</a></td>
+				<td class="text-nowrap">
 					{% if row.uploader %}
-					by <a href="/user/{{ row.uploader.username | urlencode }}">
-					{{ row.uploader.username }}</a>
+					<a href="/user/{{ row.uploader.username | urlencode }}">{{ row.uploader.username }}</a>
+					{% if row.uploader.level >= 1 %}
+					<span class="label label-success">Trusted</span>
+					{% endif %}
+					{% else %}
+					Anonymous
 					{% endif %}
 					{% if row.uploader_ip %}
-					({{ row.uploader_ip }})
-					{% endif %}
-					{% if row.uploader and row.uploader.level >= 1 %}
-					<span class="label label-success pull-right">Trusted</span>
+					<br><small class="text-muted">{{ row.uploader_ip }}</small>
 					{% endif %}
 				</td>
 				<td>{{ row.report.reason }}</td>
@@ -86,7 +88,7 @@
 				</td>
 			</tr>
 			{% else %}
-			<tr><td colspan="6" class="text-center">No torrent reports.</td></tr>
+			<tr><td colspan="7" class="text-center">No torrent reports.</td></tr>
 			{% endfor %}
 			</tbody>
 		</table>
@@ -111,11 +113,11 @@
 			{% for row in group_reports %}
 			<tr class="reports-row">
 				<td>{{ row.report.id }}</td>
-				<td>
+				<td class="text-nowrap">
 					{% if row.reporter %}
 					<a href="/user/{{ row.reporter.username | urlencode }}">{{ row.reporter.username }}</a>
 					{% if row.reporter.level >= 1 %}
-					<span class="label label-success pull-right">Trusted</span>
+					<span class="label label-success">Trusted</span>
 					{% endif %}
 					{% else %}
 					[deleted user]
