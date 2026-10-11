@@ -113,8 +113,18 @@ impl ManageConnection for DbManager {
     }
 }
 
+/// r2d2's defaults are 10 connections and a 30 s wait for one. Database work runs on
+/// actix's blocking threads (`utils::with_conn`), so a few more connections let more of it
+/// run at once, and a full pool fails a request after 5 s instead of stalling it.
+const POOL_SIZE: u32 = 32;
+const POOL_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
 pub fn init_pool(database_url: &str) -> DbPool {
-    r2d2::Pool::builder().build(DbManager::new(database_url)).expect("Failed to create database pool")
+    r2d2::Pool::builder()
+        .max_size(POOL_SIZE)
+        .connection_timeout(POOL_WAIT)
+        .build(DbManager::new(database_url))
+        .expect("Failed to create database pool")
 }
 
 #[cfg(test)]
@@ -171,6 +181,26 @@ mod tests {
         // A fresh database and a second run are left alone
         run_migrations(&mut conn).unwrap();
         run_migrations(&mut connect(":memory:").unwrap()).unwrap();
+    }
+
+    /// The torrent page's comments and every POST's ban check use an index, not a table scan.
+    #[test]
+    fn comment_and_ban_lookups_use_indexes() {
+        #[derive(diesel::QueryableByName)]
+        struct Plan {
+            #[diesel(sql_type = diesel::sql_types::Text)]
+            detail: String,
+        }
+        let mut conn = connect(":memory:").unwrap();
+        run_migrations(&mut conn).unwrap();
+        for query in [
+            "SELECT * FROM nyaa_comments WHERE torrent_id = 1 ORDER BY created_time",
+            "SELECT * FROM nyaa_comments WHERE user_id = 1",
+            "SELECT 1 FROM bans WHERE user_ip = x'01'",
+        ] {
+            let plan: Vec<Plan> = diesel::sql_query(format!("EXPLAIN QUERY PLAN {query}")).load(&mut conn).unwrap();
+            assert!(plan.iter().any(|p| p.detail.contains("INDEX")), "{query}: {:?}", plan[0].detail);
+        }
     }
 
     #[test]

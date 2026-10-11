@@ -21,7 +21,7 @@ use crate::models::{password_matches, Ban, Invite, NewUser, User, UserStatus};
 use crate::storage::{Kind, Storage};
 use crate::utils::context::base_context;
 use crate::utils::throttle::Throttle;
-use crate::utils::{avatar, client_addr, client_ip, flash, internal_error, token};
+use crate::utils::{avatar, client_addr, client_ip, flash, internal_error, token, with_conn};
 
 #[derive(Debug, Deserialize)]
 pub struct LoginForm {
@@ -86,8 +86,8 @@ pub async fn login_post(
     cfg: web::Data<Config>,
     form: web::Form<LoginForm>,
 ) -> Result<HttpResponse> {
-    let mut conn = pool.get().map_err(internal_error)?;
-    let user = User::by_username_or_email(&mut conn, &form.username).map_err(internal_error)?;
+    let name = form.username.clone();
+    let user = with_conn(&pool, move |conn| User::by_username_or_email(conn, &name)).await?;
 
     // Count by account, so trying the username and then the email address shares one limit
     let ip = client_key(&req);
@@ -118,6 +118,8 @@ pub async fn login_post(
         LOGIN_FAILURES_BY_IP.hit(&ip);
         LOGIN_FAILURES_BY_ACCOUNT.hit(&account);
     }
+    // Only now: no pooled connection waits on the hash
+    let mut conn = pool.get().map_err(internal_error)?;
 
     let error = match user {
         Some(ref u) if password_ok && u.is_active() => {
@@ -227,9 +229,13 @@ pub async fn register_post(
     }
     // As upstream: the address blacklist goes before the in-use check, the mail server
     // lookup (DNS) only when the form is otherwise fine
-    if cfg.email_blacklist.blocks_address(email) {
+    let blacklisted = cfg.email_blacklist.blocks_address(email);
+    let in_use = !blacklisted && User::by_email(&mut conn, email).map_err(internal_error)?.is_some();
+    // No pooled connection waits on DNS, the password hash or the mail server
+    drop(conn);
+    if blacklisted {
         errors.push(BLACKLISTED.into());
-    } else if User::by_email(&mut conn, email).map_err(internal_error)?.is_some() {
+    } else if in_use {
         errors.push("Email is already in use.".into());
     } else if errors.is_empty() && cfg.email_blacklist.blocks_server(email).await {
         errors.push(BLACKLISTED.into());
@@ -250,6 +256,7 @@ pub async fn register_post(
 
     let (name, mail, password) = (username.to_string(), email.to_string(), form.password.clone());
     let mut new_user = web::block(move || NewUser::new(&name, Some(&mail), &password)).await?;
+    let mut conn = pool.get().map_err(internal_error)?;
     new_user.registration_ip = client_ip(&req);
     // In raid mode the account waits for a moderator; with email verification, for its
     // activation link. An invite already vouches for the account, so raid mode doesn't
@@ -295,6 +302,7 @@ pub async fn register_post(
     if let Some(mailer) = verification {
         let token = token::sign(&cfg.secret_key, ACTIVATE, &[user.id.into()]);
         let link = format!("{}/user/activate/{token}", cfg.site_url);
+        drop(conn);
         let sent = web::block(mail_job(&tmpl, &cfg, mailer, email, "email/verify.txt", &link)?).await?;
         let mut ctx = base_context(&cfg, None);
         ctx.insert("email", email);
@@ -612,7 +620,17 @@ pub(crate) static LOGIN_FAILURES_BY_ACCOUNT: LazyLock<Throttle> =
 static REGISTRATIONS_BY_IP: LazyLock<Throttle> = LazyLock::new(|| Throttle::new(20, Duration::from_secs(60 * 60)));
 
 pub(crate) fn client_key(req: &HttpRequest) -> String {
-    format!("ip:{}", client_addr(req).map(|a| a.to_string()).unwrap_or_default())
+    address_key(client_addr(req))
+}
+
+/// IPv6 counts by /64: one connection gets a whole /64, so a new address per request
+/// would otherwise mean a fresh limit each time.
+fn address_key(addr: Option<std::net::IpAddr>) -> String {
+    match addr {
+        Some(std::net::IpAddr::V6(v6)) => format!("ip6:{:x}", u128::from(v6) >> 64),
+        Some(v4) => format!("ip:{v4}"),
+        None => "ip:".into(),
+    }
 }
 
 pub async fn logout(session: Session, pool: web::Data<DbPool>) -> HttpResponse {
@@ -1493,6 +1511,14 @@ pub(crate) mod tests {
         let res = test::call_service(&app, test::TestRequest::get().uri("/avatar/1").to_request()).await;
         assert_eq!(res.status(), 404);
         std::fs::remove_dir_all(&cfg.avatar_storage_path).ok();
+    }
+
+    #[::core::prelude::v1::test]
+    fn ipv6_addresses_share_a_limit_per_64() {
+        let key = |s: &str| address_key(Some(s.parse().unwrap()));
+        assert_eq!(key("2001:db8:1:2::1"), key("2001:db8:1:2:ffff::9"));
+        assert_ne!(key("2001:db8:1:2::1"), key("2001:db8:1:3::1"));
+        assert_ne!(key("10.0.0.1"), key("10.0.0.2"));
     }
 
     #[::core::prelude::v1::test]

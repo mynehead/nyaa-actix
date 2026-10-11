@@ -95,6 +95,7 @@ pub async fn create(
     let mut conn = pool.get().map_err(internal_error)?;
     let made = conn
         .transaction::<_, diesel::result::Error, _>(|conn| {
+            Invite::lock_user(conn, current_user.id)?;
             let remaining = Invite::remaining(conn, &current_user, cfg.registration.invites_for_trusted, now)?;
             if remaining == Some(0) {
                 return Ok(false);

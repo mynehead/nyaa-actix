@@ -66,6 +66,13 @@ pub fn get_current_user(session: &Session, pool: &DbPool) -> Option<User> {
     user_by_session(&mut conn, &sid).ok()?
 }
 
+/// [`get_current_user`] on actix's blocking threads, for the handler extractors.
+pub async fn load_current_user(session: &Session, pool: &DbPool) -> Option<User> {
+    let sid: String = session.get(SESSION_ID_KEY).ok()??;
+    let pool = pool.clone();
+    web::block(move || user_by_session(&mut *pool.get().ok()?, &sid).ok()?).await.ok()?
+}
+
 /// The active user behind an unexpired session. Banned or deactivated users lose access
 /// immediately, not at next login.
 fn user_by_session(conn: &mut DbConnection, sid: &str) -> QueryResult<Option<User>> {

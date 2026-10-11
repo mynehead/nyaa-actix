@@ -17,6 +17,20 @@ pub fn internal_error<E: std::fmt::Display>(e: E) -> actix_web::Error {
     actix_web::error::ErrorInternalServerError("Internal server error")
 }
 
+/// Runs blocking database work on actix's thread pool, so the request threads keep serving
+/// other visitors meanwhile. Pool and query errors become [`internal_error`]s.
+pub async fn with_conn<T, E, F>(pool: &crate::db::DbPool, f: F) -> actix_web::Result<T>
+where
+    F: FnOnce(&mut crate::db::DbConnection) -> Result<T, E> + Send + 'static,
+    T: Send + 'static,
+    E: std::fmt::Display + Send + 'static,
+{
+    let pool = pool.clone();
+    let result =
+        actix_web::web::block(move || pool.get().map(|mut conn| f(&mut conn))).await.map_err(internal_error)?;
+    result.map_err(internal_error)?.map_err(internal_error)
+}
+
 /// The visitor's address: the connection's peer, or behind a proxy listed in
 /// `TRUSTED_PROXIES`, the address it forwarded (see `proxy`).
 pub fn client_addr(req: &actix_web::HttpRequest) -> Option<IpAddr> {

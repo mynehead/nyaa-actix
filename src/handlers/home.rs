@@ -5,13 +5,13 @@ use crate::auth::{CurrentUser, Permission};
 use crate::config::Config;
 use crate::db::DbPool;
 use crate::models::{Banner, Torrent, User};
-use crate::search::db::{with_stats, SearchQuery};
+use crate::search::db::{with_stats, ListedTorrent, SearchQuery};
 use crate::search::search;
 use crate::search::syntax::info_hash;
 use crate::utils::context::base_context;
 use crate::utils::context::SearchState;
-use crate::utils::internal_error;
 use crate::utils::pagination::Pagination;
+use crate::utils::{internal_error, with_conn};
 
 /// The listing's query parameters. Like upstream, each has older aliases (`term`, `cats`,
 /// `filter`, `user`, `page`, `offset`), the first one present wins, and `page=rss`,
@@ -84,6 +84,12 @@ pub async fn rss(
     listing(current_user, pool, tmpl, cfg, params).await
 }
 
+/// What the listing's database work produced: the feed, or one page's data.
+enum Listing {
+    Rss(String),
+    Page { torrents: Vec<ListedTorrent>, total: i64, banners: Vec<Banner> },
+}
+
 async fn listing(
     CurrentUser(current_user): CurrentUser,
     pool: web::Data<DbPool>,
@@ -93,13 +99,11 @@ async fn listing(
 ) -> Result<HttpResponse> {
     let moderator = current_user.as_ref().is_some_and(|u| u.can(Permission::ModerateTorrents));
 
-    let mut conn = pool.get().map_err(internal_error)?;
-
     // `u=name` lists one uploader's torrents, as their profile does; an unknown name is a 404
-    let uploader = match params.u.as_deref() {
+    let uploader = match params.u.clone() {
         Some(name) => Some(
-            User::by_username(&mut conn, name)
-                .map_err(internal_error)?
+            with_conn(&pool, move |conn| User::by_username(conn, &name))
+                .await?
                 .ok_or_else(|| actix_web::error::ErrorNotFound("User not found"))?,
         ),
         None => None,
@@ -125,35 +129,50 @@ async fn listing(
     // A term that is an info hash opens that torrent, as upstream does; deleted ones only
     // for moderators, who are the only ones who could open them
     if let Some(hash) = params.q.as_deref().and_then(info_hash).filter(|_| !params.rss) {
-        let torrent = Torrent::by_info_hash(&mut conn, &hash).map_err(internal_error)?;
+        let torrent = with_conn(&pool, move |conn| Torrent::by_info_hash(conn, &hash)).await?;
         if let Some(t) = torrent.filter(|t| moderator || !(t.is_deleted() || t.is_banned())) {
             return Ok(HttpResponse::Found().insert_header(("Location", format!("/view/{}", t.id))).finish());
         }
     }
 
     crate::utils::pagination::check_max_pages(q.page, cfg.max_pages)?;
-    let result = search(&mut conn, &cfg, &q).map_err(internal_error)?;
-    let torrents = with_stats(&mut conn, result.torrents).map_err(internal_error)?;
-
-    if params.rss {
+    let rss = params.rss.then(|| {
         let label = match params.q.as_deref().filter(|t| !t.is_empty()) {
             Some(term) => format!("\"{term}\""),
             None => "Home".to_string(),
         };
-        let xml = crate::handlers::feeds::render_rss(&mut conn, &tmpl, &cfg, &label, &torrents, params.magnets)?;
-        return Ok(HttpResponse::Ok()
-            .content_type("application/xml")
-            // Upstream caches feeds for five minutes
-            .insert_header(("Cache-Control", "max-age=300"))
-            .body(xml));
-    }
+        (label, params.magnets)
+    });
+    let (page, per_page) = (q.page, q.per_page);
+    let (db_cfg, db_tmpl) = (cfg.clone(), tmpl.clone());
+    let listing = with_conn(&pool, move |conn| -> anyhow::Result<Listing> {
+        let result = search(conn, &db_cfg, &q)?;
+        let torrents = with_stats(conn, result.torrents)?;
+        if let Some((label, magnets)) = rss {
+            let xml = crate::handlers::feeds::render_rss(conn, &db_tmpl, &db_cfg, &label, &torrents, magnets)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            return Ok(Listing::Rss(xml));
+        }
+        Ok(Listing::Page { torrents, total: result.total, banners: Banner::active(conn)? })
+    })
+    .await?;
+    let (torrents, total, banners) = match listing {
+        Listing::Rss(xml) => {
+            return Ok(HttpResponse::Ok()
+                .content_type("application/xml")
+                // Upstream caches feeds for five minutes
+                .insert_header(("Cache-Control", "max-age=300"))
+                .body(xml));
+        }
+        Listing::Page { torrents, total, banners } => (torrents, total, banners),
+    };
 
-    let pagination = Pagination::capped(q.page, result.total, q.per_page, cfg.max_pages);
+    let pagination = Pagination::capped(page, total, per_page, cfg.max_pages);
 
     let mut ctx = base_context(&cfg, current_user.as_ref());
     ctx.insert("torrents", &torrents);
     ctx.insert("pagination", &pagination);
-    ctx.insert("banners", &Banner::active(&mut conn).map_err(internal_error)?);
+    ctx.insert("banners", &banners);
     let search = SearchState {
         user: params.u.clone().unwrap_or_default(),
         ..SearchState::new(&params.q, &params.c, &params.f, &params.s, &params.o)

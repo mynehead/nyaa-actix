@@ -35,9 +35,15 @@ pub struct Part {
     pub negated: bool,
 }
 
+/// Characters of a search that are read; the rest is ignored.
+const MAX_CHARS: usize = 256;
+/// Parts of a search that count. Each one is another condition on every row (and a
+/// `user:` or `group:` lookup), so a pasted wall of words can't tie up the database.
+const MAX_PARTS: usize = 32;
+
 /// Splits a search into its parts. Never fails: anything that isn't an operator is text.
 pub fn parse(input: &str) -> Vec<Part> {
-    let chars: Vec<char> = input.chars().collect();
+    let chars: Vec<char> = input.chars().take(MAX_CHARS).collect();
     let mut i = 0;
     let mut parts = Vec::new();
 
@@ -57,7 +63,7 @@ pub fn parse(input: &str) -> Vec<Part> {
         }
     };
 
-    while i < chars.len() {
+    while i < chars.len() && parts.len() < MAX_PARTS {
         if chars[i].is_whitespace() {
             i += 1;
             continue;
@@ -225,6 +231,14 @@ mod tests {
         assert_eq!(parse(r#""" -"" "#), vec![]);
         // Doubled signs are text, so "--" or "!!" searches still work
         assert_eq!(parse("-- !!x"), vec![text("--", false, false), text("!!x", false, false)]);
+    }
+
+    #[test]
+    fn long_searches_are_cut_short() {
+        assert_eq!(parse(&"a ".repeat(1000)).len(), MAX_PARTS);
+        let long = "x".repeat(1000);
+        let text = Token::Text(Text { text: "x".repeat(MAX_CHARS), phrase: false });
+        assert_eq!(parse(&long), [Part { token: text, negated: false }]);
     }
 
     #[test]
