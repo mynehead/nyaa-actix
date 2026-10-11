@@ -9,7 +9,7 @@ use tera::Tera;
 
 use crate::auth::api_key::{ApiKey, MAX_KEYS, MAX_NAME_LEN};
 use crate::auth::policy::can_ban;
-use crate::auth::LoggedIn;
+use crate::auth::{LoggedIn, Permission};
 use crate::config::Config;
 use crate::db::DbPool;
 use crate::handlers::account::redirect;
@@ -68,6 +68,9 @@ pub async fn create(
     cfg: web::Data<Config>,
     form: web::Form<CreateForm>,
 ) -> Result<HttpResponse> {
+    if !user.can(Permission::UseApiKeys) {
+        return Err(actix_web::error::ErrorForbidden("Your account may not make API keys."));
+    }
     let name = form.name.trim().to_string();
     if name.is_empty() || name.chars().count() > MAX_NAME_LEN {
         flash::push(&session, "danger", "", &format!("Give the key a name of up to {MAX_NAME_LEN} characters."));
@@ -189,6 +192,13 @@ mod tests {
         let id = ApiKey::list(&mut pool.get().unwrap(), user_id).unwrap()[0].id;
         body(post(&format!("/profile/api-keys/{id}/revoke"), &[])).await;
         assert!(!ApiKey::check(&mut pool.get().unwrap(), user_id, key).unwrap());
+
+        // Limited accounts can't make keys
+        diesel::update(users::table.find(user_id)).set(users::level.eq(-1)).execute(&mut pool.get().unwrap()).unwrap();
+        assert!(body(test::TestRequest::get().uri(PAGE_URL)).await.contains("may not use API keys"));
+        let req =
+            post(PAGE_URL, &[("name", "x"), ("current_password", "hunter22")]).cookie(cookie.clone()).to_request();
+        assert_eq!(test::call_service(&app, req).await.status().as_u16(), 403);
     }
 
     #[actix_web::test]

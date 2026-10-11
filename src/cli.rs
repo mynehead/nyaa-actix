@@ -1,6 +1,6 @@
 //! Command line subcommands that run instead of the web server.
 //!
-//! `nyaa-actix create-user <username> <password> [--level regular|trusted|moderator|admin] [--email <addr>]`
+//! `nyaa-actix create-user <username> <password> [--level limited|regular|trusted|moderator|admin] [--email <addr>]`
 //! adds an active account to the database named by DATABASE_URL (default nyaa.db), with the
 //! password hashed the same way registration does. Handy for a local admin, for example
 //! `nyaa-actix create-user admin admin --level admin`; use a real password anywhere but a dev box.
@@ -25,7 +25,7 @@
 //! `nyaa-actix reset-2fa <username>` turns off the user's two-factor sign-in, for an admin
 //! who lost both the authenticator and the recovery codes. The admin log records it.
 //!
-//! `nyaa-actix set-level <username> <regular|trusted|moderator|admin>` changes an existing
+//! `nyaa-actix set-level <username> <limited|regular|trusted|moderator|admin>` changes an existing
 //! account's level, for example to make yourself admin. The admin log records it.
 
 use diesel::prelude::*;
@@ -36,12 +36,12 @@ use crate::models::user::{NewUser, User, UserLevel};
 use crate::storage::{S3Settings, Storage};
 
 const USAGE: &str =
-    "usage: nyaa-actix create-user <username> <password> [--level regular|trusted|moderator|admin] [--email <addr>]
+    "usage: nyaa-actix create-user <username> <password> [--level limited|regular|trusted|moderator|admin] [--email <addr>]
        nyaa-actix migrate-storage [--dry-run]
        nyaa-actix reindex
        nyaa-actix unban-ip-range <range>
        nyaa-actix reset-2fa <username>
-       nyaa-actix set-level <username> <regular|trusted|moderator|admin>";
+       nyaa-actix set-level <username> <limited|regular|trusted|moderator|admin>";
 
 /// Runs the subcommand named in `args` (program name already stripped).
 /// Returns None when there is no subcommand, so the caller starts the server.
@@ -94,6 +94,7 @@ fn parse_create_user(args: &[String]) -> Result<CreateUser, String> {
 
 fn parse_level(v: &str) -> Option<UserLevel> {
     match v.to_ascii_lowercase().as_str() {
+        "limited" | "-1" => Some(UserLevel::Limited),
         "regular" | "user" | "0" => Some(UserLevel::Regular),
         "trusted" | "1" => Some(UserLevel::Trusted),
         "moderator" | "mod" | "2" => Some(UserLevel::Moderator),

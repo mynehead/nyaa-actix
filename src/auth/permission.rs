@@ -42,10 +42,14 @@ pub enum Permission {
     CreateInvites,
     /// Mark a release as "Best" (blue row), a staff pick on top of upstream's flags.
     MarkBest,
+    /// Upload torrents, on the site and through the API (everyone but Limited).
+    Upload,
+    /// Make API keys and sign in to the API with them (everyone but Limited).
+    UseApiKeys,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 17] = [
+    pub const ALL: [Permission; 19] = [
         Permission::SetTrustedFlag,
         Permission::ModerateTorrents,
         Permission::BanUsers,
@@ -63,6 +67,8 @@ impl Permission {
         Permission::ResetTwoFactor,
         Permission::CreateInvites,
         Permission::MarkBest,
+        Permission::Upload,
+        Permission::UseApiKeys,
     ];
 }
 
@@ -71,6 +77,7 @@ impl UserLevel {
     pub fn grants(self, p: Permission) -> bool {
         use Permission::*;
         let needed = match p {
+            Upload | UseApiKeys => UserLevel::Regular,
             SetTrustedFlag | SkipUploadLimit => UserLevel::Trusted,
             ModerateTorrents | BanUsers | ViewAdminPages | CreateGroups | ChangeUserClass | HandleTickets
             | CreateInvites | MarkBest => UserLevel::Moderator,
@@ -115,8 +122,9 @@ mod tests {
 
     #[test]
     fn levels_grant_what_upstream_allows() {
-        assert_eq!(granted(UserLevel::Regular), vec![]);
-        assert_eq!(granted(UserLevel::Trusted), vec![SetTrustedFlag, SkipUploadLimit]);
+        assert_eq!(granted(UserLevel::Limited), vec![]);
+        assert_eq!(granted(UserLevel::Regular), vec![Upload, UseApiKeys]);
+        assert_eq!(granted(UserLevel::Trusted), vec![SetTrustedFlag, SkipUploadLimit, Upload, UseApiKeys]);
         assert_eq!(
             granted(UserLevel::Moderator),
             vec![
@@ -129,7 +137,9 @@ mod tests {
                 HandleTickets,
                 SkipUploadLimit,
                 CreateInvites,
-                MarkBest
+                MarkBest,
+                Upload,
+                UseApiKeys
             ]
         );
         assert_eq!(granted(UserLevel::SuperAdmin), Permission::ALL.to_vec());

@@ -28,7 +28,8 @@ current search.
 Every call signs in with HTTP Basic auth: username (or email) and password, or in place
 of the password an API key made under Profile > API keys (`curl -u name:nyaa_...`).
 Accounts with two-factor sign-in, or whose class must have it (`MFA_REQUIRED_LEVEL`), can
-only use keys. A key is shown once, can be revoked there, and works until it is. Failed
+only use keys. A key is shown once, can be revoked there, and works until it is. Limited accounts may not
+upload or use keys. Failed
 passwords count towards the login form's limits. Errors come back as
 `{"errors": [...]}` (auth and lookups) or `{"errors": {"field": ["message"]}}` (uploads).
 
