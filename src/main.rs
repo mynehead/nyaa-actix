@@ -195,6 +195,9 @@ async fn main() -> std::io::Result<()> {
             .route("/profile/2fa/enable", web::post().to(handlers::two_factor::enable_post))
             .route("/profile/2fa/disable", web::post().to(handlers::two_factor::disable_post))
             .route("/profile/2fa/recovery-codes", web::post().to(handlers::two_factor::recovery_codes_post))
+            .route("/profile/api-keys", web::get().to(handlers::api_keys::page))
+            .route("/profile/api-keys", web::post().to(handlers::api_keys::create))
+            .route("/profile/api-keys/{id}/revoke", web::post().to(handlers::api_keys::revoke))
             .route("/account/{page:.+}", web::route().to(handlers::account::legacy_redirect))
             .route("/avatar/{id}", web::get().to(handlers::users::avatar))
             // Support tickets

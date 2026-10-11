@@ -218,6 +218,17 @@ diesel::table! {
 }
 
 diesel::table! {
+    user_api_keys (id) {
+        id -> Integer,
+        user_id -> Integer,
+        name -> Text,
+        key_hash -> Text,
+        created_time -> Timestamp,
+        last_used_time -> Nullable<Timestamp>,
+    }
+}
+
+diesel::table! {
     nyaa_reports (id) {
         id -> Integer,
         created_time -> Timestamp,
@@ -293,6 +304,7 @@ diesel::joinable!(ip_range_bans -> users (admin_id));
 diesel::joinable!(user_sessions -> users (user_id));
 diesel::joinable!(user_mfa -> users (user_id));
 diesel::joinable!(user_recovery_codes -> users (user_id));
+diesel::joinable!(user_api_keys -> users (user_id));
 
 diesel::joinable!(nyaa_reports -> nyaa_torrents (torrent_id));
 diesel::joinable!(nyaa_reports -> users (user_id));
@@ -329,6 +341,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     user_sessions,
     user_mfa,
     user_recovery_codes,
+    user_api_keys,
     support_tickets,
     support_ticket_messages,
     support_ticket_torrents,
