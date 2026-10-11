@@ -14,7 +14,7 @@ pub const TICKET_CLOSED: i32 = 1;
 pub const TICKET_SUBJECT_MIN: usize = 3;
 pub const TICKET_SUBJECT_MAX: usize = 255;
 pub const TICKET_MESSAGE_MIN: usize = 3;
-pub const TICKET_MESSAGE_MAX: usize = 65_535;
+pub const TICKET_MESSAGE_MAX: usize = 500;
 /// Most torrents one Torrent Report may list.
 pub const TICKET_MAX_TORRENTS: usize = 50;
 /// Most accounts one User Report may list.
@@ -142,7 +142,7 @@ pub fn validate_message(message: &str) -> Result<String, &'static str> {
     if (TICKET_MESSAGE_MIN..=TICKET_MESSAGE_MAX).contains(&message.chars().count()) {
         Ok(message)
     } else {
-        Err("Message must be at least 3 characters long and 65535 at most.")
+        Err("Message must be at least 3 characters long and 500 at most.")
     }
 }
 
@@ -431,7 +431,8 @@ mod tests {
         assert!(validate_subject(&"é".repeat(256)).is_err());
         assert_eq!(validate_message(" line one\r\nline two "), Ok("line one\nline two".into()));
         assert!(validate_message("hi").is_err());
-        assert!(validate_message(&"x".repeat(65_536)).is_err());
+        assert!(validate_message(&"x".repeat(501)).is_err());
+        assert!(validate_message(&"é".repeat(500)).is_ok());
     }
 
     #[test]

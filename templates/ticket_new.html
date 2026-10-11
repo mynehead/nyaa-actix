@@ -49,8 +49,8 @@
 		</div>
 		<div class="form-group{% if errors.message %} has-error{% endif %}">
 			<label class="control-label ticket-form-label" for="message">Description</label>
-			<textarea class="form-control" id="message" name="message" rows="8" maxlength="65535" required placeholder="Describe your issue in detail...">{{ form.message }}</textarea>
-			<p class="help-block text-right" data-counter-for="message">0 / 65535</p>
+			<textarea class="form-control" id="message" name="message" rows="8" maxlength="500" required placeholder="Describe your issue in detail...">{{ form.message }}</textarea>
+			<p class="help-block text-right" data-counter-for="message">0 / 500</p>
 			{% if errors.message %}<div class="help-block">{{ errors.message }}</div>{% endif %}
 			<p class="help-block">Markdown is supported. Only you and the staff can read this ticket.</p>
 		</div>
