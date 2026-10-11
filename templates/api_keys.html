@@ -47,7 +47,9 @@
 </div>
 {% endif %}
 
-{% if keys | length < max_keys %}
+{% if not can.use_api_keys %}
+<p>Your account class may not use API keys.</p>
+{% elif keys | length < max_keys %}
 <div class="row">
 	<div class="col-md-5">
 		<form method="POST" action="/profile/api-keys">

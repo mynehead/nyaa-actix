@@ -58,7 +58,7 @@
 				{% endif %}
 				<div id="navbar" class="navbar-collapse collapse">
 					<ul class="nav navbar-nav">
-						<li{% if active_page is defined and active_page == "upload" %} class="active"{% endif %}><a href="/upload">Upload</a></li>
+						{% if not current_user or can.upload %}<li{% if active_page is defined and active_page == "upload" %} class="active"{% endif %}><a href="/upload">Upload</a></li>{% endif %}
 						<li{% if active_page is defined and active_page == "groups" %} class="active"{% endif %}><a href="/groups">Groups</a></li>
 						<li class="dropdown">
 							<a href="#" class="dropdown-toggle" data-toggle="dropdown" role="button" aria-haspopup="true" aria-expanded="false">

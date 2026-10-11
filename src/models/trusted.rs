@@ -272,6 +272,9 @@ pub fn trusted_deny_reasons(conn: &mut DbConnection, user: &User, cfg: &TrustedC
     if user.level() >= UserLevel::Trusted {
         reasons.push("You are already trusted.".to_string());
     }
+    if !user.can(crate::auth::Permission::Upload) {
+        reasons.push("Your account class may not upload.".to_string());
+    }
     if !satisfies_trusted_reqs(conn, user.id, cfg)? {
         reasons.push("You do not satisfy the minimum requirements.".to_string());
     }

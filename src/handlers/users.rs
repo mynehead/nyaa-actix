@@ -167,11 +167,12 @@ struct UserClassChoice {
 }
 
 /// The classes `moderator` may give `user`, and the one selected now, as upstream's
-/// `_create_user_class_choices`: moderators pick Regular or Trusted, superadmins also
-/// Moderator. Nobody can make another superadmin here.
+/// `_create_user_class_choices`: moderators pick Limited, Regular or Trusted, superadmins
+/// also Moderator. Nobody can make another superadmin here.
 fn user_class_choices(moderator: &User, user: &User) -> (&'static str, Vec<UserClassChoice>) {
     let mut choices = vec![UserClassChoice { value: "regular", label: "Regular", level: UserLevel::Regular as i32 }];
     if moderator.can(Permission::ChangeUserClass) {
+        choices.insert(0, UserClassChoice { value: "limited", label: "Limited", level: UserLevel::Limited as i32 });
         choices.push(UserClassChoice { value: "trusted", label: "Trusted", level: UserLevel::Trusted as i32 });
     }
     if moderator.can(Permission::GrantModerator) {
@@ -181,6 +182,8 @@ fn user_class_choices(moderator: &User, user: &User) -> (&'static str, Vec<UserC
         "moderator"
     } else if user.level() >= UserLevel::Trusted {
         "trusted"
+    } else if user.level() == UserLevel::Limited {
+        "limited"
     } else {
         "regular"
     };

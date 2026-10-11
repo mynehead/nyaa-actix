@@ -23,7 +23,7 @@ use crate::config::Config;
 use crate::db::schema::{nyaa_main_categories, nyaa_statistics};
 use crate::db::DbPool;
 use crate::handlers::account::{LOGIN_FAILURES_BY_ACCOUNT, LOGIN_FAILURES_BY_IP};
-use crate::handlers::torrents::{create_torrent, read_field, EditForm, Upload, MAX_TORRENT_SIZE};
+use crate::handlers::torrents::{create_torrent, read_field, EditForm, Upload, MAX_TORRENT_SIZE, NO_UPLOADS};
 use crate::models::{password_matches, MainCategory, Statistic, Torrent, User};
 use crate::storage::{Kind, Storage};
 use crate::torrent::FileNode;
@@ -92,6 +92,9 @@ async fn api_user(req: &HttpRequest, pool: &DbPool, cfg: &Config) -> std::result
     }
     if !u.is_active() {
         return Err(Box::new(error(StatusCode::FORBIDDEN, json!(["Your account is not active."]))));
+    }
+    if by_key && !u.can(Permission::UseApiKeys) {
+        return Err(Box::new(error(StatusCode::FORBIDDEN, json!(["Your account may not use API keys."]))));
     }
     if !by_key {
         let user_id = u.id;
@@ -171,6 +174,9 @@ pub async fn upload(
     mut payload: Multipart,
 ) -> Result<HttpResponse> {
     let user = api_user!(&req, &pool, &cfg);
+    if !user.can(Permission::Upload) {
+        return Ok(error(StatusCode::FORBIDDEN, json!([NO_UPLOADS])));
+    }
 
     let (mut torrent_file, mut torrent_data) = (None, None);
     let mut fields = 0;
@@ -400,7 +406,9 @@ mod tests {
             diesel::sql_query(format!(
                 "INSERT INTO users (id, username, email, password_hash, status, level) VALUES \
                  (901, 'up', 'up@example.com', '{hash}', 1, 0), (902, 'mod', NULL, '{hash}', 1, 2), \
-                 (903, 'gone', NULL, '{hash}', 2, 0), (904, 'other', NULL, '{hash}', 1, 0)"
+                 (903, 'gone', NULL, '{hash}', 2, 0), (904, 'other', NULL, '{hash}', 1, 0), \
+                 (905, 'limited', NULL, '{hash}', 1, -1), \
+                 (906, 'idle', NULL, '{hash}', 0, 0)"
             ))
             .execute(&mut conn)
             .unwrap();
@@ -466,6 +474,10 @@ mod tests {
             (403, json!({"errors": ["Incorrect username or password"]}))
         );
         assert_eq!(call(post("/api/upload", Some(("gone", "secret1")), body(Some(data), Some(&file)))).await.0, 403);
+        assert_eq!(
+            call(post("/api/upload", Some(("limited", "secret1")), body(Some(data), Some(&file)))).await,
+            (403, json!({"errors": [NO_UPLOADS]}))
+        );
         assert_eq!(
             call(post("/api/upload", Some(("up", "secret1")), body(None, Some(&file)))).await,
             (400, json!({"errors": ["missing torrent_data field"]}))
@@ -549,6 +561,9 @@ mod tests {
         assert_eq!(call(with_key("other", &key)).await.0, 200);
         assert_eq!(call(with_key("up", &key)).await.0, 403, "someone else's key");
         assert_eq!(call(with_key("other", &api_key::new_key())).await.0, 403);
+        // Keys made before the account became Limited stop working
+        let limited_key = ApiKey::create(&mut pool.get().unwrap(), 905, "old").unwrap().unwrap();
+        assert_eq!(call(with_key("limited", &limited_key)).await.0, 403);
 
         // The feed lists it with upstream's nyaa: fields
         macro_rules! feed {
@@ -581,6 +596,14 @@ mod tests {
         // Anonymous uploads don't show under their uploader's name, as on profiles
         assert!(!feed!("/?page=rss&u=up").1.contains("<item>"));
         assert_eq!(feed!("/?page=rss&user=nobody").0, 404);
+
+        // Inactive accounts are refused; ten wrong passwords lock the account
+        let idle = |password: &str| post("/api/upload", Some(("idle", password)), body(Some(data), Some(&file)));
+        assert_eq!(call(idle("secret1")).await, (403, json!({"errors": ["Your account is not active."]})));
+        for _ in 0..10 {
+            assert_eq!(call(idle("wrong")).await.0, 403);
+        }
+        assert_eq!(call(idle("secret1")).await.0, 429);
         std::fs::remove_dir_all(dir).ok();
     }
 }
