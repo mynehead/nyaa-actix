@@ -358,7 +358,7 @@ mod tests {
     /// alice (1, regular), bob (2, regular), root (3, admin), dave (77, regular; only the
     /// throttle test fails codes for him, as the limits are process-wide).
     fn pool() -> DbPool {
-        let pool = Pool::builder().max_size(1).build(crate::db::DbManager::new(":memory:")).unwrap();
+        let pool = Pool::builder().max_size(1).build(crate::db::DbManager::new(&crate::db::test_url())).unwrap();
         let mut conn = pool.get().unwrap();
         crate::db::run_migrations(&mut conn).unwrap();
         for (name, level) in

@@ -374,7 +374,7 @@ mod tests {
 
     #[test]
     fn codes_work_once() {
-        let mut conn = crate::db::connect(":memory:").unwrap();
+        let mut conn = crate::db::connect(&crate::db::test_url()).unwrap();
         crate::db::run_migrations(&mut conn).unwrap();
         diesel::sql_query("INSERT INTO users (id, username, password_hash, status) VALUES (1, 'u', 'x', 1)")
             .execute(&mut conn)

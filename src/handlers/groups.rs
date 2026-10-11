@@ -435,13 +435,14 @@ mod tests {
 
     /// Group 1 owned by user 1 (a moderator); user 2 is an editor, user 3 uploads, user 4 isn't a member.
     fn pool() -> DbPool {
-        let pool = Pool::builder().max_size(1).build(crate::db::DbManager::new(":memory:")).unwrap();
+        let pool = Pool::builder().max_size(1).build(crate::db::DbManager::new(&crate::db::test_url())).unwrap();
         let mut conn = pool.get().unwrap();
         crate::db::run_migrations(&mut conn).unwrap();
         for sql in [
             "INSERT INTO users (id, username, password_hash, status, level) VALUES \
              (1, 'owner', 'x', 1, 2), (2, 'editor', 'x', 1, 0), (3, 'uploader', 'x', 1, 0), (4, 'other', 'x', 1, 0)",
-            "INSERT INTO groups (id, name, tag, slug, owner_id) VALUES (1, 'Group', 'G', 'grp', 1)",
+            // No id, so PostgreSQL's counter moves past it too: this is group 1
+            "INSERT INTO groups (name, tag, slug, owner_id) VALUES ('Group', 'G', 'grp', 1)",
             "INSERT INTO group_members (group_id, user_id, permissions) VALUES (1, 2, 3), (1, 3, 1)",
         ] {
             diesel::sql_query(sql).execute(&mut conn).unwrap();

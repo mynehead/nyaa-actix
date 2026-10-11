@@ -374,7 +374,7 @@ mod tests {
             return;
         };
         let api = Api::new(&url, &key);
-        let mut conn = crate::db::connect(":memory:").unwrap();
+        let mut conn = crate::db::connect(&crate::db::test_url()).unwrap();
         crate::db::run_migrations(&mut conn).unwrap();
         // Hashes unique to this run, so a tracker reused between runs starts clean
         let salt = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();

@@ -127,6 +127,54 @@ pub fn init_pool(database_url: &str) -> DbPool {
         .expect("Failed to create database pool")
 }
 
+/// The database URL for a test: in-memory SQLite, or with `TEST_DATABASE_URL` set to a
+/// PostgreSQL server, a new database copied from a migrated template, so tests stay apart.
+#[cfg(test)]
+pub fn test_url() -> String {
+    static BASE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let Some(base) = BASE.get_or_init(|| std::env::var("TEST_DATABASE_URL").ok().map(|url| make_test_template(&url)))
+    else {
+        return ":memory:".into();
+    };
+    let name = format!("nyaa_test_{}_{}", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    let mut admin = connect(base).unwrap();
+    diesel::sql_query(format!("CREATE DATABASE {name} TEMPLATE nyaa_test_template")).execute(&mut admin).unwrap();
+    // shortcut: drops a query string from the URL, add it back if a test server ever needs one
+    format!("{}/{name}", base.rsplit_once('/').unwrap().0)
+}
+
+/// Drops the databases earlier runs left behind and migrates a fresh template.
+/// shortcut: two `cargo test` runs against the same server at once drop each other's databases.
+#[cfg(test)]
+fn make_test_template(url: &str) -> String {
+    #[derive(diesel::QueryableByName)]
+    struct Name {
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        datname: String,
+    }
+    let mut admin = connect(url).unwrap();
+    let old: Vec<Name> = diesel::sql_query("SELECT datname FROM pg_database WHERE datname LIKE 'nyaa\\_test\\_%'")
+        .load(&mut admin)
+        .unwrap();
+    for Name { datname } in old {
+        diesel::sql_query(format!("DROP DATABASE {datname} WITH (FORCE)")).execute(&mut admin).unwrap();
+    }
+    diesel::sql_query("CREATE DATABASE nyaa_test_template").execute(&mut admin).unwrap();
+    let template = format!("{}/nyaa_test_template", url.rsplit_once('/').unwrap().0);
+    let mut conn = connect(&template).unwrap();
+    run_migrations(&mut conn).unwrap();
+    // The test fixtures write blobs as SQLite's X'..', which PostgreSQL reads as a bit string
+    conn.batch_execute(
+        "CREATE FUNCTION test_bit_to_bytea(b bit) RETURNS bytea IMMUTABLE LANGUAGE sql AS $$
+             SELECT coalesce(decode(string_agg(lpad(to_hex(substring(b FROM i FOR 8)::int), 2, '0'), ''
+                 ORDER BY i), 'hex'), '') FROM generate_series(1, length(b), 8) AS i $$;
+         CREATE CAST (bit AS bytea) WITH FUNCTION test_bit_to_bytea(bit) AS ASSIGNMENT;",
+    )
+    .unwrap();
+    url.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1375,7 +1375,7 @@ mod tests {
 
         fn pool() -> DbPool {
             // One connection, so every request sees the same in-memory database
-            let pool = Pool::builder().max_size(1).build(crate::db::DbManager::new(":memory:")).unwrap();
+            let pool = Pool::builder().max_size(1).build(crate::db::DbManager::new(&crate::db::test_url())).unwrap();
             let mut conn = pool.get().unwrap();
             crate::db::run_migrations(&mut conn).unwrap();
             diesel::sql_query(
@@ -2253,11 +2253,12 @@ mod tests {
                 .execute(&mut conn)
                 .unwrap();
             // The wait runs from the latest upload
-            diesel::sql_query("UPDATE nyaa_torrents SET created_time = datetime('now', '-6 minutes') WHERE id = 6")
+            let six_minutes_ago = (chrono::Utc::now() - chrono::Duration::minutes(6)).format("'%Y-%m-%d %H:%M:%S'");
+            diesel::sql_query(format!("UPDATE nyaa_torrents SET created_time = {six_minutes_ago} WHERE id = 6"))
                 .execute(&mut conn)
                 .unwrap();
             assert_eq!(wait(&mut conn, &cfg, 1, Some(&ip)).map(|s| (290..=300).contains(&s)), Some(true));
-            diesel::sql_query("UPDATE nyaa_torrents SET created_time = datetime('now', '-6 minutes')")
+            diesel::sql_query(format!("UPDATE nyaa_torrents SET created_time = {six_minutes_ago}"))
                 .execute(&mut conn)
                 .unwrap();
             assert_eq!(wait(&mut conn, &cfg, 1, Some(&ip)), None);
@@ -2349,8 +2350,9 @@ mod tests {
             // The torrent's own name stands in for a blank display name
             let res = test::call_service(&app, post(upload_body(&[("category", "1_2")], Some(&file)))).await;
             assert_eq!(res.status(), StatusCode::FOUND);
+            // Not the fixture's torrent 5 (PostgreSQL numbers new rows from 1 regardless)
             let t: Torrent =
-                nyaa_torrents::table.order(nyaa_torrents::id.desc()).first(&mut pool.get().unwrap()).unwrap();
+                nyaa_torrents::table.filter(nyaa_torrents::id.ne(5)).first(&mut pool.get().unwrap()).unwrap();
             assert_eq!((t.display_name.as_str(), t.main_category_id, t.sub_category_id), ("c.txt", 1, 2));
             std::fs::remove_dir_all(config().torrent_storage_path).ok();
         }

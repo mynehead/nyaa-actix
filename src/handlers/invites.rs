@@ -209,7 +209,7 @@ mod tests {
     use diesel::r2d2::Pool;
 
     fn pool() -> DbPool {
-        let pool = Pool::builder().max_size(1).build(crate::db::DbManager::new(":memory:")).unwrap();
+        let pool = Pool::builder().max_size(1).build(crate::db::DbManager::new(&crate::db::test_url())).unwrap();
         let mut conn = pool.get().unwrap();
         crate::db::run_migrations(&mut conn).unwrap();
         diesel::sql_query(

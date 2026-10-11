@@ -226,7 +226,7 @@ mod tests {
         use diesel::RunQueryDsl;
 
         // One connection, so every request sees the same in-memory database
-        let pool = Pool::builder().max_size(1).build(crate::db::DbManager::new(":memory:")).unwrap();
+        let pool = Pool::builder().max_size(1).build(crate::db::DbManager::new(&crate::db::test_url())).unwrap();
         crate::db::run_migrations(&mut pool.get().unwrap()).unwrap();
         diesel::sql_query(
             "INSERT INTO users (id, username, password_hash, status, level) VALUES \

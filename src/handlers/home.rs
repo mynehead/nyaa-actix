@@ -214,7 +214,7 @@ mod tests {
 
     #[actix_web::test]
     async fn info_hash_searches_open_the_torrent() {
-        let pool = Pool::builder().max_size(1).build(crate::db::DbManager::new(":memory:")).unwrap();
+        let pool = Pool::builder().max_size(1).build(crate::db::DbManager::new(&crate::db::test_url())).unwrap();
         {
             let mut conn = pool.get().unwrap();
             crate::db::run_migrations(&mut conn).unwrap();

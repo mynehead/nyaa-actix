@@ -877,7 +877,7 @@ pub(crate) mod tests {
 
     fn pool() -> DbPool {
         // One connection, so every request sees the same in-memory database
-        let pool = Pool::builder().max_size(1).build(crate::db::DbManager::new(":memory:")).unwrap();
+        let pool = Pool::builder().max_size(1).build(crate::db::DbManager::new(&crate::db::test_url())).unwrap();
         let mut conn = pool.get().unwrap();
         crate::db::run_migrations(&mut conn).unwrap();
         for (name, email) in [("alice", "alice@example.com"), ("bob", "bob@example.com")] {

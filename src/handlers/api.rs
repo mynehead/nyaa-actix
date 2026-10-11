@@ -370,7 +370,7 @@ mod tests {
     /// Uploads through the API, reads them back through /api/info and the RSS feed.
     #[actix_web::test]
     async fn upload_info_and_rss_round_trip() {
-        let pool = Pool::builder().max_size(1).build(crate::db::DbManager::new(":memory:")).unwrap();
+        let pool = Pool::builder().max_size(1).build(crate::db::DbManager::new(&crate::db::test_url())).unwrap();
         {
             let mut conn = pool.get().unwrap();
             crate::db::run_migrations(&mut conn).unwrap();
