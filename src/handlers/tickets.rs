@@ -252,7 +252,14 @@ fn ticket_page(
     error: Option<(StatusCode, String)>,
 ) -> Result<HttpResponse> {
     let opener = User::by_id(conn, ticket.user_id).map_err(internal_error)?;
-    let messages = ticket.messages(conn).map_err(internal_error)?;
+    let mut messages = ticket.messages(conn).map_err(internal_error)?;
+    // Staff stay anonymous to users: only staff see who answered
+    let staff_view = user.can(Permission::HandleTickets);
+    if !staff_view {
+        for row in messages.iter_mut().filter(|row| row.message.from_staff) {
+            row.author = None;
+        }
+    }
     let torrents = ticket.torrents(conn).map_err(internal_error)?;
     let reported_users = ticket.users(conn).map_err(internal_error)?;
     let mut ctx = base_context(cfg, Some(user));
@@ -263,6 +270,7 @@ fn ticket_page(
     ctx.insert("ticket", ticket);
     ctx.insert("opener", &opener.map(|u| u.username));
     ctx.insert("messages", &messages);
+    ctx.insert("staff_view", &staff_view);
     ctx.insert("is_owner", &(ticket.user_id == user.id));
     ctx.insert("message", message);
     let (status, error) = error.map_or((StatusCode::OK, None), |(status, e)| (status, Some(e)));
@@ -575,7 +583,10 @@ mod tests {
         // The user sees the staff reply, can't reply while closed, and can reopen
         let (_, html) = send!(app, get("/tickets/1"), &mut cookie);
         assert!(html.contains("Fixed it") && html.contains("label-info\">Staff"), "{html}");
+        assert!(html.contains("Support team") && !html.contains("/user/mod") && !html.contains(">mod<"), "{html}");
         assert!(html.contains("This ticket is closed."), "{html}");
+        let (_, html) = send!(app3, get("/tickets/1"), &mut moder);
+        assert!(html.contains("<a href=\"/user/mod\">mod</a>"), "{html}");
         let (status, _) =
             send!(app, post("/tickets/1", &[("action", "reply"), ("message", "Still broken")]), &mut cookie);
         assert_eq!(status, StatusCode::BAD_REQUEST);
