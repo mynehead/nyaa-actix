@@ -22,6 +22,10 @@ pub fn parse_torrent(data: &[u8]) -> Result<TorrentMeta, bencode::BencodeError> 
     let info = dict.get(b"info".as_slice()).ok_or(bencode::BencodeError::Invalid(0))?;
     let info_dict = info.as_dict().ok_or(bencode::BencodeError::Invalid(0))?;
 
+    if path_too_deep(info) {
+        return Err(bencode::BencodeError::TooDeep);
+    }
+
     let bencoded_info = bencode::encode(info);
     let mut hasher = Sha1::new();
     hasher.update(&bencoded_info);
@@ -93,6 +97,14 @@ impl FileNode {
     }
 }
 
+/// True if a file path has more folders than bencode may nest. The file list is built
+/// and rendered recursively, so a path of thousands of parts would overflow the stack
+/// and abort the server; the nesting cap of the decoder doesn't count list length.
+fn path_too_deep(info: &BencodeValue) -> bool {
+    let files = info.get(b"files").and_then(|f| f.as_list()).unwrap_or_default();
+    files.iter().any(|f| f.get(b"path").and_then(|p| p.as_list()).is_some_and(|p| p.len() > bencode::MAX_DEPTH))
+}
+
 /// The file list of a stored info dict, rooted at the torrent's name, plus the file count.
 /// `None` if the info dict can't be read.
 pub fn file_tree(bencoded_info: &[u8]) -> Option<(Vec<FileNode>, usize)> {
@@ -104,6 +116,10 @@ pub fn file_tree(bencoded_info: &[u8]) -> Option<(Vec<FileNode>, usize)> {
         return Some((vec![FileNode { name, size: Some(length), children: Vec::new() }], 1));
     }
 
+    // Torrents stored before uploads were checked show no file list instead of crashing
+    if path_too_deep(&info) {
+        return None;
+    }
     let mut root = FileNode::folder(name);
     let files = info.get(b"files")?.as_list()?;
     for file in files {
@@ -271,5 +287,21 @@ pub(crate) mod tests {
                 .unwrap();
         assert_eq!(root.get(b"announce").and_then(|v| v.as_str()), Some("udp://t1/announce"));
         assert!(root.get(b"announce-list").is_none());
+    }
+
+    #[test]
+    fn deep_file_paths_are_refused_not_a_stack_overflow() {
+        let info = |parts: usize| {
+            let mut info = b"d5:filesld6:lengthi1e4:pathl".to_vec();
+            info.extend(b"1:a".repeat(parts));
+            info.extend(b"eee4:name1:r12:piece lengthi1e6:pieces0:e");
+            info
+        };
+        assert!(file_tree(&info(bencode::MAX_DEPTH)).is_some());
+        assert!(file_tree(&info(200_000)).is_none());
+        let mut torrent = b"d4:info".to_vec();
+        torrent.extend(info(200_000));
+        torrent.push(b'e');
+        assert!(matches!(parse_torrent(&torrent), Err(bencode::BencodeError::TooDeep)));
     }
 }

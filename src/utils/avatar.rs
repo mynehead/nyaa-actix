@@ -7,9 +7,9 @@ use image::{imageops::FilterType, ImageFormat, ImageReader, Limits};
 
 pub const AVATAR_SIZE: u32 = 256;
 /// Largest file the avatar form accepts.
-pub const MAX_AVATAR_UPLOAD: usize = 4 * 1024 * 1024;
-/// Bigger images are refused before decoding, so a small file can't expand into gigabytes.
-const MAX_DIMENSION: u32 = 8192;
+pub const MAX_AVATAR_UPLOAD: usize = 2 * 1024 * 1024;
+/// Bigger images are refused before decoding; 1024x1024 RGBA decodes to 4 MiB.
+const MAX_DIMENSION: u32 = 1024;
 
 /// Decodes a PNG, JPEG, GIF (first frame) or WebP and returns the 256x256 PNG,
 /// or a message for the user.
@@ -24,7 +24,7 @@ pub fn process(data: &[u8]) -> Result<Vec<u8>, &'static str> {
     limits.max_image_height = Some(MAX_DIMENSION);
     reader.limits(limits);
     let img = reader.decode().map_err(|e| match e {
-        image::ImageError::Limits(_) => "Image is too large; at most 8192x8192 pixels.",
+        image::ImageError::Limits(_) => "Image is too large; at most 1024x1024 pixels.",
         _ => UNSUPPORTED,
     })?;
     let img = img.resize_to_fill(AVATAR_SIZE, AVATAR_SIZE, FilterType::Lanczos3);
@@ -64,6 +64,6 @@ pub(crate) mod tests {
     fn rejects_non_images_and_huge_dimensions() {
         assert!(process(b"not an image").is_err());
         assert!(process(b"<svg xmlns='http://www.w3.org/2000/svg'/>").is_err());
-        assert_eq!(process(&sample_png(9000, 1)), Err("Image is too large; at most 8192x8192 pixels."));
+        assert_eq!(process(&sample_png(1025, 1)), Err("Image is too large; at most 1024x1024 pixels."));
     }
 }

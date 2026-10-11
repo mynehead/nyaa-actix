@@ -842,7 +842,7 @@ pub async fn avatar_post(
         }
         match crate::handlers::torrents::read_field(&mut field, avatar::MAX_AVATAR_UPLOAD).await {
             Ok(data) => upload = Some(data),
-            Err(_) => return fail("The file is too large; at most 4 MiB."),
+            Err(_) => return fail("The file is too large; at most 2 MiB."),
         }
         break;
     }

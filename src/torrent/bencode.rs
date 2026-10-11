@@ -24,7 +24,7 @@ pub enum BencodeError {
 
 /// Real torrents nest a handful of levels; the cap stops crafted input
 /// from overflowing the stack and aborting the server.
-const MAX_DEPTH: usize = 64;
+pub(crate) const MAX_DEPTH: usize = 64;
 
 pub fn decode(data: &[u8]) -> Result<BencodeValue, BencodeError> {
     let (val, _) = decode_value(data, 0, 0)?;
