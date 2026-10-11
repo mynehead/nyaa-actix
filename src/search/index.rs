@@ -31,14 +31,26 @@ fn docs_for(conn: &mut DbConnection, torrents: &[Torrent]) -> QueryResult<Vec<To
 /// back to the database when the index misbehaves, so a failure here is logged, not returned:
 /// the upload or edit itself already succeeded.
 pub fn torrent_changed(conn: &mut DbConnection, meili: Option<&Meili>, id: i32) {
+    torrents_changed(conn, meili, &[id]);
+}
+
+/// [`torrent_changed`] for many torrents at once (nukes), in batches of [`BATCH`].
+pub fn torrents_changed(conn: &mut DbConnection, meili: Option<&Meili>, ids: &[i32]) {
     let Some(meili) = meili else { return };
     let result = (|| -> anyhow::Result<()> {
-        let Some(t) = Torrent::by_id(conn, id)? else { return Ok(()) };
-        meili.put_documents(&docs_for(conn, &[t])?)?;
+        for chunk in ids.chunks(BATCH as usize) {
+            let torrents: Vec<Torrent> = nyaa_torrents::table.filter(nyaa_torrents::id.eq_any(chunk)).load(conn)?;
+            if !torrents.is_empty() {
+                meili.put_documents(&docs_for(conn, &torrents)?)?;
+            }
+        }
         Ok(())
     })();
     if let Err(e) = result {
-        log::warn!("Could not index torrent #{id}, searching the database until the index is rebuilt: {e:#}");
+        log::warn!(
+            "Could not index {} torrent(s), searching the database until the index is rebuilt: {e:#}",
+            ids.len()
+        );
         meili.mark_stale();
     }
 }

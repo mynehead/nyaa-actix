@@ -2451,7 +2451,6 @@ dependencies = [
  "log",
  "md-5 0.10.6",
  "object_store",
- "percent-encoding",
  "pq-sys",
  "qrcode",
  "regex",

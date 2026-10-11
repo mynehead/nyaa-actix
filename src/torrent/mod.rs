@@ -40,13 +40,18 @@ pub fn parse_torrent(data: &[u8]) -> Result<TorrentMeta, bencode::BencodeError> 
         .unwrap_or("Unknown")
         .to_string();
 
-    let filesize = if let Some(length) = info_dict.get(b"length".as_slice()).and_then(|v| v.as_int()) {
-        length
+    let lengths: Vec<i64> = if let Some(length) = info_dict.get(b"length".as_slice()).and_then(|v| v.as_int()) {
+        vec![length]
     } else if let Some(files) = info_dict.get(b"files".as_slice()).and_then(|v| v.as_list()) {
-        files.iter().filter_map(|f| f.get(b"length".as_slice()).and_then(|l| l.as_int())).sum()
+        files.iter().filter_map(|f| f.get(b"length".as_slice()).and_then(|l| l.as_int())).collect()
     } else {
-        0
+        vec![]
     };
+    // Crafted files can carry negative lengths or sums past i64::MAX
+    let filesize = lengths
+        .into_iter()
+        .try_fold(0i64, |sum, l| if l < 0 { None } else { sum.checked_add(l) })
+        .ok_or(bencode::BencodeError::InvalidSize)?;
 
     let announce_list = dict.get(b"announce-list".as_slice()).and_then(|v| v.as_list()).unwrap_or_default();
     let trackers = dict
@@ -303,5 +308,15 @@ pub(crate) mod tests {
         torrent.extend(info(200_000));
         torrent.push(b'e');
         assert!(matches!(parse_torrent(&torrent), Err(bencode::BencodeError::TooDeep)));
+    }
+
+    #[test]
+    fn negative_or_overflowing_sizes_are_refused() {
+        let negative = torrent_file(b"d6:lengthi-5e4:name1:a12:piece lengthi1e6:pieces0:e");
+        assert!(matches!(parse_torrent(&negative), Err(bencode::BencodeError::InvalidSize)));
+        let huge = torrent_file(
+            b"d5:filesld6:lengthi9223372036854775807e4:pathl1:aeed6:lengthi1e4:pathl1:beee4:name1:r12:piece lengthi1e6:pieces0:e",
+        );
+        assert!(matches!(parse_torrent(&huge), Err(bencode::BencodeError::InvalidSize)));
     }
 }

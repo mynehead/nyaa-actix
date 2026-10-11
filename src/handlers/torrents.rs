@@ -15,6 +15,7 @@ use crate::config::Config;
 use crate::db::schema::{bans, nyaa_comments, nyaa_statistics, nyaa_torrents, users};
 use crate::db::DbConnection;
 use crate::db::DbPool;
+use crate::handlers::account::redirect;
 use crate::models::{
     danger_action, edited_flags, torrent_link, user_link, AdminLog, Ban, DangerAction, EditFlags, NewBan, NewStatistic,
     NewTorrent, Torrent, TorrentFlags, User, UserStatus, MAX_BAN_REASON_LEN,
@@ -99,11 +100,12 @@ pub async fn post_comment(
                     text,
                 })
                 .execute(conn)?;
+            // Relative, so two comments at once can't both store the same recount
+            diesel::update(nyaa_torrents::table.find(torrent_id))
+                .set(nyaa_torrents::comment_count.eq(nyaa_torrents::comment_count + 1))
+                .execute(conn)?;
             let count: i64 =
                 nyaa_comments::table.filter(nyaa_comments::torrent_id.eq(torrent_id)).count().get_result(conn)?;
-            diesel::update(nyaa_torrents::table.find(torrent_id))
-                .set(nyaa_torrents::comment_count.eq(count as i32))
-                .execute(conn)?;
             Ok(count)
         })
         .map_err(internal_error)?;
@@ -216,11 +218,9 @@ pub async fn delete_comment(
     }
 
     conn.transaction::<_, diesel::result::Error, _>(|conn| {
-        diesel::delete(nyaa_comments::table.find(comment_id)).execute(conn)?;
-        let count: i64 =
-            nyaa_comments::table.filter(nyaa_comments::torrent_id.eq(torrent_id)).count().get_result(conn)?;
+        let deleted = diesel::delete(nyaa_comments::table.find(comment_id)).execute(conn)? as i32;
         diesel::update(nyaa_torrents::table.find(torrent_id))
-            .set(nyaa_torrents::comment_count.eq(count as i32))
+            .set(nyaa_torrents::comment_count.eq(nyaa_torrents::comment_count - deleted))
             .execute(conn)?;
         if comment.user_id != Some(user.id) {
             let author = match comment.user_id {
@@ -298,11 +298,14 @@ fn render_view(
         _ => None,
     };
 
-    // Comment authors, for names, level colors and the "(uploader)" tag
+    // Comment authors, for names, level colors and the "(uploader)" tag, in one query
+    let author_ids: Vec<i32> = comments.iter().filter_map(|c| c.user_id).collect();
+    let authors: std::collections::HashMap<i32, User> =
+        users::table.filter(users::id.eq_any(author_ids)).load::<User>(conn)?.into_iter().map(|u| (u.id, u)).collect();
     let comments: Vec<serde_json::Value> = comments
         .into_iter()
         .map(|c| {
-            let user = c.user_id.and_then(|uid| User::by_id(conn, uid).ok().flatten());
+            let user = c.user_id.and_then(|uid| authors.get(&uid).cloned());
             let avatar_url =
                 user.as_ref().map_or_else(|| crate::models::DEFAULT_AVATAR.to_string(), |u| u.avatar_url(cfg));
             let limit = cfg.editing_time_limit;
@@ -1031,13 +1034,13 @@ fn render_edit(
     ctx.insert("is_deleted", &torrent.is_deleted());
     ctx.insert("is_banned", &torrent.is_banned());
     ctx.insert("flash_messages", flashes);
-    let target = UploaderBanTarget::load(conn, torrent).map_err(actix_web::error::ErrorInternalServerError)?;
+    let target = UploaderBanTarget::load(conn, torrent).map_err(internal_error)?;
     if target.can_be_banned_by(editor) {
         ctx.insert("ban_form", &true);
         ctx.insert("ban_uploader", &target.uploader);
         ctx.insert("ip_banned", &target.ip_banned());
     }
-    tmpl.render("edit.html", &ctx).map_err(actix_web::error::ErrorInternalServerError)
+    tmpl.render("edit.html", &ctx).map_err(internal_error)
 }
 
 pub async fn edit_torrent_get(
@@ -1154,8 +1157,7 @@ pub async fn edit_torrent_post(
     let edit_url = format!("{}/edit", view_url);
     let torrent_action = form.danger_action().and_then(|a| danger_action(torrent.flags, a, &editor));
     let uploader_ban = if form.bans_uploader() {
-        let target =
-            UploaderBanTarget::load(&mut conn, &torrent).map_err(actix_web::error::ErrorInternalServerError)?;
+        let target = UploaderBanTarget::load(&mut conn, &torrent).map_err(internal_error)?;
         if !target.can_be_banned_by(&editor) {
             return Err(actix_web::error::ErrorForbidden("You may not ban this uploader"));
         }
@@ -1193,7 +1195,7 @@ pub async fn edit_torrent_post(
         }
         Ok(())
     })
-    .map_err(actix_web::error::ErrorInternalServerError)?;
+    .map_err(internal_error)?;
     // Only the torrent page shows flashes; owners deleting their own torrent go home
     if let Some((_, action)) = torrent_action.filter(|_| editor.can(Permission::ModerateTorrents)) {
         flash::push(&session, "success", "", &format!("Torrent has been successfully {}.", action));
@@ -1331,10 +1333,6 @@ impl UploaderBanPlan {
     }
 }
 
-fn redirect(location: &str) -> HttpResponse {
-    HttpResponse::Found().insert_header(("Location", location)).finish()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1404,42 +1402,7 @@ mod tests {
 
         fn config() -> Config {
             let storage = std::env::temp_dir().join(format!("nyaa-edit-test-{}", std::process::id()));
-            Config {
-                database_url: String::new(),
-                secret_key: String::new(),
-                site_name: "Nyaa".into(),
-                global_site_name: "Nyaa".into(),
-                site_flavor: "nyaa".into(),
-                sister_site_url: None,
-                results_per_page: 75,
-                max_pages: 0,
-                torrent_storage_path: storage.to_string_lossy().into_owned(),
-                avatar_storage_path: String::new(),
-                enable_gravatar: false,
-                show_stats: true,
-                max_files_view: 1000,
-                required_announce_url: None,
-                gravatar_url: crate::config::DEFAULT_GRAVATAR_URL.into(),
-                gravatar_sha256: false,
-                maintenance: Default::default(),
-                raid_mode: Default::default(),
-                registration: Default::default(),
-                site_url: String::new(),
-                tracker_urls: vec![],
-                trusted_proxies: vec![],
-                meili: None,
-                count_cache: None,
-                tracker: None,
-                ratelimit_account_age: 0,
-                editing_time_limit: 0,
-                upload_limit: Default::default(),
-                mail: Default::default(),
-                trusted: Default::default(),
-                tickets: Default::default(),
-                mfa: Default::default(),
-                captcha: None,
-                email_blacklist: Default::default(),
-            }
+            Config { torrent_storage_path: storage.to_string_lossy().into_owned(), ..Config::for_tests() }
         }
 
         fn storage() -> Storage {
