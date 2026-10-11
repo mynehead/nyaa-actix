@@ -1,4 +1,4 @@
-//! Keeping the Meilisearch index in step with SQLite: single torrents after an upload or
+//! Keeping the Meilisearch index in step with the database: single torrents after an upload or
 //! edit, tracker stats on a timer, and full rebuilds from the `reindex` subcommand.
 
 use std::time::{Duration, Instant};
@@ -28,7 +28,7 @@ fn docs_for(conn: &mut DbConnection, torrents: &[Torrent]) -> QueryResult<Vec<To
 }
 
 /// Pushes the current state of one torrent to the index, if there is one. Search falls
-/// back to SQLite when the index misbehaves, so a failure here is logged, not returned:
+/// back to the database when the index misbehaves, so a failure here is logged, not returned:
 /// the upload or edit itself already succeeded.
 pub fn torrent_changed(conn: &mut DbConnection, meili: Option<&Meili>, id: i32) {
     let Some(meili) = meili else { return };
@@ -38,12 +38,12 @@ pub fn torrent_changed(conn: &mut DbConnection, meili: Option<&Meili>, id: i32) 
         Ok(())
     })();
     if let Err(e) = result {
-        log::warn!("Could not index torrent #{id}, searching SQLite until the index is rebuilt: {e:#}");
+        log::warn!("Could not index torrent #{id}, searching the database until the index is rebuilt: {e:#}");
         meili.mark_stale();
     }
 }
 
-/// Builds a complete index from SQLite under a temporary name, then swaps it in, so
+/// Builds a complete index from the database under a temporary name, then swaps it in, so
 /// searches keep working on the old one meanwhile. Returns how many torrents it indexed.
 pub fn rebuild(conn: &mut DbConnection, meili: &Meili, progress: impl Fn(i64)) -> anyhow::Result<i64> {
     let fresh = meili.with_index(&format!("{}_rebuild", meili.index()));
@@ -65,7 +65,7 @@ pub fn rebuild(conn: &mut DbConnection, meili: &Meili, progress: impl Fn(i64)) -
         let Some(last) = torrents.last() else { break };
         last_id = last.id;
         let docs = docs_for(conn, &torrents)?;
-        // Keep one batch in flight while reading the next from SQLite
+        // Keep one batch in flight while reading the next from the database
         if let Some(uid) = pending.take() {
             fresh.wait(uid, TASK_TIMEOUT)?;
         }
@@ -106,7 +106,7 @@ pub fn check(conn: &mut DbConnection, meili: &Meili) -> anyhow::Result<()> {
     }
     meili.set_ready(false);
     log::info!(
-        "Rebuilding Meilisearch index `{}` ({} of {torrents} torrents indexed{}); searching SQLite meanwhile",
+        "Rebuilding Meilisearch index `{}` ({} of {torrents} torrents indexed{}); searching the database meanwhile",
         meili.index(),
         indexed.map_or("none".into(), |n| n.to_string()),
         if stale {
@@ -180,7 +180,7 @@ pub fn spawn_stats_sync(pool: DbPool, meili: Meili, every: Duration) {
                 Ok(())
             });
             if let Err(e) = result {
-                log::warn!("Meilisearch at {meili:?} is not usable ({e:#}); searching SQLite until it is");
+                log::warn!("Meilisearch at {meili:?} is not usable ({e:#}); searching the database until it is");
                 meili.set_ready(false);
             }
             std::thread::sleep(every.saturating_sub(started.elapsed()));

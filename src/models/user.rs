@@ -176,7 +176,6 @@ impl User {
     }
 
     pub fn set_hide_comments(conn: &mut DbConnection, uid: i32, hide: bool) -> QueryResult<usize> {
-        // Update, else insert: REPLACE INTO only exists on SQLite
         conn.transaction(|conn| {
             let updated = diesel::update(user_preferences::table.find(uid))
                 .set(user_preferences::hide_comments.eq(hide as i32))

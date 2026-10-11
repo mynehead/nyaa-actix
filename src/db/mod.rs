@@ -1,88 +1,26 @@
 pub mod schema;
 
-use diesel::connection::SimpleConnection;
 use diesel::pg::PgConnection;
 use diesel::r2d2::{self, ManageConnection, R2D2Connection};
-use diesel::sqlite::SqliteConnection;
-use diesel::{Connection, ConnectionError, ConnectionResult, RunQueryDsl};
+use diesel::{Connection, ConnectionResult};
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 
-/// One connection type for both databases. `DATABASE_URL` picks the backend: a
-/// `postgres://` or `postgresql://` URL connects to PostgreSQL, anything else is a SQLite
-/// file path (or `:memory:`). Queries are written once against this type; Diesel
-/// renders the right SQL for whichever variant is live.
-#[derive(diesel::MultiConnection)]
-pub enum DbConnection {
-    Sqlite(SqliteConnection),
-    Pg(PgConnection),
-}
+/// The site's database is PostgreSQL (`DATABASE_URL`).
+pub type DbConnection = PgConnection;
 
 pub type DbPool = r2d2::Pool<DbManager>;
 
-const SQLITE_MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations/sqlite");
-const POSTGRES_MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations/postgres");
+/// `DATABASE_URL` when it is unset: the database in `.env.example`'s local example.
+pub const DEFAULT_DATABASE_URL: &str = "postgres://nyaa:password@localhost:5432/nyaa";
 
-pub fn is_postgres_url(url: &str) -> bool {
-    url.starts_with("postgres://") || url.starts_with("postgresql://")
-}
+const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations/postgres");
 
-/// Opens a connection to the backend `url` names. Unlike `DbConnection::establish`,
-/// which tries each backend in turn, this never falls back to SQLite when a Postgres
-/// server is unreachable (that would create a stray file named after the URL).
 pub fn connect(url: &str) -> ConnectionResult<DbConnection> {
-    if is_postgres_url(url) {
-        return PgConnection::establish(url).map(DbConnection::Pg);
-    }
-    let mut conn = SqliteConnection::establish(url)?;
-    // The server and `create-user` may write at once; wait for the lock instead of failing.
-    // SQLite ignores the schema's foreign keys unless each connection turns them on;
-    // PostgreSQL always enforces them, so this keeps both backends alike.
-    conn.batch_execute("PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;")
-        .map_err(ConnectionError::CouldntSetupConfiguration)?;
-    Ok(DbConnection::Sqlite(conn))
+    PgConnection::establish(url)
 }
 
-/// Runs the pending migrations from the folder that matches the connection's backend.
 pub fn run_migrations(conn: &mut DbConnection) -> Result<(), String> {
-    let result = match conn {
-        DbConnection::Sqlite(c) => repair_renumbered_avatar_migration(c)
-            .map_err(Into::into)
-            .and_then(|_| c.run_pending_migrations(SQLITE_MIGRATIONS).map(|_| ())),
-        DbConnection::Pg(c) => c.run_pending_migrations(POSTGRES_MIGRATIONS).map(|_| ()),
-    };
-    result.map_err(|e| e.to_string())
-}
-
-#[derive(diesel::QueryableByName)]
-struct Count {
-    #[diesel(sql_type = diesel::sql_types::BigInt)]
-    n: i64,
-}
-
-fn count(conn: &mut SqliteConnection, query: &str) -> diesel::QueryResult<i64> {
-    diesel::sql_query(query).get_result::<Count>(conn).map(|c| c.n)
-}
-
-/// The avatar migration first shipped as version 20261005000000, the same version as the
-/// listing indexes, and was later renumbered to 20261005000001. A SQLite database that ran
-/// the first numbering already has `users.avatar_time` but recorded 20261005000000 for it,
-/// so the renumbered migration would fail ("duplicate column name") and the indexes were
-/// never created. Record the avatar migration as applied and create the missing indexes.
-fn repair_renumbered_avatar_migration(conn: &mut SqliteConnection) -> diesel::QueryResult<()> {
-    let has_column =
-        count(conn, "SELECT COUNT(*) AS n FROM pragma_table_info('users') WHERE name = 'avatar_time'")? > 0;
-    if !has_column {
-        return Ok(());
-    }
-    let recorded =
-        count(conn, "SELECT COUNT(*) AS n FROM __diesel_schema_migrations WHERE version = '20261005000001'")? > 0;
-    if recorded {
-        return Ok(());
-    }
-    log::warn!("Repairing migration history: avatar column was added under an earlier migration version");
-    conn.batch_execute(include_str!("../../migrations/sqlite/2026-10-05-000000_listing_indexes/up.sql"))?;
-    diesel::sql_query("INSERT INTO __diesel_schema_migrations (version) VALUES ('20261005000001')").execute(conn)?;
-    Ok(())
+    conn.run_pending_migrations(MIGRATIONS).map(|_| ()).map_err(|e| e.to_string())
 }
 
 /// r2d2 manager that opens connections with [`connect`].
@@ -127,16 +65,20 @@ pub fn init_pool(database_url: &str) -> DbPool {
         .expect("Failed to create database pool")
 }
 
-/// The database URL for a test: in-memory SQLite, or with `TEST_DATABASE_URL` set to a
-/// PostgreSQL server, a new database copied from a migrated template, so tests stay apart.
+/// The database URL for a test: a new database on the `TEST_DATABASE_URL` server (also
+/// read from `.env`), copied from a migrated template, so tests stay apart.
 #[cfg(test)]
 pub fn test_url() -> String {
-    static BASE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    use diesel::RunQueryDsl;
+    static BASE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let Some(base) = BASE.get_or_init(|| std::env::var("TEST_DATABASE_URL").ok().map(|url| make_test_template(&url)))
-    else {
-        return ":memory:".into();
-    };
+    let base = BASE.get_or_init(|| {
+        dotenvy::dotenv().ok();
+        let url = std::env::var("TEST_DATABASE_URL").expect(
+            "tests need a PostgreSQL server: set TEST_DATABASE_URL, e.g. postgres://postgres:postgres@localhost:5432/postgres",
+        );
+        make_test_template(&url)
+    });
     let name = format!("nyaa_test_{}_{}", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
     let mut admin = connect(base).unwrap();
     diesel::sql_query(format!("CREATE DATABASE {name} TEMPLATE nyaa_test_template")).execute(&mut admin).unwrap();
@@ -148,6 +90,8 @@ pub fn test_url() -> String {
 /// shortcut: two `cargo test` runs against the same server at once drop each other's databases.
 #[cfg(test)]
 fn make_test_template(url: &str) -> String {
+    use diesel::connection::SimpleConnection;
+    use diesel::RunQueryDsl;
     #[derive(diesel::QueryableByName)]
     struct Name {
         #[diesel(sql_type = diesel::sql_types::Text)]
@@ -164,7 +108,7 @@ fn make_test_template(url: &str) -> String {
     let template = format!("{}/nyaa_test_template", url.rsplit_once('/').unwrap().0);
     let mut conn = connect(&template).unwrap();
     run_migrations(&mut conn).unwrap();
-    // The test fixtures write blobs as SQLite's X'..', which PostgreSQL reads as a bit string
+    // The test fixtures write blobs as X'..', which PostgreSQL reads as a bit string
     conn.batch_execute(
         "CREATE FUNCTION test_bit_to_bytea(b bit) RETURNS bytea IMMUTABLE LANGUAGE sql AS $$
              SELECT coalesce(decode(string_agg(lpad(to_hex(substring(b FROM i FOR 8)::int), 2, '0'), ''
@@ -183,87 +127,24 @@ mod tests {
     use crate::search::db::{search, with_stats, SearchQuery, SearchSort};
     use diesel::prelude::*;
 
+    /// The torrent page's comments and every POST's ban check have an index to use.
     #[test]
-    fn picks_backend_from_url() {
-        assert!(is_postgres_url("postgres://u@localhost/nyaa"));
-        assert!(is_postgres_url("postgresql://u@localhost/nyaa"));
-        assert!(!is_postgres_url("nyaa.db"));
-        assert!(!is_postgres_url(":memory:"));
-        assert!(matches!(connect(":memory:").unwrap(), DbConnection::Sqlite(_)));
-    }
-
-    /// A database migrated while the avatar migration was still numbered 20261005000000.
-    #[test]
-    fn repairs_database_from_old_avatar_migration_number() {
-        let mut conn = connect(":memory:").unwrap();
-        let DbConnection::Sqlite(c) = &mut conn else { unreachable!() };
-        c.run_pending_migrations(SQLITE_MIGRATIONS).unwrap();
-        c.batch_execute(
-            "DROP INDEX nyaa_torrents_category_idx; DROP INDEX nyaa_torrents_uploader_idx; \
-                         DROP INDEX nyaa_torrents_group_idx; \
-                         DELETE FROM __diesel_schema_migrations WHERE version = '20261005000001';",
-        )
-        .unwrap();
-        // The old numbering failed here with "duplicate column name: avatar_time"
-        run_migrations(&mut conn).unwrap();
-        let DbConnection::Sqlite(c) = &mut conn else { unreachable!() };
-        assert_eq!(
-            count(
-                c,
-                "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'index' \
-                             AND name IN ('nyaa_torrents_category_idx', \
-                             'nyaa_torrents_uploader_idx', 'nyaa_torrents_group_idx')"
-            )
-            .unwrap(),
-            3
-        );
-        assert_eq!(
-            count(
-                c,
-                "SELECT COUNT(*) AS n FROM __diesel_schema_migrations \
-                             WHERE version = '20261005000001'"
-            )
-            .unwrap(),
-            1
-        );
-        // A fresh database and a second run are left alone
-        run_migrations(&mut conn).unwrap();
-        run_migrations(&mut connect(":memory:").unwrap()).unwrap();
-    }
-
-    /// The torrent page's comments and every POST's ban check use an index, not a table scan.
-    #[test]
-    fn comment_and_ban_lookups_use_indexes() {
+    fn comment_and_ban_lookups_have_indexes() {
         #[derive(diesel::QueryableByName)]
-        struct Plan {
+        struct Index {
             #[diesel(sql_type = diesel::sql_types::Text)]
-            detail: String,
+            indexname: String,
         }
-        let mut conn = connect(":memory:").unwrap();
-        run_migrations(&mut conn).unwrap();
-        for query in [
-            "SELECT * FROM nyaa_comments WHERE torrent_id = 1 ORDER BY created_time",
-            "SELECT * FROM nyaa_comments WHERE user_id = 1",
-            "SELECT 1 FROM bans WHERE user_ip = x'01'",
-        ] {
-            let plan: Vec<Plan> = diesel::sql_query(format!("EXPLAIN QUERY PLAN {query}")).load(&mut conn).unwrap();
-            assert!(plan.iter().any(|p| p.detail.contains("INDEX")), "{query}: {:?}", plan[0].detail);
+        let mut conn = connect(&test_url()).unwrap();
+        let names: Vec<String> = diesel::sql_query("SELECT indexname FROM pg_indexes")
+            .load::<Index>(&mut conn)
+            .unwrap()
+            .into_iter()
+            .map(|i| i.indexname)
+            .collect();
+        for want in ["nyaa_comments_torrent_idx", "nyaa_comments_user_idx", "bans_user_ip_idx"] {
+            assert!(names.iter().any(|n| n == want), "{want}");
         }
-    }
-
-    #[test]
-    fn both_backends_have_the_same_migrations() {
-        let names = |dir: &str| {
-            let mut v: Vec<_> =
-                std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
-            v.sort();
-            v
-        };
-        assert_eq!(
-            names("migrations/sqlite"),
-            names("migrations/postgres"),
-            "every migration needs a SQLite and a PostgreSQL version"
-        );
     }
 
     /// Torrents saved with the old bit values (HIDDEN=1, ANONYMOUS=2, REMAKE=4, TRUSTED=8),
@@ -311,28 +192,10 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn flag_migration_converts_old_bits_on_sqlite() {
-        let mut conn = connect(":memory:").unwrap();
-        run_migrations(&mut conn).unwrap();
-        check_flag_migration(
-            &mut conn,
-            include_str!("../../migrations/sqlite/2026-10-06-160100_upstream_flag_bits/up.sql"),
-        )
-        .unwrap();
-    }
-
-    /// The other tests run on in-memory SQLite. This one runs the Postgres migrations and the
-    /// main query shapes against a real server when `TEST_POSTGRES_URL` is set (CI sets it),
-    /// all inside a transaction that is rolled back.
+    /// The main query shapes and the flag migration, inside a transaction that is rolled back.
     #[test]
     fn postgres_migrations_and_queries() {
-        let Ok(url) = std::env::var("TEST_POSTGRES_URL") else {
-            eprintln!("TEST_POSTGRES_URL not set; skipping the Postgres test");
-            return;
-        };
-        let mut conn = connect(&url).unwrap();
-        assert!(matches!(conn, DbConnection::Pg(_)));
+        let mut conn = connect(&test_url()).unwrap();
         run_migrations(&mut conn).unwrap();
         conn.test_transaction::<_, diesel::result::Error, _>(|conn| {
             diesel::insert_into(users::table).values(&NewUser::new("pgtest", None, "secret")).execute(conn)?;
@@ -376,7 +239,7 @@ mod tests {
                     .execute(conn)?;
             }
 
-            // Search ignores case on Postgres too, like SQLite's LIKE
+            // Search ignores case
             let mut q = SearchQuery::from_params(
                 Some("show".into()),
                 Some(user.id),

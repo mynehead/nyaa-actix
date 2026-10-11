@@ -12,27 +12,27 @@ use crate::models::Torrent;
 use db::{SearchQuery, SearchResult, SearchSort};
 
 /// Whether a listing goes to Meilisearch when it is configured: text searches and the
-/// stats sorts, which SQLite can only answer by scanning every torrent. Plain listings
-/// stay on SQLite, where the indexes already make them fast, as upstream keeps
+/// stats sorts, which the database can only answer by scanning every torrent. Plain listings
+/// stay on the database, where the indexes already make them fast, as upstream keeps
 /// term-less listings on SQL.
 fn wants_index(q: &SearchQuery) -> bool {
     q.term.is_some() || matches!(q.sort, SearchSort::Seeders | SearchSort::Leechers | SearchSort::Downloads)
 }
 
-/// One page of a listing. Uses Meilisearch where it helps and falls back to SQLite when it
+/// One page of a listing. Uses Meilisearch where it helps and falls back to the database when it
 /// is not configured or fails, so search never breaks because the index is down.
 pub fn search(conn: &mut DbConnection, cfg: &crate::config::Config, q: &SearchQuery) -> QueryResult<SearchResult> {
     let r = q.resolve(conn)?;
     if let Some(meili) = cfg.meili.as_ref().filter(|m| m.is_ready() && wants_index(q) && !r.matches_nothing) {
         match meili.search(q, &r) {
             Ok((ids, total)) => return Ok(SearchResult { torrents: load_in_order(conn, &ids)?, total }),
-            Err(e) => log::warn!("Meilisearch search failed, using SQLite: {e}"),
+            Err(e) => log::warn!("Meilisearch search failed, using the database: {e}"),
         }
     }
     db::search_resolved(conn, q, &r, cfg.count_cache.as_deref())
 }
 
-/// Loads torrents by id in the given order, skipping any gone from SQLite since they were
+/// Loads torrents by id in the given order, skipping any gone from the database since they were
 /// indexed.
 fn load_in_order(conn: &mut DbConnection, ids: &[i32]) -> QueryResult<Vec<Torrent>> {
     let mut by_id: std::collections::HashMap<i32, Torrent> = nyaa_torrents::table
@@ -113,7 +113,7 @@ mod tests {
     }
 
     #[test]
-    fn plain_listings_stay_on_sqlite() {
+    fn plain_listings_stay_on_the_database() {
         assert!(!wants_index(&query(None, Some("1_2"), Some("2"), Some("size"), None)));
         assert!(wants_index(&query(Some("dragon"), None, None, None, None)));
         assert!(wants_index(&query(None, None, None, Some("seeders"), None)));
@@ -156,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn operators_filter_in_sqlite() {
+    fn operators_filter_in_the_database() {
         let mut conn = db();
         for (q, want) in operator_cases() {
             let total = want.len() as i64;
@@ -165,7 +165,7 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_to_sqlite_when_meilisearch_is_down() {
+    fn falls_back_to_the_database_when_meilisearch_is_down() {
         let mut conn = db();
         // Nothing listens on port 1
         let meili = Meili::new("http://127.0.0.1:1", None, "torrents", 1000);
@@ -184,7 +184,7 @@ mod tests {
         let mut conn = db();
         let meili = Meili::new("http://127.0.0.1:1", None, "torrents", 1000);
         assert!(!meili.is_ready());
-        // Not even tried: no warning, straight to SQLite
+        // Not even tried: no warning, straight to the database
         let q = query(Some("Dragon Show"), None, None, None, None);
         assert_eq!(ids(&mut conn, Some(&meili), &q), (vec![2, 1], 2));
         assert!(index::check(&mut conn, &meili).is_err());
@@ -194,7 +194,7 @@ mod tests {
     /// Runs against a real Meilisearch when MEILI_TEST_URL is set (CI starts one; see
     /// docs/meilisearch.md), with MEILI_TEST_KEY as its master key. Skipped otherwise.
     #[test]
-    fn meilisearch_agrees_with_sqlite() {
+    fn meilisearch_agrees_with_the_database() {
         let Ok(url) = std::env::var("MEILI_TEST_URL") else {
             eprintln!("MEILI_TEST_URL not set; skipping the Meilisearch round trip");
             return;

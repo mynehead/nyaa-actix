@@ -149,8 +149,8 @@ docker compose up -d --build site # migrations run on start, then the site answe
   the tracker restarted, and pulls seeders, leechers and completed counts every
   `TRACKER_STATS_SYNC_SECS` (default 300). The tracker only accepts announces for torrents
   on that whitelist, so until the site has reached it once, announces are refused.
-- The image runs without compose too, with SQLite on the volume:
-  `docker run -p 8080:8080 -v nyaa-data:/data -e SECRET_KEY=... nyaa-actix`.
+- The image runs without compose too, given a PostgreSQL server:
+  `docker run -p 8080:8080 -v nyaa-data:/data -e SECRET_KEY=... -e DATABASE_URL=postgres://... nyaa-actix`.
 - On Windows use Docker Desktop with the WSL 2 backend; the commands above work the same in
   PowerShell. The first build compiles every dependency and takes a while; later builds
   reuse BuildKit's cache.

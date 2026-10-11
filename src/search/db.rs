@@ -17,7 +17,7 @@ trait BitAndExt: Expression<SqlType = diesel::sql_types::Integer> + Sized {
 
 impl<T: Expression<SqlType = diesel::sql_types::Integer>> BitAndExt for T {}
 
-// SQLite's LIKE ignores case but PostgreSQL's doesn't; lowering both sides works on either.
+// PostgreSQL's LIKE is case-sensitive; lowering both sides makes search ignore case.
 diesel::define_sql_function!(fn lower(x: diesel::sql_types::Text) -> diesel::sql_types::Text);
 diesel::define_sql_function!(fn coalesce(x: diesel::sql_types::Nullable<diesel::sql_types::Integer>, y: diesel::sql_types::Integer) -> diesel::sql_types::Integer);
 
@@ -189,7 +189,7 @@ fn escape_like(term: &str) -> String {
 
 /// Builds the filtered (unsorted, unpaged) query. Used for both the count
 /// and the page so the two can't disagree on what is visible.
-fn filtered(q: &SearchQuery, r: &Resolved) -> nyaa_torrents::BoxedQuery<'static, crate::db::MultiBackend> {
+fn filtered(q: &SearchQuery, r: &Resolved) -> nyaa_torrents::BoxedQuery<'static, diesel::pg::Pg> {
     let mut query = nyaa_torrents::table.into_boxed();
 
     // Words and phrases (case-insensitive substrings of display_name), every one required;

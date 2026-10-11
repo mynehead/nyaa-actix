@@ -1,7 +1,7 @@
 //! Command line subcommands that run instead of the web server.
 //!
 //! `nyaa-actix create-user <username> <password> [--level regular|trusted|moderator|admin] [--email <addr>]`
-//! adds an active account to the database named by DATABASE_URL (default nyaa.db), with the
+//! adds an active account to the database named by DATABASE_URL, with the
 //! password hashed the same way registration does. Handy for a local admin, for example
 //! `nyaa-actix create-user admin admin --level admin`; use a real password anywhere but a dev box.
 //! It is safe to run while the server is up. Run the built exe directly then
@@ -102,10 +102,10 @@ fn parse_level(v: &str) -> Option<UserLevel> {
     }
 }
 
-/// Opens DATABASE_URL (default nyaa.db) with migrations applied.
+/// Opens DATABASE_URL with migrations applied.
 fn open_db() -> Result<(DbConnection, String), String> {
     dotenvy::dotenv().ok();
-    let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "nyaa.db".into());
+    let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| crate::db::DEFAULT_DATABASE_URL.into());
     let mut conn = crate::db::connect(&database_url).map_err(|e| format!("cannot open {database_url}: {e}"))?;
     crate::db::run_migrations(&mut conn).map_err(|e| format!("migrations failed: {e}"))?;
     Ok((conn, database_url))

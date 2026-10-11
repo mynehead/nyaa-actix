@@ -56,7 +56,7 @@ pub struct Config {
     pub upload_limit: UploadLimitConfig,
     /// Account mails: MAIL_BACKEND, USE_EMAIL_VERIFICATION, ALLOW_PASSWORD_RESET and friends.
     pub mail: crate::mail::MailConfig,
-    /// Meilisearch for text search and stats sorts (MEILI_URL and friends); None keeps search on SQLite.
+    /// Meilisearch for text search and stats sorts (MEILI_URL and friends); None keeps search on the database.
     pub meili: Option<crate::search::meili::Meili>,
     /// Upstream COUNT_CACHE_SIZE and COUNT_CACHE_DURATION: listing totals reused for a few
     /// seconds; None counts every time.
@@ -331,7 +331,7 @@ impl Config {
         let non_empty = |key: &str| env::var(key).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
         Config {
             captcha: crate::captcha::Captcha::from_env(&secret_key),
-            database_url: env::var("DATABASE_URL").unwrap_or_else(|_| "nyaa.db".into()),
+            database_url: env::var("DATABASE_URL").unwrap_or_else(|_| crate::db::DEFAULT_DATABASE_URL.into()),
             secret_key,
             mfa: crate::auth::mfa::MfaConfig::from_env(&site_name),
             global_site_name: non_empty("GLOBAL_SITE_NAME").unwrap_or_else(|| site_name.clone()),

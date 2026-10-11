@@ -32,8 +32,7 @@ COPY static static
 COPY --from=build /nyaa-actix /usr/local/bin/nyaa-actix
 
 ENV TORRENT_STORAGE_PATH=/data/torrents \
-    AVATAR_STORAGE_PATH=/data/avatars \
-    DATABASE_URL=/data/nyaa.db
+    AVATAR_STORAGE_PATH=/data/avatars
 VOLUME /data
 USER nyaa
 EXPOSE 8080
