@@ -324,7 +324,7 @@ mod tests {
     use super::*;
 
     fn conn() -> DbConnection {
-        let mut conn = crate::db::connect(":memory:").unwrap();
+        let mut conn = crate::db::connect(&crate::db::test_url()).unwrap();
         crate::db::run_migrations(&mut conn).unwrap();
         diesel::sql_query(
             "INSERT INTO users (id, username, password_hash, status, level) VALUES \

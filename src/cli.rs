@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn created_user_can_log_in() {
-        let mut conn = crate::db::connect(":memory:").unwrap();
+        let mut conn = crate::db::connect(&crate::db::test_url()).unwrap();
         crate::db::run_migrations(&mut conn).unwrap();
         let mut u = NewUser::new("admin", None, "admin");
         u.level = UserLevel::SuperAdmin as i32;
@@ -252,7 +252,7 @@ mod tests {
     #[test]
     fn unbans_an_ip_range() {
         use crate::models::{IpRangeBan, NewIpRangeBan};
-        let mut conn = crate::db::connect(":memory:").unwrap();
+        let mut conn = crate::db::connect(&crate::db::test_url()).unwrap();
         crate::db::run_migrations(&mut conn).unwrap();
         diesel::insert_into(users::table).values(&NewUser::new("admin", None, "admin")).execute(&mut conn).unwrap();
         let admin = User::by_username(&mut conn, "admin").unwrap().unwrap();
@@ -273,7 +273,7 @@ mod tests {
     #[test]
     fn resets_two_factor() {
         use crate::auth::mfa::{encrypt_secret, new_secret, UserMfa};
-        let mut conn = crate::db::connect(":memory:").unwrap();
+        let mut conn = crate::db::connect(&crate::db::test_url()).unwrap();
         crate::db::run_migrations(&mut conn).unwrap();
         diesel::insert_into(users::table).values(&NewUser::new("admin", None, "admin")).execute(&mut conn).unwrap();
         let admin = User::by_username(&mut conn, "admin").unwrap().unwrap();

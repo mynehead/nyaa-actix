@@ -19,6 +19,7 @@ impl<T: Expression<SqlType = diesel::sql_types::Integer>> BitAndExt for T {}
 
 // SQLite's LIKE ignores case but PostgreSQL's doesn't; lowering both sides works on either.
 diesel::define_sql_function!(fn lower(x: diesel::sql_types::Text) -> diesel::sql_types::Text);
+diesel::define_sql_function!(fn coalesce(x: diesel::sql_types::Nullable<diesel::sql_types::Integer>, y: diesel::sql_types::Integer) -> diesel::sql_types::Integer);
 
 #[derive(Debug, Clone)]
 pub struct SearchQuery {
@@ -317,10 +318,17 @@ pub fn search_resolved(
     // `p` comes from the URL; a huge one must not overflow
     let offset = (q.page - 1).saturating_mul(q.per_page);
     // Stats live in their own table; sort on a correlated subquery so torrents
-    // without a stats row still list (NULL sorts as lowest).
+    // without a stats row still list, as 0 like the listing shows them (PostgreSQL
+    // would sort a NULL above every number).
     macro_rules! stat {
         ($col:expr) => {
-            nyaa_statistics::table.filter(nyaa_statistics::torrent_id.eq(nyaa_torrents::id)).select($col).single_value()
+            coalesce(
+                nyaa_statistics::table
+                    .filter(nyaa_statistics::torrent_id.eq(nyaa_torrents::id))
+                    .select($col)
+                    .single_value(),
+                0,
+            )
         };
     }
     let query = match (q.sort, q.order) {
@@ -404,7 +412,7 @@ mod tests {
     use crate::models::TorrentFlags;
 
     fn db_with(torrents: &[(i32, TorrentFlags)]) -> DbConnection {
-        let mut conn = crate::db::connect(":memory:").unwrap();
+        let mut conn = crate::db::connect(&crate::db::test_url()).unwrap();
         crate::db::run_migrations(&mut conn).unwrap();
         diesel::sql_query("INSERT INTO users (id, username, password_hash) VALUES (1, 'u', 'x')")
             .execute(&mut conn)
