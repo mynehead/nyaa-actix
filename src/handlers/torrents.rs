@@ -467,6 +467,8 @@ pub async fn magnet_redirect(
     Ok(HttpResponse::Found().insert_header(("Location", magnet)).finish())
 }
 
+pub(crate) const NO_UPLOADS: &str = "Your account may not upload torrents.";
+
 pub async fn upload_get(
     CurrentUser(user): CurrentUser,
     pool: web::Data<DbPool>,
@@ -476,6 +478,9 @@ pub async fn upload_get(
     let Some(user) = user else {
         return Ok(HttpResponse::Found().insert_header(("Location", "/login")).finish());
     };
+    if !user.can(Permission::Upload) {
+        return Err(actix_web::error::ErrorForbidden(NO_UPLOADS));
+    }
     let mut conn = pool.get().map_err(internal_error)?;
     // Trusted users' uploads start out marked trusted, as upstream
     let form = EditForm { is_trusted: user.can(Permission::SetTrustedFlag), ..Default::default() };
@@ -540,6 +545,9 @@ pub async fn upload_post(
     storage: web::Data<Storage>,
     mut payload: Multipart,
 ) -> Result<HttpResponse> {
+    if !user.can(Permission::Upload) {
+        return Err(actix_web::error::ErrorForbidden(NO_UPLOADS));
+    }
     let mut torrent_bytes: Option<Vec<u8>> = None;
     let mut form = EditForm::default();
     let mut group_id: Option<i32> = None;

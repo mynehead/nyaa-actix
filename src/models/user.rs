@@ -19,6 +19,8 @@ pub enum UserStatus {
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum UserLevel {
+    /// Signs in and comments, but may not upload or use API keys (moderators set it).
+    Limited = -1,
     Regular = 0,
     Trusted = 1,
     Moderator = 2,
@@ -28,6 +30,7 @@ pub enum UserLevel {
 impl UserLevel {
     pub fn from_i32(v: i32) -> Self {
         match v {
+            -1 => UserLevel::Limited,
             1 => UserLevel::Trusted,
             2 => UserLevel::Moderator,
             3 => UserLevel::SuperAdmin,
@@ -105,6 +108,7 @@ impl User {
 
     pub fn level_str(&self) -> String {
         let level = match UserLevel::from_i32(self.level) {
+            UserLevel::Limited => "Limited",
             UserLevel::Regular => "User",
             UserLevel::Trusted => "Trusted",
             UserLevel::Moderator => "Moderator",
@@ -128,6 +132,7 @@ impl User {
     /// Bootstrap text color suffix; banned users are also struck through, as upstream.
     pub fn level_color(&self) -> String {
         let color = match UserLevel::from_i32(self.level) {
+            UserLevel::Limited => "muted",
             UserLevel::Regular => "default",
             UserLevel::Trusted => "success",
             UserLevel::Moderator | UserLevel::SuperAdmin => "purple",
