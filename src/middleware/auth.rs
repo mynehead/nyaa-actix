@@ -184,6 +184,10 @@ pub async fn refresh_session(
     req: ServiceRequest,
     next: Next<impl MessageBody + 'static>,
 ) -> Result<ServiceResponse<impl MessageBody>, Error> {
+    // CSS, JS and images would cost one session query each
+    if req.path().starts_with("/static/") {
+        return next.call(req).await;
+    }
     let sid = req.get_session().get::<String>(SESSION_ID_KEY).ok().flatten();
     let pool = req.app_data::<web::Data<DbPool>>().cloned();
     if let (Some(sid), Some(pool)) = (sid, pool) {

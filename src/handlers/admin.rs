@@ -95,15 +95,23 @@ pub async fn bans_post(
         .ok_or_else(|| actix_web::error::ErrorNotFound("Ban not found"))?;
     conn.transaction::<_, diesel::result::Error, _>(|conn| {
         let mut log = format!("Unbanned ban #{}", ban.id);
+        let mut others = 0;
         if let Some(user) = ban.user_id.map(|id| User::by_id(conn, id)).transpose()?.flatten() {
             log.push(' ');
             log.push_str(&user.username);
-            diesel::update(users::table.find(user.id))
+            // The user's other ban rows (one per IP) go too, or the account stays half-banned
+            others = diesel::delete(bans::table.filter(bans::user_id.eq(user.id)).filter(bans::id.ne(ban.id)))
+                .execute(conn)?;
+            // Only a banned account comes back; an inactive one keeps waiting for activation
+            diesel::update(users::table.find(user.id).filter(users::status.eq(UserStatus::Banned as i32)))
                 .set(users::status.eq(UserStatus::Active as i32))
                 .execute(conn)?;
         }
         if let Some(ip) = ban.ip_string() {
             log.push_str(&format!(" IP({})", ip));
+        }
+        if others > 0 {
+            log.push_str(&format!(" and {others} more ban(s)"));
         }
         AdminLog::add(conn, current_user.id, &log)?;
         diesel::delete(bans::table.find(ban.id)).execute(conn)?;
@@ -272,42 +280,7 @@ mod tests {
     }
 
     fn config() -> Config {
-        Config {
-            database_url: String::new(),
-            secret_key: String::new(),
-            site_name: "Nyaa".into(),
-            global_site_name: "Nyaa".into(),
-            site_flavor: "nyaa".into(),
-            sister_site_url: None,
-            results_per_page: 75,
-            max_pages: 0,
-            torrent_storage_path: String::new(),
-            avatar_storage_path: String::new(),
-            enable_gravatar: false,
-            show_stats: true,
-            max_files_view: 1000,
-            required_announce_url: None,
-            gravatar_url: crate::config::DEFAULT_GRAVATAR_URL.into(),
-            gravatar_sha256: false,
-            maintenance: Default::default(),
-            raid_mode: Default::default(),
-            registration: Default::default(),
-            site_url: String::new(),
-            tracker_urls: vec![],
-            trusted_proxies: vec![],
-            meili: None,
-            count_cache: None,
-            tracker: None,
-            ratelimit_account_age: 0,
-            editing_time_limit: 0,
-            upload_limit: Default::default(),
-            mail: Default::default(),
-            trusted: Default::default(),
-            tickets: Default::default(),
-            mfa: Default::default(),
-            captcha: None,
-            email_blacklist: Default::default(),
-        }
+        Config::for_tests()
     }
 
     use crate::middleware::auth::test_support::login;
@@ -488,6 +461,24 @@ mod tests {
         assert!(all_bans(&pool).is_empty());
         assert_eq!(user_status(&pool, 1), UserStatus::Active as i32);
         assert_eq!(logs(&pool).last().unwrap(), "User [regular](/user/regular) IP(10.0.0.9) has been unbanned.");
+    }
+
+    #[actix_web::test]
+    async fn bans_page_unban_lifts_the_users_other_bans_too() {
+        let pool = pool();
+        let (app, cookie) = app!(pool, 3);
+        post!(app, cookie, "/user/regular", &[("reason", "a"), ("ban_user", "Ban User")]);
+        post!(app, cookie, "/user/regular", &[("reason", "b"), ("ban_userip", "Ban User+IP")]);
+        let ban = all_bans(&pool).pop().unwrap();
+
+        let id = ban.id.to_string();
+        post!(app, cookie, "/admin/bans", &[("submit", id.as_str())]);
+        assert!(all_bans(&pool).is_empty(), "no half-banned user left behind");
+        assert_eq!(user_status(&pool, 1), UserStatus::Active as i32);
+        assert_eq!(
+            logs(&pool).last().unwrap(),
+            &format!("Unbanned ban #{} regular IP(10.0.0.9) and 1 more ban(s)", ban.id)
+        );
     }
 
     #[actix_web::test]
