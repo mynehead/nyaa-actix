@@ -1280,6 +1280,8 @@ pub(crate) mod tests {
             "{}",
             html
         );
+        // Windows checkouts with core.autocrlf give the template CRLF line endings.
+        let html = html.replace("\r\n", "\n");
         assert!(html.contains("<li role=\"presentation\" class=\"active\">\n\t\t<a href=\"#password-change\""));
 
         let res = test::call_service(

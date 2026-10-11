@@ -1,0 +1,73 @@
+{% extends "layout.html" %}
+{% block title %}API keys :: {{ config.site_name }}{% endblock %}
+{% block body %}
+
+<h2 style="margin-bottom: 20px;">API keys</h2>
+
+<p>
+	Upload scripts and other tools sign in to the API with your username and a key
+	in place of your password, for example <code>curl -u {{ current_user.username }}:KEY ...</code>.
+	A key works without two-factor sign-in, so keep it secret and revoke it when a tool no longer needs it.
+	{% if not new_key %}Accounts with two-factor sign-in can only use the API with a key.{% endif %}
+</p>
+
+{% if new_key %}
+<div class="alert alert-success" role="alert">
+	<p>New API key. Copy it now; it can't be shown again.</p>
+	<input class="form-control" id="new_api_key" type="text" readonly value="{{ new_key }}" onfocus="this.select()">
+</div>
+{% endif %}
+
+{% if keys %}
+<div class="table-responsive">
+	<table class="table table-bordered table-hover table-striped">
+		<thead>
+		<tr>
+			<th>Name</th>
+			<th style="width: 175px">Created</th>
+			<th style="width: 175px">Last used</th>
+			<th style="width: 75px">Action</th>
+		</tr>
+		</thead>
+		<tbody>
+		{% for key in keys %}
+		<tr>
+			<td>{{ key.name }}</td>
+			<td class="center">{{ key.created_time | date(format="%Y-%m-%d %H:%M") }}</td>
+			<td class="center">{% if key.last_used_time %}{{ key.last_used_time | date(format="%Y-%m-%d %H:%M") }}{% else %}never{% endif %}</td>
+			<td class="center">
+				<form method="POST" action="/profile/api-keys/{{ key.id }}/revoke">
+					<button class="btn btn-danger btn-xs" type="submit">Revoke</button>
+				</form>
+			</td>
+		</tr>
+		{% endfor %}
+		</tbody>
+	</table>
+</div>
+{% endif %}
+
+{% if keys | length < max_keys %}
+<div class="row">
+	<div class="col-md-5">
+		<form method="POST" action="/profile/api-keys">
+			<div class="form-group">
+				<label class="control-label" for="key_name">Name</label>
+				<input class="form-control" id="key_name" name="name" type="text" maxlength="64" placeholder="What the key is for" required>
+			</div>
+			<div class="form-group">
+				<label class="control-label" for="key_current_password">Current Password</label>
+				<input class="form-control" id="key_current_password" name="current_password" type="password" required>
+			</div>
+			<input class="btn btn-primary" id="create_api_key" type="submit" value="Create key">
+		</form>
+	</div>
+</div>
+{% else %}
+<p>You have {{ max_keys }} keys, the most an account can have. Revoke one to make a new one.</p>
+{% endif %}
+
+<hr>
+<a href="/profile">Back to profile</a>
+
+{% endblock %}

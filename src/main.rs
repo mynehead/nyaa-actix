@@ -172,6 +172,7 @@ async fn main() -> std::io::Result<()> {
             .route("/user/{username}/nuke/torrents", web::post().to(handlers::users::nuke_torrents_post))
             .route("/user/{username}/nuke/comments", web::post().to(handlers::users::nuke_comments_post))
             .route("/user/{username}/reset-2fa", web::post().to(handlers::two_factor::admin_reset_post))
+            .route("/user/{username}/revoke-api-keys", web::post().to(handlers::api_keys::moderator_revoke))
             .route("/user/{username}/comments", web::get().to(handlers::users::view_user_comments))
             // Account
             // Account pages sit at the root like upstream; /account/* redirects for old links
@@ -195,6 +196,9 @@ async fn main() -> std::io::Result<()> {
             .route("/profile/2fa/enable", web::post().to(handlers::two_factor::enable_post))
             .route("/profile/2fa/disable", web::post().to(handlers::two_factor::disable_post))
             .route("/profile/2fa/recovery-codes", web::post().to(handlers::two_factor::recovery_codes_post))
+            .route("/profile/api-keys", web::get().to(handlers::api_keys::page))
+            .route("/profile/api-keys", web::post().to(handlers::api_keys::create))
+            .route("/profile/api-keys/{id}/revoke", web::post().to(handlers::api_keys::revoke))
             .route("/account/{page:.+}", web::route().to(handlers::account::legacy_redirect))
             .route("/avatar/{id}", web::get().to(handlers::users::avatar))
             // Support tickets

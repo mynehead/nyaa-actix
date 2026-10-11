@@ -101,6 +101,8 @@ pub async fn view_user(
             ctx.insert("give_invites_form", &true);
             ctx.insert("profile_user_invites", &left);
         }
+        let api_keys = crate::auth::api_key::ApiKey::count(&mut conn, profile_user.id).map_err(internal_error)?;
+        ctx.insert("profile_user_api_keys", &api_keys);
         if moderator.can(Permission::ResetTwoFactor) {
             let two_factor =
                 crate::auth::mfa::UserMfa::is_enabled(&mut conn, profile_user.id).map_err(internal_error)?;

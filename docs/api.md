@@ -25,7 +25,10 @@ current search.
 
 ## JSON API
 
-Every call signs in with HTTP Basic auth: username (or email) and password. Failed
+Every call signs in with HTTP Basic auth: username (or email) and password, or in place
+of the password an API key made under Profile > API keys (`curl -u name:nyaa_...`).
+Accounts with two-factor sign-in, or whose class must have it (`MFA_REQUIRED_LEVEL`), can
+only use keys. A key is shown once, can be revoked there, and works until it is. Failed
 passwords count towards the login form's limits. Errors come back as
 `{"errors": [...]}` (auth and lookups) or `{"errors": {"field": ["message"]}}` (uploads).
 
@@ -33,6 +36,7 @@ passwords count towards the login form's limits. Errors come back as
 |---|---|
 | 403 | `["Bad authorization"]` (no or malformed credentials) |
 | 403 | `["Incorrect username or password"]` |
+| 403 | `["Accounts with two-factor sign-in need an API key. ..."]` (password sent for such an account) |
 | 429 | too many failed attempts, try again in 15 minutes |
 
 ### `GET /api/info/<id or hex info hash>`
