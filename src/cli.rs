@@ -24,6 +24,9 @@
 //!
 //! `nyaa-actix reset-2fa <username>` turns off the user's two-factor sign-in, for an admin
 //! who lost both the authenticator and the recovery codes. The admin log records it.
+//!
+//! `nyaa-actix set-level <username> <regular|trusted|moderator|admin>` changes an existing
+//! account's level, for example to make yourself admin. The admin log records it.
 
 use diesel::prelude::*;
 
@@ -37,7 +40,8 @@ const USAGE: &str =
        nyaa-actix migrate-storage [--dry-run]
        nyaa-actix reindex
        nyaa-actix unban-ip-range <range>
-       nyaa-actix reset-2fa <username>";
+       nyaa-actix reset-2fa <username>
+       nyaa-actix set-level <username> <regular|trusted|moderator|admin>";
 
 /// Runs the subcommand named in `args` (program name already stripped).
 /// Returns None when there is no subcommand, so the caller starts the server.
@@ -48,6 +52,7 @@ pub async fn run(args: &[String]) -> Option<Result<(), String>> {
         Some("reindex") => Some(reindex()),
         Some("unban-ip-range") => Some(unban_ip_range(&args[1..])),
         Some("reset-2fa") => Some(reset_two_factor(&args[1..])),
+        Some("set-level") => Some(set_level(&args[1..])),
         Some("help" | "--help" | "-h") => {
             println!("{USAGE}\nWith no subcommand, starts the web server.");
             Some(Ok(()))
@@ -215,6 +220,34 @@ fn reset_mfa(conn: &mut DbConnection, username: &str) -> Result<(), String> {
     .ok_or_else(|| format!("`{username}` has no two-factor sign-in"))
 }
 
+fn set_level(args: &[String]) -> Result<(), String> {
+    let [username, level] = args else { return Err(USAGE.into()) };
+    let level = parse_level(level).ok_or_else(|| format!("unknown level `{level}`"))?;
+    let (mut conn, database_url) = open_db()?;
+    change_level(&mut conn, username, level)?;
+    println!("made `{username}` a {level:?} user in {database_url}");
+    Ok(())
+}
+
+/// Sets the user's level; like `reset_mfa`, the log entry names the user, as there is no admin.
+fn change_level(conn: &mut DbConnection, username: &str, level: UserLevel) -> Result<(), String> {
+    use crate::models::{user_link, AdminLog};
+    let user =
+        User::by_username(conn, username).map_err(|e| e.to_string())?.ok_or_else(|| format!("no user `{username}`"))?;
+    if user.level() == level {
+        return Err(format!("`{username}` already is a {level:?} user"));
+    }
+    conn.transaction::<_, diesel::result::Error, _>(|conn| {
+        diesel::update(users::table.find(user.id)).set(users::level.eq(level as i32)).execute(conn)?;
+        AdminLog::add(
+            conn,
+            user.id,
+            &format!("{} changed to {level:?} user from the command line", user_link(&user.username)),
+        )
+    })
+    .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,5 +318,18 @@ mod tests {
         assert!(reset_mfa(&mut conn, "admin").is_err(), "nothing left to reset");
         let (entries, _) = crate::models::AdminLog::page(&mut conn, 1, 10).unwrap();
         assert!(entries[0].entry.log.contains("reset from the command line"));
+    }
+
+    #[test]
+    fn sets_level() {
+        let mut conn = crate::db::connect(&crate::db::test_url()).unwrap();
+        crate::db::run_migrations(&mut conn).unwrap();
+        diesel::insert_into(users::table).values(&NewUser::new("bob", None, "pw")).execute(&mut conn).unwrap();
+        assert!(change_level(&mut conn, "nobody", UserLevel::SuperAdmin).is_err());
+        change_level(&mut conn, "bob", UserLevel::SuperAdmin).unwrap();
+        assert_eq!(User::by_username(&mut conn, "bob").unwrap().unwrap().level(), UserLevel::SuperAdmin);
+        assert!(change_level(&mut conn, "bob", UserLevel::SuperAdmin).is_err(), "nothing to change");
+        let (entries, _) = crate::models::AdminLog::page(&mut conn, 1, 10).unwrap();
+        assert!(entries[0].entry.log.contains("changed to SuperAdmin user from the command line"));
     }
 }
