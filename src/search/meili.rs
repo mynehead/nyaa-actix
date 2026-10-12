@@ -495,20 +495,18 @@ impl Meili {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::search::db::ListParams;
 
     fn query() -> SearchQuery {
-        SearchQuery::from_params(
-            Some("show 1080p".into()),
-            None,
-            None,
-            Some("1_2"),
-            Some("3"),
-            Some("seeders"),
-            Some("asc"),
-            Some(3),
-            75,
-            false,
-        )
+        let params = ListParams {
+            q: Some("show 1080p".into()),
+            c: Some("1_2".into()),
+            f: Some("3".into()),
+            s: Some("seeders".into()),
+            o: Some("asc".into()),
+            p: Some(3),
+        };
+        SearchQuery::from_params(&params, None, None, 75, false)
     }
 
     fn words(words: &[&str]) -> Resolved {
@@ -561,7 +559,8 @@ mod tests {
         q.include_hidden = true;
         assert!(filter(&q, &Resolved::default()).is_empty());
         // A sub-category only counts with its main category
-        let q = SearchQuery::from_params(None, None, None, Some("0_2"), None, None, None, None, 75, true);
+        let q =
+            SearchQuery::from_params(&ListParams { c: Some("0_2".into()), ..Default::default() }, None, None, 75, true);
         assert!(filter(&q, &Resolved::default()).is_empty());
     }
 

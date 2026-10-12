@@ -9,15 +9,15 @@ use crate::config::Config;
 use crate::db::DbPool;
 use crate::middleware::auth::get_current_user;
 use crate::utils::context::base_context;
-use crate::utils::internal_error;
+use crate::utils::html_page;
+use crate::utils::redirect;
 
 /// Renders one of the static info pages (rules, help).
 fn info_page(page: &str, session: &Session, pool: &DbPool, tmpl: &Tera, cfg: &Config) -> Result<HttpResponse> {
     let current_user = get_current_user(session, pool);
     let mut ctx = base_context(cfg, current_user.as_ref());
     ctx.insert("active_page", page);
-    let html = tmpl.render(&format!("{}.html", page), &ctx).map_err(internal_error)?;
-    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+    html_page(tmpl, &format!("{}.html", page), &ctx, StatusCode::OK)
 }
 
 pub async fn rules(
@@ -57,7 +57,7 @@ pub fn error_page<B>(res: ServiceResponse<B>) -> Result<ErrorHandlerResponse<B>>
         let path = req.uri().path_and_query().map_or("/", |p| p.as_str());
         req.get_session().insert(LOGIN_NEXT_KEY, path)?;
         let (req, _) = res.into_parts();
-        let new_res = HttpResponse::Found().insert_header((header::LOCATION, "/login")).finish();
+        let new_res = redirect("/login");
         return Ok(ErrorHandlerResponse::Response(ServiceResponse::new(req, new_res).map_into_right_body()));
     }
     let html = match (

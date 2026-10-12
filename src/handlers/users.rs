@@ -1,4 +1,5 @@
 use actix_session::Session;
+use actix_web::http::StatusCode;
 use actix_web::{web, HttpResponse, Result};
 use serde::{Deserialize, Serialize};
 use tera::Tera;
@@ -11,24 +12,14 @@ use crate::db::DbPool;
 use crate::models::{
     user_link, AdminLog, Ban, Comment, NewBan, TorrentFlags, User, UserLevel, UserStatus, MAX_BAN_REASON_LEN,
 };
-use crate::search::db::{with_stats, SearchQuery};
+use crate::search::db::{with_stats, ListParams, SearchQuery};
 use crate::search::search;
 use crate::utils::context::base_context;
 use crate::utils::context::SearchState;
 use crate::utils::pagination::Pagination;
-use crate::utils::{flash, internal_error, sanitize_text, unpack_ip, with_conn};
+use crate::utils::{flash, html_page, internal_error, sanitize_text, see_other, unpack_ip, with_conn};
 use diesel::prelude::*;
 use diesel::sql_types::Integer;
-
-#[derive(Debug, Deserialize)]
-pub struct UserSearchParams {
-    pub q: Option<String>,
-    pub s: Option<String>,
-    pub o: Option<String>,
-    pub c: Option<String>,
-    pub f: Option<String>,
-    pub p: Option<i64>,
-}
 
 pub async fn view_user(
     CurrentUser(current_user): CurrentUser,
@@ -37,7 +28,7 @@ pub async fn view_user(
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
     path: web::Path<String>,
-    params: web::Query<UserSearchParams>,
+    params: web::Query<ListParams>,
 ) -> Result<HttpResponse> {
     let username = path.into_inner();
     let moderator = current_user.as_ref().is_some_and(|u| u.can(Permission::ModerateTorrents));
@@ -47,18 +38,7 @@ pub async fn view_user(
         .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("User not found"))?;
 
-    let mut q = SearchQuery::from_params(
-        params.q.clone(),
-        Some(profile_user.id),
-        None,
-        params.c.as_deref(),
-        params.f.as_deref(),
-        params.s.as_deref(),
-        params.o.as_deref(),
-        params.p,
-        cfg.results_per_page,
-        moderator,
-    );
+    let mut q = SearchQuery::from_params(&params, Some(profile_user.id), None, cfg.results_per_page, moderator);
     // Owners and moderators see everything on the profile; everyone else
     // sees neither hidden nor anonymous uploads.
     let is_owner = current_user.as_ref().map(|u| u.id == profile_user.id).unwrap_or(false);
@@ -75,7 +55,7 @@ pub async fn view_user(
     let torrents = with_stats(&mut conn, result.torrents).map_err(internal_error)?;
     ctx.insert("torrents", &torrents);
     ctx.insert("pagination", &pagination);
-    ctx.insert("search", &SearchState::new(&params.q, &params.c, &params.f, &params.s, &params.o));
+    ctx.insert("search", &SearchState::new(&params));
     // The navbar search scopes itself to this user, as upstream's user_page does
     ctx.insert("user_page", &true);
     ctx.insert("flash_messages", &flash::take(&session));
@@ -115,8 +95,7 @@ pub async fn view_user(
         }
     }
 
-    let html = tmpl.render("user.html", &ctx).map_err(internal_error)?;
-    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+    html_page(&tmpl, "user.html", &ctx, StatusCode::OK)
 }
 
 /// An uploaded avatar. Links carry `?v=` with the upload time, so a new one shows at once.
@@ -262,7 +241,7 @@ pub async fn ban_user_post(
         return Err(actix_web::error::ErrorForbidden("Not allowed"));
     }
     let url = format!("/user/{}", urlencoding::encode(&user.username));
-    let back = || HttpResponse::SeeOther().insert_header(("Location", url.clone())).finish();
+    let back = || see_other(&url);
 
     if form.ban_user.is_none() && form.ban_userip.is_none() && form.unban.is_none() {
         change_user_class(&session, &mut conn, &moderator, &user, &form)?;
@@ -418,7 +397,7 @@ pub async fn nuke_torrents_post(
     }
     reindex(&pool, &cfg, ids).await?;
     flash::push(&session, "success", "", &format!("Torrents of {} have been nuked.", user.username));
-    Ok(HttpResponse::SeeOther().insert_header(("Location", format!("/user/{}", user.username))).finish())
+    Ok(see_other(&format!("/user/{}", user.username)))
 }
 
 /// "Nuke Comments": deletes every comment of the user, as upstream's `nuke_user_comments`.
@@ -456,7 +435,7 @@ pub async fn nuke_comments_post(
     drop(conn);
     reindex(&pool, &cfg, torrent_ids).await?;
     flash::push(&session, "success", "", &format!("Comments of {} have been nuked.", user.username));
-    Ok(HttpResponse::SeeOther().insert_header(("Location", format!("/user/{}", user.username))).finish())
+    Ok(see_other(&format!("/user/{}", user.username)))
 }
 
 #[derive(Debug, Deserialize)]
@@ -517,8 +496,7 @@ pub async fn view_user_comments(
     ctx.insert("avatar_url", &user.avatar_url(&cfg));
     ctx.insert("comments", &comments);
     ctx.insert("pagination", &pagination);
-    let html = tmpl.render("user_comments.html", &ctx).map_err(internal_error)?;
-    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+    html_page(&tmpl, "user_comments.html", &ctx, StatusCode::OK)
 }
 
 #[cfg(test)]

@@ -48,6 +48,7 @@ fn load_in_order(conn: &mut DbConnection, ids: &[i32]) -> QueryResult<Vec<Torren
 mod tests {
     use super::*;
     use crate::models::TorrentFlags;
+    use db::ListParams;
     use meili::Meili;
     use std::time::Duration;
 
@@ -103,7 +104,15 @@ mod tests {
         sort: Option<&str>,
         order: Option<&str>,
     ) -> SearchQuery {
-        SearchQuery::from_params(term.map(String::from), None, None, cat, filter, sort, order, None, 75, false)
+        let params = ListParams {
+            q: term.map(String::from),
+            c: cat.map(String::from),
+            f: filter.map(String::from),
+            s: sort.map(String::from),
+            o: order.map(String::from),
+            p: None,
+        };
+        SearchQuery::from_params(&params, None, None, 75, false)
     }
 
     fn ids(conn: &mut DbConnection, meili: Option<&Meili>, q: &SearchQuery) -> (Vec<i32>, i64) {

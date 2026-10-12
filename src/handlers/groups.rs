@@ -1,4 +1,5 @@
 use actix_session::Session;
+use actix_web::http::StatusCode;
 use actix_web::{web, HttpResponse, Result};
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -10,12 +11,12 @@ use crate::db::schema::group_members;
 use crate::db::schema::groups;
 use crate::db::{DbConnection, DbPool};
 use crate::models::{Group, NewGroup, User};
-use crate::search::db::{with_stats, SearchQuery};
+use crate::search::db::{with_stats, ListParams, SearchQuery};
 use crate::search::search;
 use crate::utils::context::base_context;
 use crate::utils::context::SearchState;
 use crate::utils::pagination::Pagination;
-use crate::utils::{internal_error, sanitize_string, sanitize_text};
+use crate::utils::{html_page, internal_error, redirect, sanitize_string, sanitize_text};
 
 pub async fn group_list(
     CurrentUser(current_user): CurrentUser,
@@ -37,8 +38,7 @@ pub async fn group_list(
     let mut ctx = base_context(&cfg, current_user.as_ref());
     ctx.insert("active_page", "groups");
     ctx.insert("groups", &groups);
-    let html = tmpl.render("groups.html", &ctx).map_err(internal_error)?;
-    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+    html_page(&tmpl, "groups.html", &ctx, StatusCode::OK)
 }
 
 /// The create and edit forms' fields.
@@ -186,17 +186,7 @@ pub async fn create_group_post(
     };
     diesel::insert_into(groups::table).values(&new_group).execute(&mut conn).map_err(internal_error)?;
 
-    Ok(HttpResponse::Found().insert_header(("Location", format!("/group/{}", form.slug))).finish())
-}
-
-#[derive(Debug, Deserialize)]
-pub struct GroupSearchParams {
-    pub q: Option<String>,
-    pub s: Option<String>,
-    pub o: Option<String>,
-    pub c: Option<String>,
-    pub f: Option<String>,
-    pub p: Option<i64>,
+    Ok(redirect(&format!("/group/{}", form.slug)))
 }
 
 pub async fn view_group(
@@ -206,7 +196,7 @@ pub async fn view_group(
     tmpl: web::Data<Tera>,
     cfg: web::Data<Config>,
     path: web::Path<String>,
-    params: web::Query<GroupSearchParams>,
+    params: web::Query<ListParams>,
 ) -> Result<HttpResponse> {
     let slug = path.into_inner();
     let moderator = current_user.as_ref().is_some_and(|u| u.can(Permission::ModerateTorrents));
@@ -216,18 +206,7 @@ pub async fn view_group(
         .map_err(internal_error)?
         .ok_or_else(|| actix_web::error::ErrorNotFound("Group not found"))?;
 
-    let q = SearchQuery::from_params(
-        params.q.clone(),
-        None,
-        Some(group.id),
-        params.c.as_deref(),
-        params.f.as_deref(),
-        params.s.as_deref(),
-        params.o.as_deref(),
-        params.p,
-        cfg.results_per_page,
-        moderator,
-    );
+    let q = SearchQuery::from_params(&params, None, Some(group.id), cfg.results_per_page, moderator);
 
     crate::utils::pagination::check_max_pages(q.page, cfg.max_pages)?;
     let result = search(&mut conn, &cfg, &q).map_err(internal_error)?;
@@ -246,9 +225,8 @@ pub async fn view_group(
     let torrents = with_stats(&mut conn, result.torrents).map_err(internal_error)?;
     ctx.insert("torrents", &torrents);
     ctx.insert("pagination", &pagination);
-    ctx.insert("search", &SearchState::new(&params.q, &params.c, &params.f, &params.s, &params.o));
-    let html = tmpl.render("group.html", &ctx).map_err(internal_error)?;
-    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+    ctx.insert("search", &SearchState::new(&params));
+    html_page(&tmpl, "group.html", &ctx, StatusCode::OK)
 }
 
 pub async fn edit_group_get(
@@ -300,7 +278,7 @@ pub async fn edit_group_post(
         ))
         .execute(&mut conn)
         .map_err(internal_error)?;
-    Ok(HttpResponse::Found().insert_header(("Location", format!("/group/{}", form.slug))).finish())
+    Ok(redirect(&format!("/group/{}", form.slug)))
 }
 
 #[derive(Debug, Deserialize)]
@@ -342,8 +320,7 @@ pub async fn manage_members_get(
     ctx.insert("group", &group);
     ctx.insert("members", &members);
     ctx.insert("is_owner", &(current_user.id == group.owner_id));
-    let html = tmpl.render("group_members.html", &ctx).map_err(internal_error)?;
-    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+    html_page(&tmpl, "group_members.html", &ctx, StatusCode::OK)
 }
 
 pub async fn manage_members_post(
@@ -418,7 +395,7 @@ pub async fn manage_members_post(
             .map_err(internal_error)?;
     }
 
-    Ok(HttpResponse::Found().insert_header(("Location", format!("/group/{}/members", group.slug))).finish())
+    Ok(redirect(&format!("/group/{}/members", group.slug)))
 }
 
 #[cfg(test)]

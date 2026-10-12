@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 
+use actix_web::http::StatusCode;
 use actix_web::{web, HttpResponse, Result};
 use serde::Serialize;
 use tera::Tera;
@@ -12,7 +13,7 @@ use crate::db::DbConnection;
 use crate::models::{format_filesize, get_all_categories};
 use crate::search::db::ListedTorrent;
 use crate::utils::context::base_context;
-use crate::utils::internal_error;
+use crate::utils::{html_page, internal_error};
 
 /// One `<item>`, with everything already formatted as upstream prints it and escaped for
 /// XML. Tera's own escaping would also turn every `/` in the URLs into `&#x2F;`.
@@ -110,8 +111,7 @@ pub fn render_rss(
 
 /// `/xmlns/nyaa`: what the feed's `nyaa:` elements mean.
 pub async fn xmlns_nyaa(tmpl: web::Data<Tera>, cfg: web::Data<Config>) -> Result<HttpResponse> {
-    let html = tmpl.render("xmlns.html", &base_context(&cfg, None)).map_err(internal_error)?;
-    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+    html_page(&tmpl, "xmlns.html", &base_context(&cfg, None), StatusCode::OK)
 }
 
 #[cfg(test)]

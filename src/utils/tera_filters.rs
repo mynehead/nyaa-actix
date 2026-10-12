@@ -90,6 +90,7 @@ mod tests {
 
 #[cfg(test)]
 mod render_tests {
+    use crate::search::db::ListParams;
     use crate::search::db::ListedTorrent;
     use crate::utils::context::{base_context, SearchState};
     use crate::utils::pagination::Pagination;
@@ -135,13 +136,13 @@ mod render_tests {
         ctx.insert("pagination", &Pagination::new(2, 500, 75));
         ctx.insert(
             "search",
-            &SearchState::new(
-                &Some("a&b".into()),
-                &Some("1_2".into()),
-                &None,
-                &Some("size".into()),
-                &Some("desc".into()),
-            ),
+            &SearchState::new(&ListParams {
+                q: Some("a&b".into()),
+                c: Some("1_2".into()),
+                s: Some("size".into()),
+                o: Some("desc".into()),
+                ..Default::default()
+            }),
         );
         let html = render("home.html", &ctx);
         assert!(html.contains("<title>a&amp;b :: Nyaa</title>"), "{}", html);

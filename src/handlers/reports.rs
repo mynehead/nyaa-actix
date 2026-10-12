@@ -2,6 +2,7 @@
 //! queue at /admin/reports (upstream `admin.reports`).
 
 use actix_session::Session;
+use actix_web::http::StatusCode;
 use actix_web::{web, HttpResponse, Result};
 use diesel::prelude::*;
 use serde::Deserialize;
@@ -11,14 +12,13 @@ use crate::auth::{CurrentUser, Moderator, Permission};
 use crate::config::Config;
 use crate::db::schema::nyaa_torrents;
 use crate::db::DbPool;
-use crate::handlers::account::redirect;
 use crate::models::{
     torrent_link, user_link, validate_reason, AdminLog, Group, GroupReport, Report, Torrent, TorrentFlags, User,
     REPORTS_PER_PAGE, REPORT_INVALID, REPORT_VALID,
 };
 use crate::utils::context::base_context;
-use crate::utils::flash;
 use crate::utils::pagination::Pagination;
+use crate::utils::{flash, html_page, redirect};
 
 /// Whether `user` may see the Report button and send reports: logged in, and the account is
 /// older than RATELIMIT_ACCOUNT_AGE (upstream `g.user.age > config['RATELIMIT_ACCOUNT_AGE']`),
@@ -154,8 +154,7 @@ pub async fn admin_reports(
     ctx.insert("group_reports", &group_rows);
     ctx.insert("group_pagination", &group_pagination);
     ctx.insert("flash_messages", &flash::take(&session));
-    let html = tmpl.render("reports.html", &ctx).map_err(crate::utils::internal_error)?;
-    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+    html_page(&tmpl, "reports.html", &ctx, StatusCode::OK)
 }
 
 #[derive(Debug, Deserialize)]

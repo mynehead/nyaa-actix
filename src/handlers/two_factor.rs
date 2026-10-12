@@ -15,12 +15,12 @@ use crate::auth::{LoggedIn, Permission};
 use crate::config::Config;
 use crate::db::{DbConnection, DbManager, DbPool};
 use crate::handlers::account::{
-    client_key, redirect, MfaPending, LOGIN_FAILURES_BY_ACCOUNT, LOGIN_FAILURES_BY_IP, MFA_PENDING_KEY,
+    client_key, MfaPending, LOGIN_FAILURES_BY_ACCOUNT, LOGIN_FAILURES_BY_IP, MFA_PENDING_KEY,
 };
 use crate::middleware::auth::{login_user, logout_everywhere, AuthMethod};
 use crate::models::{user_link, AdminLog, User};
 use crate::utils::context::base_context;
-use crate::utils::{client_ip, flash, internal_error, with_conn};
+use crate::utils::{client_ip, flash, html_page, internal_error, redirect, see_other, with_conn};
 
 const SETUP_URL: &str = crate::middleware::mfa_required::SETUP_URL;
 /// The not yet confirmed secret shown on the setup page, Base32. Kept in the (encrypted)
@@ -41,15 +41,10 @@ pub struct ConfirmForm {
     pub current_password: String,
 }
 
-fn render(tmpl: &Tera, name: &str, ctx: &tera::Context, status: actix_web::http::StatusCode) -> Result<HttpResponse> {
-    let html = tmpl.render(name, ctx).map_err(internal_error)?;
-    Ok(HttpResponse::build(status).content_type("text/html").body(html))
-}
-
 fn login_page(tmpl: &Tera, cfg: &Config, error: &str, status: actix_web::http::StatusCode) -> Result<HttpResponse> {
     let mut ctx = base_context(cfg, None);
     ctx.insert("error", error);
-    render(tmpl, "login_2fa.html", &ctx, status)
+    html_page(tmpl, "login_2fa.html", &ctx, status)
 }
 
 /// The second step of logging in, after the right password.
@@ -59,7 +54,7 @@ pub async fn login_2fa_get(session: Session, tmpl: web::Data<Tera>, cfg: web::Da
     }
     let mut ctx = base_context(&cfg, None);
     ctx.insert("error", &Option::<String>::None);
-    render(&tmpl, "login_2fa.html", &ctx, actix_web::http::StatusCode::OK)
+    html_page(&tmpl, "login_2fa.html", &ctx, actix_web::http::StatusCode::OK)
 }
 
 pub async fn login_2fa_post(
@@ -164,7 +159,7 @@ pub async fn page(
             ctx.insert("secret", &grouped.join(" "));
         }
     }
-    render(&tmpl, "two_factor.html", &ctx, actix_web::http::StatusCode::OK)
+    html_page(&tmpl, "two_factor.html", &ctx, actix_web::http::StatusCode::OK)
 }
 
 /// Checks the password off the async workers; wrong ones count like failed logins.
@@ -186,7 +181,7 @@ pub(crate) async fn password_ok(req: &HttpRequest, user: &User, password: &str) 
 fn codes_page(tmpl: &Tera, cfg: &Config, user: &User, codes: &[String]) -> Result<HttpResponse> {
     let mut ctx = base_context(cfg, Some(user));
     ctx.insert("codes", codes);
-    render(tmpl, "two_factor_codes.html", &ctx, actix_web::http::StatusCode::OK)
+    html_page(tmpl, "two_factor_codes.html", &ctx, actix_web::http::StatusCode::OK)
 }
 
 /// New recovery codes for `user_id`: the plain codes to show, after storing their hashes.
@@ -336,9 +331,7 @@ pub async fn admin_reset_post(
     } else {
         flash::push(&session, "danger", "", "This user has no two-factor sign-in.");
     }
-    Ok(HttpResponse::SeeOther()
-        .insert_header(("Location", format!("/user/{}", urlencoding::encode(&user.username))))
-        .finish())
+    Ok(see_other(&format!("/user/{}", urlencoding::encode(&user.username))))
 }
 
 #[cfg(test)]

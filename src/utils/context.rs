@@ -4,6 +4,7 @@ use serde::Serialize;
 
 use crate::config::Config;
 use crate::models::User;
+use crate::search::db::ListParams;
 
 /// A category as the navbar search and listings show it (upstream's `nyaa_cats` / `suke_cats`).
 #[derive(Debug, Serialize)]
@@ -81,13 +82,8 @@ pub struct SearchState {
 }
 
 impl SearchState {
-    pub fn new(
-        q: &Option<String>,
-        c: &Option<String>,
-        f: &Option<String>,
-        s: &Option<String>,
-        o: &Option<String>,
-    ) -> Self {
+    pub fn new(params: &ListParams) -> Self {
+        let ListParams { q, c, f, s, o, .. } = params;
         let get = |v: &Option<String>, default: &str| v.clone().unwrap_or_else(|| default.to_string());
         SearchState {
             term: get(q, ""),
@@ -141,7 +137,7 @@ mod tests {
 
     #[test]
     fn search_state_defaults() {
-        let s = SearchState::new(&None, &None, &None, &None, &None);
+        let s = SearchState::new(&ListParams::default());
         assert_eq!(
             (s.category.as_str(), s.quality_filter.as_str(), s.sort.as_str(), s.order.as_str()),
             ("0_0", "0", "id", "desc")

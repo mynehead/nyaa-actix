@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use actix_multipart::Multipart;
 use actix_session::Session;
+use actix_web::http::StatusCode;
 use actix_web::{web, HttpRequest, HttpResponse, Result};
 use diesel::prelude::*;
 use futures_util::StreamExt;
@@ -21,7 +22,7 @@ use crate::models::{password_matches, Ban, Invite, NewUser, User, UserStatus};
 use crate::storage::{Kind, Storage};
 use crate::utils::context::base_context;
 use crate::utils::throttle::Throttle;
-use crate::utils::{avatar, client_addr, client_ip, flash, internal_error, token, with_conn};
+use crate::utils::{avatar, client_addr, client_ip, flash, html_page, internal_error, redirect, token, with_conn};
 
 #[derive(Debug, Deserialize)]
 pub struct LoginForm {
@@ -67,15 +68,14 @@ pub async fn login_get(
     cfg: web::Data<Config>,
 ) -> Result<HttpResponse> {
     if current_user.is_some() {
-        return Ok(HttpResponse::Found().insert_header(("Location", "/")).finish());
+        return Ok(redirect("/"));
     }
     let mut ctx = base_context(&cfg, None);
     ctx.insert("flash_messages", &flash::take(&session));
     ctx.insert("error", &Option::<String>::None);
     // Activation and password reset land here with a message
     ctx.insert("flash_messages", &flash::take(&session));
-    let html = tmpl.render("login.html", &ctx).map_err(internal_error)?;
-    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+    html_page(&tmpl, "login.html", &ctx, StatusCode::OK)
 }
 
 pub async fn login_post(
@@ -99,16 +99,14 @@ pub async fn login_post(
         let mut ctx = base_context(&cfg, None);
         ctx.insert("error", "Too many failed login attempts. Try again in 15 minutes.");
         ctx.insert("username", &form.username);
-        let html = tmpl.render("login.html", &ctx).map_err(internal_error)?;
-        return Ok(HttpResponse::TooManyRequests().content_type("text/html").body(html));
+        return html_page(&tmpl, "login.html", &ctx, StatusCode::TOO_MANY_REQUESTS);
     }
     // The captcha before the password, so guessing passwords needs a solved captcha each time
     if let Err(error) = crate::captcha::check_form(&cfg, &form.altcha) {
         let mut ctx = base_context(&cfg, None);
         ctx.insert("error", &error);
         ctx.insert("username", &form.username);
-        let html = tmpl.render("login.html", &ctx).map_err(internal_error)?;
-        return Ok(HttpResponse::BadRequest().content_type("text/html").body(html));
+        return html_page(&tmpl, "login.html", &ctx, StatusCode::BAD_REQUEST);
     }
 
     // Argon2 takes tens of milliseconds of CPU; keep it off the async workers
@@ -152,8 +150,7 @@ pub async fn login_post(
     let mut ctx = base_context(&cfg, None);
     ctx.insert("error", &error);
     ctx.insert("username", &form.username);
-    let html = tmpl.render("login.html", &ctx).map_err(internal_error)?;
-    Ok(HttpResponse::Ok().status(actix_web::http::StatusCode::UNAUTHORIZED).content_type("text/html").body(html))
+    html_page(&tmpl, "login.html", &ctx, StatusCode::UNAUTHORIZED)
 }
 
 pub async fn register_get(
@@ -163,12 +160,11 @@ pub async fn register_get(
     query: web::Query<RegisterQuery>,
 ) -> Result<HttpResponse> {
     if current_user.is_some() {
-        return Ok(HttpResponse::Found().insert_header(("Location", "/")).finish());
+        return Ok(redirect("/"));
     }
     let mut ctx = register_context(&cfg);
     ctx.insert("invite", query.invite.trim());
-    let html = tmpl.render("register.html", &ctx).map_err(internal_error)?;
-    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+    html_page(&tmpl, "register.html", &ctx, StatusCode::OK)
 }
 
 pub async fn register_post(
@@ -181,8 +177,7 @@ pub async fn register_post(
 ) -> Result<HttpResponse> {
     let ip = client_key(&req);
     if cfg.registration.mode == RegistrationMode::Closed {
-        let html = tmpl.render("register.html", &register_context(&cfg)).map_err(internal_error)?;
-        return Ok(HttpResponse::Forbidden().content_type("text/html").body(html));
+        return html_page(&tmpl, "register.html", &register_context(&cfg), StatusCode::FORBIDDEN);
     }
     // Wrong invite codes count here too, so codes can't be guessed faster than accounts made
     if REGISTRATIONS_BY_IP.is_blocked(&ip) {
@@ -191,8 +186,7 @@ pub async fn register_post(
         ctx.insert("username", &form.username);
         ctx.insert("email", &form.email);
         ctx.insert("invite", &form.invite);
-        let html = tmpl.render("register.html", &ctx).map_err(internal_error)?;
-        return Ok(HttpResponse::TooManyRequests().content_type("text/html").body(html));
+        return html_page(&tmpl, "register.html", &ctx, StatusCode::TOO_MANY_REQUESTS);
     }
     REGISTRATIONS_BY_IP.hit(&ip);
     // Upstream's RegisterForm captcha, checked before any name or address is looked up
@@ -202,8 +196,7 @@ pub async fn register_post(
         ctx.insert("username", &form.username);
         ctx.insert("email", &form.email);
         ctx.insert("invite", &form.invite);
-        let html = tmpl.render("register.html", &ctx).map_err(internal_error)?;
-        return Ok(HttpResponse::BadRequest().content_type("text/html").body(html));
+        return html_page(&tmpl, "register.html", &ctx, StatusCode::BAD_REQUEST);
     }
 
     let mut conn = pool.get().map_err(internal_error)?;
@@ -247,8 +240,7 @@ pub async fn register_post(
         ctx.insert("username", username);
         ctx.insert("email", email);
         ctx.insert("invite", form.invite.trim());
-        let html = tmpl.render("register.html", &ctx).map_err(internal_error)?;
-        Ok(HttpResponse::BadRequest().content_type("text/html").body(html))
+        html_page(&tmpl, "register.html", &ctx, StatusCode::BAD_REQUEST)
     };
     if !errors.is_empty() {
         return render_errors(&errors);
@@ -295,8 +287,7 @@ pub async fn register_post(
         let mut ctx = register_context(&cfg);
         ctx.insert("raid_message", &cfg.raid_mode.register_message);
         ctx.insert("registered", &user.username);
-        let html = tmpl.render("register.html", &ctx).map_err(internal_error)?;
-        return Ok(HttpResponse::Ok().content_type("text/html").body(html));
+        return html_page(&tmpl, "register.html", &ctx, StatusCode::OK);
     }
 
     if let Some(mailer) = verification {
@@ -307,8 +298,7 @@ pub async fn register_post(
         let mut ctx = base_context(&cfg, None);
         ctx.insert("email", email);
         ctx.insert("sent", &sent);
-        let html = tmpl.render("waiting.html", &ctx).map_err(internal_error)?;
-        return Ok(HttpResponse::Ok().content_type("text/html").body(html));
+        return html_page(&tmpl, "waiting.html", &ctx, StatusCode::OK);
     }
 
     complete_login(&session, &mut conn, &user, client_ip(&req))
@@ -452,8 +442,7 @@ pub async fn password_reset_request_get(
     if let Err(response) = reset_mailer(&cfg, &current_user)? {
         return Ok(response);
     }
-    let html = tmpl.render("password_reset_request.html", &base_context(&cfg, None)).map_err(internal_error)?;
-    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+    html_page(&tmpl, "password_reset_request.html", &base_context(&cfg, None), StatusCode::OK)
 }
 
 /// Upstream's POST /password-reset: mails a reset link if an account has that address, and
@@ -635,7 +624,7 @@ fn address_key(addr: Option<std::net::IpAddr>) -> String {
 
 pub async fn logout(session: Session, pool: web::Data<DbPool>) -> HttpResponse {
     logout_user(&session, &pool);
-    HttpResponse::Found().insert_header(("Location", "/")).finish()
+    redirect("/")
 }
 
 /// The account pages used to live under `/account/`; they now sit at the root like upstream.
@@ -653,10 +642,6 @@ pub async fn legacy_redirect(req: HttpRequest, path: web::Path<String>) -> HttpR
 }
 
 const PROFILE_URL: &str = "/profile";
-
-pub(crate) fn redirect(location: &str) -> HttpResponse {
-    HttpResponse::Found().insert_header(("Location", location)).finish()
-}
 
 /// Both tab forms of upstream's `ProfileForm`: "Password" and "Email" post
 /// `authorized_submit`, "Preferences" posts `submit_settings`.
@@ -749,8 +734,7 @@ fn render_profile(
         ctx.insert("recovery_codes_left", &UserMfa::recovery_codes_left(conn, user.id).map_err(internal_error)?);
     }
     ctx.insert("two_factor", &mfa.is_some());
-    let html = tmpl.render("profile.html", &ctx).map_err(internal_error)?;
-    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+    html_page(tmpl, "profile.html", &ctx, StatusCode::OK)
 }
 
 pub async fn profile(

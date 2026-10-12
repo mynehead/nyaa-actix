@@ -7,8 +7,9 @@ use crate::models::{hide_ips, AdminLog, Ban, IpRangeBan, NewIpRangeBan, User, Us
 use crate::utils::context::base_context;
 use crate::utils::pagination::Pagination;
 use crate::utils::proxy::IpNet;
-use crate::utils::{client_addr, flash, internal_error};
+use crate::utils::{client_addr, flash, html_page, internal_error, see_other};
 use actix_session::Session;
+use actix_web::http::StatusCode;
 use actix_web::{web, HttpRequest, HttpResponse, Result};
 use diesel::prelude::*;
 use serde::Deserialize;
@@ -48,8 +49,7 @@ pub async fn log(
     let mut ctx = base_context(&cfg, Some(&current_user));
     ctx.insert("logs", &logs);
     ctx.insert("pagination", &Pagination::new(query.page(), total, ADMIN_PER_PAGE));
-    let html = tmpl.render("admin/log.html", &ctx).map_err(internal_error)?;
-    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+    html_page(&tmpl, "admin/log.html", &ctx, StatusCode::OK)
 }
 
 /// /admin/bans: every ban, newest first, each with an Unban button.
@@ -72,8 +72,7 @@ pub async fn bans(
     }
     ctx.insert("pagination", &Pagination::new(query.page(), total, ADMIN_PER_PAGE));
     ctx.insert("flash_messages", &flash::take(&session));
-    let html = tmpl.render("admin/bans.html", &ctx).map_err(internal_error)?;
-    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+    html_page(&tmpl, "admin/bans.html", &ctx, StatusCode::OK)
 }
 
 /// The Unban button: its value is the ban id.
@@ -119,7 +118,7 @@ pub async fn bans_post(
     })
     .map_err(internal_error)?;
     flash::push(&session, "success", "", &format!("Unbanned ban #{}", ban.id));
-    Ok(HttpResponse::SeeOther().insert_header(("Location", "/admin/bans")).finish())
+    Ok(see_other("/admin/bans"))
 }
 
 /// The expiry choices on the range ban form: hours, and the label shown.
@@ -152,7 +151,7 @@ fn check_range(cidr: &str, own: Option<std::net::IpAddr>) -> std::result::Result
 }
 
 fn back_to_bans() -> HttpResponse {
-    HttpResponse::SeeOther().insert_header(("Location", "/admin/bans")).finish()
+    see_other("/admin/bans")
 }
 
 /// Bans a network from the whole site and logs it.

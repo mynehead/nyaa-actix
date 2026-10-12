@@ -2,6 +2,7 @@
 //! [`crate::auth::api_key`]).
 
 use actix_session::Session;
+use actix_web::http::StatusCode;
 use actix_web::{web, HttpRequest, HttpResponse, Result};
 use diesel::Connection;
 use serde::Deserialize;
@@ -12,11 +13,10 @@ use crate::auth::policy::can_ban;
 use crate::auth::{LoggedIn, Permission};
 use crate::config::Config;
 use crate::db::DbPool;
-use crate::handlers::account::redirect;
 use crate::handlers::two_factor::password_ok;
 use crate::models::{user_link, AdminLog, User};
 use crate::utils::context::base_context;
-use crate::utils::{flash, internal_error, with_conn};
+use crate::utils::{flash, html_page, redirect, with_conn};
 
 const PAGE_URL: &str = "/profile/api-keys";
 
@@ -44,8 +44,7 @@ async fn render(
     ctx.insert("keys", &keys);
     ctx.insert("max_keys", &MAX_KEYS);
     ctx.insert("new_key", &new_key);
-    let html = tmpl.render("api_keys.html", &ctx).map_err(internal_error)?;
-    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+    html_page(tmpl, "api_keys.html", &ctx, StatusCode::OK)
 }
 
 pub async fn page(

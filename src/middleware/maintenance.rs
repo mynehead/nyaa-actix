@@ -18,7 +18,7 @@ use crate::auth::Permission;
 use crate::config::{Config, MaintenanceConfig};
 use crate::db::DbPool;
 use crate::middleware::auth::get_current_user;
-use crate::utils::flash;
+use crate::utils::{flash, see_other};
 
 /// The page a reverse proxy also serves while the site is stopped (see docker/DEPLOY.md).
 const PAGE: &str = include_str!("../../static/maintenance.html");
@@ -95,7 +95,7 @@ fn refuse(req: &ServiceRequest, m: &MaintenanceConfig) -> HttpResponse {
         // `//host` and `/\host` would be read as another site
         .filter(|path| !path[1..].starts_with(['/', '\\']))
         .unwrap_or_else(|| req.path().to_string());
-    HttpResponse::SeeOther().insert_header((header::LOCATION, back)).finish()
+    see_other(&back)
 }
 
 #[cfg(test)]

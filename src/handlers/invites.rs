@@ -3,6 +3,7 @@
 //! [`Invite::remaining`]) and see their own.
 
 use actix_session::Session;
+use actix_web::http::StatusCode;
 use actix_web::{web, HttpResponse, Result};
 use diesel::prelude::*;
 use serde::Deserialize;
@@ -17,10 +18,10 @@ use crate::handlers::admin::{PageParams, ADMIN_PER_PAGE};
 use crate::models::{new_invite_code, user_link, AdminLog, Invite, NewInvite, User};
 use crate::utils::context::base_context;
 use crate::utils::pagination::Pagination;
-use crate::utils::{flash, internal_error};
+use crate::utils::{flash, html_page, internal_error, see_other};
 
 fn back_to_invites() -> HttpResponse {
-    HttpResponse::SeeOther().insert_header(("Location", "/invites")).finish()
+    see_other("/invites")
 }
 
 /// The invites page; `new_link` is the register link of a code just made, shown only now.
@@ -47,8 +48,7 @@ fn render(
     ctx.insert("new_invite_link", &new_link);
     ctx.insert("pagination", &Pagination::new(page, total, ADMIN_PER_PAGE));
     ctx.insert("flash_messages", &flash::take(session));
-    let html = tmpl.render("invites.html", &ctx).map_err(internal_error)?;
-    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+    html_page(tmpl, "invites.html", &ctx, StatusCode::OK)
 }
 
 pub async fn list(
@@ -169,9 +169,7 @@ pub async fn give(
     if !moderator.can(Permission::CreateInvites) || !can_ban(&moderator, &user) {
         return Err(actix_web::error::ErrorForbidden("Not allowed"));
     }
-    let back = HttpResponse::SeeOther()
-        .insert_header(("Location", format!("/user/{}", urlencoding::encode(&user.username))))
-        .finish();
+    let back = see_other(&format!("/user/{}", urlencoding::encode(&user.username)));
     if form.amount == 0 || form.amount.abs() > 100 {
         flash::push(
             &session,
