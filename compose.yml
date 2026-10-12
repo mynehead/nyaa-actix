@@ -21,6 +21,9 @@ services:
       AVATAR_STORAGE_PATH: /data/avatars
       # Whitelist and stats calls go to the tracker service, with TRACKER_API_KEY from .env
       TRACKER_API_URL: http://tracker:8080
+      # Inside the container the site listens on 8080 on every address; NYAA_PORT moves it outside
+      PORT: "8080"
+      BIND_ADDRESS: ""
     ports:
       - "${NYAA_PORT:-8080}:8080"
     volumes:

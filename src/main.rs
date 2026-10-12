@@ -88,7 +88,8 @@ async fn main() -> std::io::Result<()> {
     let cfg_data = web::Data::new(cfg.clone());
     let pool_data = web::Data::new(pool);
 
-    log::info!("Starting {} on http://localhost:{}", cfg.site_name, PORT);
+    let (port, bind_address) = (cfg.port, cfg.bind_address);
+    log::info!("Starting {} on port {port}", cfg.site_name);
 
     let server = HttpServer::new(move || {
         let mut tera = Tera::new("templates/**/*").expect("Failed to load templates");
@@ -246,22 +247,25 @@ async fn main() -> std::io::Result<()> {
             .route("/admin/banners/{id}/edit", web::post().to(handlers::banners::update))
             .route("/admin/banners/{id}/toggle", web::post().to(handlers::banners::toggle))
             .route("/admin/banners/{id}/delete", web::post().to(handlers::banners::delete))
-    })
-    .listen(tcp_listener(SocketAddr::from((Ipv4Addr::UNSPECIFIED, PORT)))?)?;
-    // Windows resolves `localhost` to ::1 first and retries a refused connection, so with
-    // only IPv4 bound every new browser connection to localhost waited ~300 ms for the
-    // fallback to 127.0.0.1. Listen on IPv6 as well, where the host has it.
-    let server = match tcp_listener(SocketAddr::from((Ipv6Addr::UNSPECIFIED, PORT))) {
-        Ok(lst) => server.listen(lst)?,
-        Err(e) => {
-            log::warn!("Not listening on IPv6 ([::]:{PORT}): {e}");
-            server
+    });
+    let server = match bind_address {
+        Some(ip) => server.listen(tcp_listener(SocketAddr::new(ip, port))?)?,
+        None => {
+            let server = server.listen(tcp_listener(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)))?)?;
+            // Windows resolves `localhost` to ::1 first and retries a refused connection, so with
+            // only IPv4 bound every new browser connection to localhost waited ~300 ms for the
+            // fallback to 127.0.0.1. Listen on IPv6 as well, where the host has it.
+            match tcp_listener(SocketAddr::from((Ipv6Addr::UNSPECIFIED, port))) {
+                Ok(lst) => server.listen(lst)?,
+                Err(e) => {
+                    log::warn!("Not listening on IPv6 ([::]:{port}): {e}");
+                    server
+                }
+            }
         }
     };
     server.run().await
 }
-
-const PORT: u16 = 8080;
 
 /// Headers every response gets. The CSP allows inline scripts and styles because the
 /// templates (from upstream) use them; it still blocks scripts from other hosts, plugins,
