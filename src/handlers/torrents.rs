@@ -15,14 +15,13 @@ use crate::config::Config;
 use crate::db::schema::{bans, nyaa_comments, nyaa_statistics, nyaa_torrents, users};
 use crate::db::DbConnection;
 use crate::db::DbPool;
-use crate::handlers::account::redirect;
 use crate::models::{
     danger_action, edited_flags, torrent_link, user_link, AdminLog, Ban, DangerAction, EditFlags, NewBan, NewStatistic,
     NewTorrent, Torrent, TorrentFlags, User, UserStatus, MAX_BAN_REASON_LEN,
 };
 use crate::torrent::{parse_torrent, rebuild_torrent};
 use crate::utils::context::base_context;
-use crate::utils::{client_ip, flash, internal_error, sanitize_string, sanitize_text, unpack_ip, with_conn};
+use crate::utils::{client_ip, flash, internal_error, redirect, sanitize_string, sanitize_text, unpack_ip, with_conn};
 
 pub async fn view_torrent(
     CurrentUser(current_user): CurrentUser,
@@ -34,11 +33,7 @@ pub async fn view_torrent(
     path: web::Path<i32>,
 ) -> Result<HttpResponse> {
     let torrent_id = path.into_inner();
-    let torrent = with_conn(&pool, move |conn| Torrent::by_id(conn, torrent_id))
-        .await?
-        .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))?;
-
-    check_visible(&torrent, &current_user)?;
+    let torrent = visible(with_conn(&pool, move |conn| Torrent::by_id(conn, torrent_id)).await?, &current_user)?;
 
     let page = ViewPage { torrent, user: current_user, comment_text: String::new(), comment_error: None };
     let html = page.render(&pool, &tmpl, &cfg, &storage, flash::take(&session)).await?;
@@ -68,10 +63,7 @@ pub async fn post_comment(
     let torrent_id = path.into_inner();
     let mut conn = pool.get().map_err(internal_error)?;
 
-    let torrent = Torrent::by_id(&mut conn, torrent_id)
-        .map_err(internal_error)?
-        .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))?;
-    check_visible(&torrent, &current_user)?;
+    let torrent = visible(Torrent::by_id(&mut conn, torrent_id).map_err(internal_error)?, &current_user)?;
     if !can_comment(&torrent, current_user.as_ref()) {
         return Err(actix_web::error::ErrorForbidden("You may not comment on this torrent"));
     }
@@ -122,10 +114,7 @@ fn torrent_and_comment(
     comment_id: i32,
     user: &User,
 ) -> Result<(Torrent, crate::models::Comment)> {
-    let torrent = Torrent::by_id(conn, torrent_id)
-        .map_err(internal_error)?
-        .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))?;
-    check_visible(&torrent, &Some(user.clone()))?;
+    let torrent = visible(Torrent::by_id(conn, torrent_id).map_err(internal_error)?, &Some(user.clone()))?;
     let comment: crate::models::Comment = nyaa_comments::table
         .find(comment_id)
         .first(conn)
@@ -378,13 +367,13 @@ fn render_view(
     Ok(tmpl.render("view.html", &ctx)?)
 }
 
-/// Deleted and banned torrents are only visible to moderators.
-fn check_visible(torrent: &Torrent, current_user: &Option<User>) -> Result<()> {
+/// The torrent if it exists and the viewer may see it, else a 404: deleted and banned
+/// torrents are only visible to moderators.
+fn visible(torrent: Option<Torrent>, current_user: &Option<User>) -> Result<Torrent> {
     let moderator = current_user.as_ref().is_some_and(|u| u.can(Permission::ModerateTorrents));
-    if (torrent.is_deleted() || torrent.is_banned()) && !moderator {
-        return Err(actix_web::error::ErrorNotFound("Torrent not found"));
-    }
-    Ok(())
+    torrent
+        .filter(|t| moderator || !(t.is_deleted() || t.is_banned()))
+        .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))
 }
 
 pub async fn download_torrent(
@@ -395,10 +384,7 @@ pub async fn download_torrent(
     path: web::Path<i32>,
 ) -> Result<HttpResponse> {
     let torrent_id = path.into_inner();
-    let torrent = with_conn(&pool, move |conn| Torrent::by_id(conn, torrent_id))
-        .await?
-        .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))?;
-    check_visible(&torrent, &current_user)?;
+    let torrent = visible(with_conn(&pool, move |conn| Torrent::by_id(conn, torrent_id)).await?, &current_user)?;
 
     if torrent.has_torrent == 0 {
         return Err(actix_web::error::ErrorNotFound("Torrent file not available"));
@@ -462,12 +448,9 @@ pub async fn magnet_redirect(
 ) -> Result<HttpResponse> {
     let torrent_id = path.into_inner();
     let mut conn = pool.get().map_err(internal_error)?;
-    let torrent = Torrent::by_id(&mut conn, torrent_id)
-        .map_err(internal_error)?
-        .ok_or_else(|| actix_web::error::ErrorNotFound("Torrent not found"))?;
-    check_visible(&torrent, &current_user)?;
+    let torrent = visible(Torrent::by_id(&mut conn, torrent_id).map_err(internal_error)?, &current_user)?;
     let magnet = torrent.magnet_uri(&torrent.display_name, &cfg.trackers());
-    Ok(HttpResponse::Found().insert_header(("Location", magnet)).finish())
+    Ok(redirect(&magnet))
 }
 
 pub(crate) const NO_UPLOADS: &str = "Your account may not upload torrents.";
@@ -479,7 +462,7 @@ pub async fn upload_get(
     cfg: web::Data<Config>,
 ) -> Result<HttpResponse> {
     let Some(user) = user else {
-        return Ok(HttpResponse::Found().insert_header(("Location", "/login")).finish());
+        return Ok(redirect("/login"));
     };
     if !user.can(Permission::Upload) {
         return Err(actix_web::error::ErrorForbidden(NO_UPLOADS));
@@ -584,7 +567,7 @@ pub async fn upload_post(
 
     let upload = Upload { torrent_file: torrent_bytes, form, group_id };
     match create_torrent(&pool, &cfg, &storage, &user, client_ip(&req), &upload).await? {
-        Ok(torrent) => Ok(HttpResponse::Found().insert_header(("Location", format!("/view/{}", torrent.id))).finish()),
+        Ok(torrent) => Ok(redirect(&format!("/view/{}", torrent.id))),
         Err(errors) => {
             let mut conn = pool.get().map_err(internal_error)?;
             let html = render_upload(&mut conn, &tmpl, &cfg, &user, &upload.form, upload.group_id, &errors)?;

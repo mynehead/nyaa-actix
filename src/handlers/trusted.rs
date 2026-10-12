@@ -3,6 +3,7 @@
 //! `admin.trusted` and `admin.trusted_application`).
 
 use actix_session::Session;
+use actix_web::http::StatusCode;
 use actix_web::{web, HttpResponse, Result};
 use serde::Deserialize;
 use tera::Tera;
@@ -10,23 +11,14 @@ use tera::Tera;
 use crate::auth::{CurrentUser, Moderator, Permission};
 use crate::config::Config;
 use crate::db::DbPool;
-use crate::handlers::account::redirect;
 use crate::models::{
     trusted_deny_reasons, TrustedApplication, TrustedApplicationStatus, TrustedListFilter, TrustedRecommendation, User,
 };
 use crate::utils::context::base_context;
 use crate::utils::pagination::Pagination;
-use crate::utils::{flash, internal_error};
+use crate::utils::{flash, html_page, internal_error, redirect};
 
 const APPS_PER_PAGE: i64 = 20;
-
-fn render(tmpl: &Tera, name: &str, ctx: &tera::Context) -> Result<String> {
-    tmpl.render(name, ctx).map_err(internal_error)
-}
-
-fn html(body: String) -> HttpResponse {
-    HttpResponse::Ok().content_type("text/html").body(body)
-}
 
 /// Length check of upstream's `Length(min, max)` validators, counted in characters.
 fn length_ok(s: &str, min: usize, max: usize) -> bool {
@@ -43,7 +35,7 @@ pub async fn trusted_info(
     let mut ctx = base_context(&cfg, current_user.as_ref());
     ctx.insert("active_page", "trusted");
     ctx.insert("flash_messages", &flash::take(&session));
-    Ok(html(render(&tmpl, "trusted.html", &ctx)?))
+    html_page(&tmpl, "trusted.html", &ctx, StatusCode::OK)
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -124,7 +116,7 @@ pub async fn request_trusted(
             "why_want_trusted": posted.as_ref().map(|f| f.why_want_trusted.as_str()).unwrap_or(""),
         }),
     );
-    Ok(html(render(&tmpl, "trusted_form.html", &ctx)?))
+    html_page(&tmpl, "trusted_form.html", &ctx, StatusCode::OK)
 }
 
 #[derive(Debug, Deserialize)]
@@ -166,7 +158,7 @@ pub async fn admin_trusted(
     ctx.insert("apps", &apps);
     ctx.insert("list_filter", &list_filter.unwrap_or_default());
     ctx.insert("pagination", &pagination);
-    Ok(html(render(&tmpl, "admin_trusted.html", &ctx)?))
+    html_page(&tmpl, "admin_trusted.html", &ctx, StatusCode::OK)
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -246,7 +238,7 @@ pub async fn admin_trusted_application(
     ctx.insert("comment", posted.comment.as_deref().unwrap_or(""));
     ctx.insert("recommendation", posted.recommendation.as_deref().unwrap_or("abstain"));
     ctx.insert("comment_errors", &comment_errors);
-    Ok(html(render(&tmpl, "admin_trusted_view.html", &ctx)?))
+    html_page(&tmpl, "admin_trusted_view.html", &ctx, StatusCode::OK)
 }
 
 #[cfg(test)]

@@ -43,6 +43,10 @@ pub struct Config {
     pub registration: RegistrationConfig,
     /// Public base URL of the site, used in the .torrent comment field.
     pub site_url: String,
+    /// PORT: the port the site listens on.
+    pub port: u16,
+    /// BIND_ADDRESS: the one address to listen on; `None` is every IPv4 and IPv6 address.
+    pub bind_address: Option<std::net::IpAddr>,
     /// Announce URLs written into magnets and .torrent files, own tracker first.
     pub tracker_urls: Vec<String>,
     /// TRUSTED_PROXIES: reverse proxies whose `X-Forwarded-For` names the visitor.
@@ -362,6 +366,14 @@ impl Config {
             maintenance: MaintenanceConfig::from_env(),
             raid_mode: RaidModeConfig::from_env(),
             registration: RegistrationConfig::from_env(),
+            port: match env::var("PORT").unwrap_or_default().trim() {
+                "" => 8080,
+                v => v.parse().unwrap_or_else(|_| panic!("PORT must be a port number, got {:?}", v)),
+            },
+            bind_address: match env::var("BIND_ADDRESS").unwrap_or_default().trim() {
+                "" => None,
+                v => Some(v.parse().unwrap_or_else(|_| panic!("BIND_ADDRESS must be an IP address, got {:?}", v))),
+            },
             site_url: env::var("SITE_URL")
                 .unwrap_or_else(|_| "http://localhost:8080".into())
                 .trim_end_matches('/')
@@ -411,6 +423,8 @@ impl Config {
             raid_mode: Default::default(),
             registration: Default::default(),
             site_url: String::new(),
+            port: 8080,
+            bind_address: None,
             tracker_urls: vec![],
             trusted_proxies: vec![],
             meili: None,

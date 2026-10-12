@@ -1,5 +1,5 @@
 use diesel::prelude::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::syntax::Resolved;
 use crate::db::schema::{nyaa_statistics, nyaa_torrents};
@@ -60,6 +60,18 @@ pub enum SearchOrder {
     Desc,
 }
 
+/// The query parameters every torrent listing takes (home, user and group pages): term,
+/// sort, order, category, filter and page.
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct ListParams {
+    pub q: Option<String>,
+    pub s: Option<String>,
+    pub o: Option<String>,
+    pub c: Option<String>,
+    pub f: Option<String>,
+    pub p: Option<i64>,
+}
+
 impl SearchQuery {
     /// Defaults for the main listing; only the tests build queries by hand.
     #[cfg(test)]
@@ -83,19 +95,15 @@ impl SearchQuery {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn from_params(
-        term: Option<String>,
+        params: &ListParams,
         user_id: Option<i32>,
         group_id: Option<i32>,
-        cat: Option<&str>,
-        filter: Option<&str>,
-        sort: Option<&str>,
-        order: Option<&str>,
-        page: Option<i64>,
         per_page: i64,
         moderator: bool,
     ) -> Self {
+        let (cat, filter, sort, order) =
+            (params.c.as_deref(), params.f.as_deref(), params.s.as_deref(), params.o.as_deref());
         let (main_cat, sub_cat) = parse_category(cat);
         let quality_filter = filter.and_then(|f| f.parse().ok()).unwrap_or(0);
         let sort = match sort {
@@ -112,7 +120,7 @@ impl SearchQuery {
             _ => SearchOrder::Desc,
         };
         SearchQuery {
-            term: term.filter(|t| !t.is_empty()),
+            term: params.q.clone().filter(|t| !t.is_empty()),
             user_id,
             group_id,
             main_category: main_cat,
@@ -120,7 +128,7 @@ impl SearchQuery {
             quality_filter,
             sort,
             order,
-            page: page.unwrap_or(1).max(1),
+            page: params.p.unwrap_or(1).max(1),
             per_page,
             include_deleted: moderator,
             include_hidden: moderator,

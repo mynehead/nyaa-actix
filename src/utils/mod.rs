@@ -17,6 +17,27 @@ pub fn internal_error<E: std::fmt::Display>(e: E) -> actix_web::Error {
     actix_web::error::ErrorInternalServerError("Internal server error")
 }
 
+/// A 302 to `location`.
+pub fn redirect(location: &str) -> actix_web::HttpResponse {
+    actix_web::HttpResponse::Found().insert_header((actix_web::http::header::LOCATION, location)).finish()
+}
+
+/// A 303 to `location`: after a form post, the browser follows it with a GET.
+pub fn see_other(location: &str) -> actix_web::HttpResponse {
+    actix_web::HttpResponse::SeeOther().insert_header((actix_web::http::header::LOCATION, location)).finish()
+}
+
+/// Renders a template as an HTML page with `status`; template errors become [`internal_error`]s.
+pub fn html_page(
+    tmpl: &tera::Tera,
+    name: &str,
+    ctx: &tera::Context,
+    status: actix_web::http::StatusCode,
+) -> actix_web::Result<actix_web::HttpResponse> {
+    let html = tmpl.render(name, ctx).map_err(internal_error)?;
+    Ok(actix_web::HttpResponse::build(status).content_type("text/html").body(html))
+}
+
 /// Runs blocking database work on actix's thread pool, so the request threads keep serving
 /// other visitors meanwhile. Pool and query errors become [`internal_error`]s.
 pub async fn with_conn<T, E, F>(pool: &crate::db::DbPool, f: F) -> actix_web::Result<T>

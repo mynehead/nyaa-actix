@@ -1,6 +1,7 @@
 //! Admin > Banners: site-wide notices shown above the torrent list on the main page.
 
 use actix_session::Session;
+use actix_web::http::StatusCode;
 use actix_web::{web, HttpResponse, Result};
 use diesel::Connection;
 use serde::Deserialize;
@@ -11,12 +12,12 @@ use crate::config::Config;
 use crate::db::DbPool;
 use crate::models::{AdminLog, Banner};
 use crate::utils::context::base_context;
-use crate::utils::{flash, internal_error};
+use crate::utils::{flash, html_page, internal_error, see_other};
 
 const MAX_LENGTH: usize = 1024;
 
 fn back_to_list() -> HttpResponse {
-    HttpResponse::SeeOther().insert_header(("Location", "/admin/banners")).finish()
+    see_other("/admin/banners")
 }
 
 pub async fn list(
@@ -31,8 +32,7 @@ pub async fn list(
     let mut ctx = base_context(&cfg, Some(&user));
     ctx.insert("flash_messages", &flash::take(&session));
     ctx.insert("banners", &banners);
-    let html = tmpl.render("admin/banners.html", &ctx).map_err(internal_error)?;
-    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+    html_page(&tmpl, "admin/banners.html", &ctx, StatusCode::OK)
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,8 +90,7 @@ pub async fn edit_form(
     let mut ctx = base_context(&cfg, Some(&user));
     ctx.insert("flash_messages", &flash::take(&session));
     ctx.insert("banner", &banner);
-    let html = tmpl.render("admin/banner_edit.html", &ctx).map_err(internal_error)?;
-    Ok(HttpResponse::Ok().content_type("text/html").body(html))
+    html_page(&tmpl, "admin/banner_edit.html", &ctx, StatusCode::OK)
 }
 
 pub async fn update(
@@ -106,9 +105,7 @@ pub async fn update(
         Ok(content) => content,
         Err(reason) => {
             flash::push(&session, "danger", "Banner not saved!", &reason);
-            return Ok(HttpResponse::SeeOther()
-                .insert_header(("Location", format!("/admin/banners/{}/edit", id)))
-                .finish());
+            return Ok(see_other(&format!("/admin/banners/{}/edit", id)));
         }
     };
     let mut conn = pool.get().map_err(internal_error)?;

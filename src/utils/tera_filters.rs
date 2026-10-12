@@ -90,6 +90,7 @@ mod tests {
 
 #[cfg(test)]
 mod render_tests {
+    use crate::search::db::ListParams;
     use crate::search::db::ListedTorrent;
     use crate::utils::context::{base_context, SearchState};
     use crate::utils::pagination::Pagination;
@@ -135,13 +136,13 @@ mod render_tests {
         ctx.insert("pagination", &Pagination::new(2, 500, 75));
         ctx.insert(
             "search",
-            &SearchState::new(
-                &Some("a&b".into()),
-                &Some("1_2".into()),
-                &None,
-                &Some("size".into()),
-                &Some("desc".into()),
-            ),
+            &SearchState::new(&ListParams {
+                q: Some("a&b".into()),
+                c: Some("1_2".into()),
+                s: Some("size".into()),
+                o: Some("desc".into()),
+                ..Default::default()
+            }),
         );
         let html = render("home.html", &ctx);
         assert!(html.contains("<title>a&amp;b :: Nyaa</title>"), "{}", html);
@@ -232,7 +233,7 @@ mod render_tests {
     fn simple_pages_render() {
         let cfg = config();
         for (page, logged_in) in [
-            ("404.html", false),
+            ("error.html", false),
             ("rules.html", false),
             ("help.html", true),
             ("profile.html", true),
@@ -241,6 +242,10 @@ mod render_tests {
             let u = user(3);
             let mut ctx = base_context(&cfg, logged_in.then_some(&u));
             ctx.insert("error", &Option::<String>::None);
+            // error.html
+            ctx.insert("code", &404);
+            ctx.insert("title", "Not Found");
+            ctx.insert("message", "Nothing here.");
             // profile.html
             ctx.insert("avatar_url", crate::models::DEFAULT_AVATAR);
             ctx.insert("active_tab", "password");

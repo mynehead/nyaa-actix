@@ -12,7 +12,6 @@ use tera::Tera;
 use crate::auth::{CurrentUser, LoggedIn, Moderator, Permission};
 use crate::config::{Config, TicketConfig};
 use crate::db::{DbConnection, DbPool};
-use crate::handlers::account::redirect;
 use crate::models::{
     parse_torrent_ids, parse_usernames, user_link, validate_message, validate_subject, AdminLog, Ticket,
     TicketCategory, TicketFilter, Torrent, User, TICKETS_PER_PAGE, TICKET_CATEGORIES, TICKET_CLOSED,
@@ -20,12 +19,7 @@ use crate::models::{
 };
 use crate::utils::context::base_context;
 use crate::utils::pagination::Pagination;
-use crate::utils::{flash, internal_error};
-
-fn render(tmpl: &Tera, name: &str, ctx: &tera::Context, status: StatusCode) -> Result<HttpResponse> {
-    let body = tmpl.render(name, ctx).map_err(internal_error)?;
-    Ok(HttpResponse::build(status).content_type("text/html").body(body))
-}
+use crate::utils::{flash, html_page, internal_error, redirect};
 
 /// `{"torrent": "Torrent Report", ...}` for the ticket lists.
 fn category_titles() -> std::collections::HashMap<&'static str, &'static str> {
@@ -91,7 +85,7 @@ pub async fn my_tickets(
     ctx.insert("flash_messages", &flash::take(&session));
     ctx.insert("tickets", &tickets);
     ctx.insert("category_titles", &category_titles());
-    render(&tmpl, "tickets.html", &ctx, StatusCode::OK)
+    html_page(&tmpl, "tickets.html", &ctx, StatusCode::OK)
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -133,7 +127,7 @@ fn new_ticket_page(
     );
     ctx.insert("errors", errors);
     ctx.insert("limit", &limit);
-    render(tmpl, "ticket_new.html", &ctx, status)
+    html_page(tmpl, "ticket_new.html", &ctx, status)
 }
 
 /// GET /tickets/new: the form, or why the user has to wait. Query parameters with the
@@ -276,7 +270,7 @@ fn ticket_page(
     ctx.insert("message", message);
     let (status, error) = error.map_or((StatusCode::OK, None), |(status, e)| (status, Some(e)));
     ctx.insert("error", &error);
-    render(tmpl, "ticket.html", &ctx, status)
+    html_page(tmpl, "ticket.html", &ctx, status)
 }
 
 /// GET /tickets/{id}
@@ -407,7 +401,7 @@ pub async fn admin_tickets(
     ctx.insert("category_titles", &category_titles());
     ctx.insert("category", &category.map(|c| c.key).unwrap_or_default());
     ctx.insert("pagination", &Pagination::new(page, total, TICKETS_PER_PAGE));
-    render(&tmpl, "admin/tickets.html", &ctx, StatusCode::OK)
+    html_page(&tmpl, "admin/tickets.html", &ctx, StatusCode::OK)
 }
 
 #[cfg(test)]

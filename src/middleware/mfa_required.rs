@@ -6,13 +6,13 @@ use actix_session::SessionExt;
 use actix_web::body::{BoxBody, MessageBody};
 use actix_web::dev::{ServiceRequest, ServiceResponse};
 use actix_web::middleware::Next;
-use actix_web::{web, Error, HttpResponse};
+use actix_web::{web, Error};
 
 use crate::auth::mfa::UserMfa;
 use crate::config::Config;
 use crate::db::DbPool;
 use crate::middleware::auth::get_current_user;
-use crate::utils::internal_error;
+use crate::utils::{internal_error, see_other};
 
 pub const SETUP_URL: &str = "/profile/2fa";
 
@@ -33,7 +33,7 @@ pub async fn require_two_factor(
             if let Some(user) = user.filter(|u| cfg.mfa.required_for(u.level())) {
                 let mut conn = pool.get().map_err(internal_error)?;
                 if !UserMfa::is_enabled(&mut conn, user.id).map_err(internal_error)? {
-                    let response = HttpResponse::SeeOther().insert_header(("Location", SETUP_URL)).finish();
+                    let response = see_other(SETUP_URL);
                     return Ok(req.into_response(response));
                 }
             }

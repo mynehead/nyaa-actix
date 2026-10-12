@@ -124,7 +124,7 @@ mod tests {
     use super::*;
     use crate::db::schema::{nyaa_statistics, nyaa_torrents, user_sessions, users};
     use crate::models::{NewStatistic, NewTorrent, NewUser, TorrentFlags, User};
-    use crate::search::db::{search, with_stats, SearchQuery, SearchSort};
+    use crate::search::db::{search, with_stats, ListParams, SearchQuery, SearchSort};
     use diesel::prelude::*;
 
     /// The torrent page's comments and every POST's ban check have an index to use.
@@ -241,13 +241,8 @@ mod tests {
 
             // Search ignores case
             let mut q = SearchQuery::from_params(
-                Some("show".into()),
+                &ListParams { q: Some("show".into()), ..Default::default() },
                 Some(user.id),
-                None,
-                None,
-                None,
-                None,
-                None,
                 None,
                 75,
                 false,
@@ -271,7 +266,7 @@ mod tests {
             diesel::update(nyaa_torrents::table.filter(nyaa_torrents::display_name.eq("Gamma Movie")))
                 .set(nyaa_torrents::flags.eq(TorrentFlags::HIDDEN.bits()))
                 .execute(conn)?;
-            let mut q = SearchQuery::from_params(None, None, None, None, None, None, None, None, 75, false);
+            let mut q = SearchQuery::from_params(&ListParams::default(), None, None, 75, false);
             let others = search(conn, &q)?.total;
             q.viewer_id = Some(user.id);
             assert_eq!(search(conn, &q)?.total, others + 1);
