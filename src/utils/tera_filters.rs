@@ -232,7 +232,7 @@ mod render_tests {
     fn simple_pages_render() {
         let cfg = config();
         for (page, logged_in) in [
-            ("404.html", false),
+            ("error.html", false),
             ("rules.html", false),
             ("help.html", true),
             ("profile.html", true),
@@ -241,6 +241,10 @@ mod render_tests {
             let u = user(3);
             let mut ctx = base_context(&cfg, logged_in.then_some(&u));
             ctx.insert("error", &Option::<String>::None);
+            // error.html
+            ctx.insert("code", &404);
+            ctx.insert("title", "Not Found");
+            ctx.insert("message", "Nothing here.");
             // profile.html
             ctx.insert("avatar_url", crate::models::DEFAULT_AVATAR);
             ctx.insert("active_tab", "password");

@@ -122,7 +122,7 @@ pub async fn login_2fa_post(
             );
         }
     }
-    Ok(redirect("/"))
+    Ok(redirect(&crate::handlers::site::take_login_next(&session)))
 }
 
 /// The setup page (QR code and confirmation form) or, once set up, the management page.

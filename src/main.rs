@@ -102,7 +102,12 @@ async fn main() -> std::io::Result<()> {
             .app_data(gravatar_data.clone())
             .app_data(tmpl_data.clone())
             .app_data(range_bans.clone())
-            .wrap(ErrorHandlers::new().handler(StatusCode::NOT_FOUND, handlers::site::not_found))
+            .wrap(
+                ErrorHandlers::new()
+                    .handler(StatusCode::UNAUTHORIZED, handlers::site::error_page)
+                    .handler(StatusCode::FORBIDDEN, handlers::site::error_page)
+                    .handler(StatusCode::NOT_FOUND, handlers::site::error_page),
+            )
             .wrap(middleware::request_log::logger())
             .wrap(actix_web::middleware::from_fn(middleware::ip_ban::reject_banned_ip))
             .wrap(actix_web::middleware::from_fn(middleware::csrf::reject_cross_site))

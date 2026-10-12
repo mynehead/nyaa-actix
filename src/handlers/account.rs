@@ -354,7 +354,7 @@ pub(crate) fn complete_login(
     LOGIN_FAILURES_BY_ACCOUNT.clear(&format!("user:{}", user.id));
     // Also records last_login_date and last_login_ip, which IP bans from the user page use
     login_user(session, conn, user.id, ip, AuthMethod::Password).map_err(internal_error)?;
-    Ok(redirect("/"))
+    Ok(redirect(&crate::handlers::site::take_login_next(session)))
 }
 
 /// Token purposes for the mailed links.
