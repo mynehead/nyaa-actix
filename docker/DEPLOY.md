@@ -20,6 +20,8 @@ File storage stays on the `site-data` volume unless `.env` sets `STORAGE_BACKEND
    - `SITE_URL` and `TRACKER_ANNOUNCE_URLS` to the addresses people will use, for example
      `https://nyaa.example` and `udp://tracker.nyaa.example:6969/announce,http://tracker.nyaa.example:6969/announce`.
      These end up in every magnet and `.torrent` file, so `localhost` only works on your own machine.
+
+   For a public site also read [Going public](#going-public) before the first start.
 2. Build and start:
    ```sh
    docker compose up -d --build
@@ -34,6 +36,106 @@ File storage stays on the `site-data` volume unless `.env` sets `STORAGE_BACKEND
 
 The other subcommands work the same way: `docker compose exec site nyaa-actix migrate-storage`,
 `docker compose exec site nyaa-actix reindex`.
+
+## Going public
+
+### Settings
+
+On top of the ones above, a public site needs these in `.env`:
+
+| Setting | Why |
+| --- | --- |
+| `SECRET_KEY` | A new one from `openssl rand -hex 64`. The placeholder in `.env.example` is long enough to pass the start-up check, so the site does not refuse it. Keep a copy somewhere safe: a lost key makes every two-factor setup unreadable. |
+| `SITE_URL=https://nyaa.example` | Exactly the address visitors use. Behind a proxy the site checks form posts against it, so a wrong value turns every post away with a 403. |
+| `REGISTRATION_MODE=invite` | The default is `open`, where anyone can sign up. With `invite`, accounts need a code from Admin > Invites. |
+| `NYAA_PORT=127.0.0.1:8080` | Publishes the site on localhost only, for the proxy. Docker writes its own firewall rules, so a plain `8080` is reachable from outside without TLS even with ufw or firewalld blocking it. |
+| `TRUSTED_PROXIES=172.16.0.0/12` | Requests from a proxy on the host arrive from the Docker network's gateway. Without this every visitor has that one address, so bans and rate limits hit everybody. `docker network inspect <folder>_default` (the folder holding compose.yml) shows the gateway; Docker's networks are in 172.16.0.0/12 unless you changed its address pools. |
+| `MFA_REQUIRED_LEVEL=moderator` | Moderators and admins must set up two-factor before they can use the site. |
+| `MAIL_BACKEND=smtp`, `MAIL_FROM_ADDRESS`, `SMTP_*` | Without mail there is no password reset. Set up SPF, DKIM and DMARC for the sender's domain, or the mails land in spam. |
+
+After the first start, create the admin, turn on two-factor for it, make the first codes under
+Admin > Invites, and check that `/register` without a code is turned away.
+
+### TLS with Caddy
+
+Caddy (2.8 or later) gets and renews Let's Encrypt certificates on its own for every domain named in its
+config; it only needs ports 80 and 443 open and the domain's DNS pointing at the server. It
+also sets `X-Forwarded-For` and has no upload size limit, so the config below is complete,
+including the [maintenance page](#a-maintenance-page-while-the-site-is-down) for when the site
+is stopped. Copy `static/maintenance.html` to `/srv/nyaa/maintenance.html` first.
+
+```caddyfile
+nyaa.example {
+	reverse_proxy 127.0.0.1:8080
+	handle_errors 502 503 504 {
+		root * /srv/nyaa
+		rewrite * /maintenance.html
+		header Retry-After 300
+		header Cache-Control no-store
+		file_server {
+			status 503
+		}
+	}
+}
+```
+
+Traefik can fetch certificates automatically too, through labels on the `site` service, but
+the maintenance page then needs an errors middleware and a second service to serve the file.
+Caddy needs neither. With nginx, certificates come from certbot, and the config is under
+[Maintenance](#a-maintenance-page-while-the-site-is-down).
+
+Open only 80 and 443 (TCP) for the proxy and 6969 (TCP and UDP) for the tracker.
+
+### Tracker
+
+Once the site is up, upload a torrent and open it in a client from another network, over UDP
+and HTTP. After `TRACKER_STATS_SYNC_SECS` (default 300) the torrent page shows its seeders. Also
+check that the tracker sees the peers' real addresses, IPv6 ones included (a second client from
+another network should find the first). If Docker's IPv6 is off, IPv6 connections pass through
+its userland proxy and all arrive from one address. Then turn on IPv6 for the compose network
+(`networks: default: enable_ipv6: true` in compose.yml, with a `subnet` if your Docker version
+asks for one) and recreate the stack.
+
+### Backups
+
+The database and the `site-data` volume are both needed: the torrent files live only in the
+volume (unless `STORAGE_BACKEND=s3`; then turn on versioning or back up the bucket). A daily job,
+for example `/etc/cron.daily/nyaa-backup` (made executable, with the paths adjusted):
+
+```sh
+#!/bin/sh
+set -e
+cd /srv/nyaa-actix                 # where compose.yml and .env are
+dir=/srv/backup/nyaa
+mkdir -p "$dir/site-data"
+docker compose exec -T postgres pg_dump -U nyaa -Fc nyaa > "$dir/nyaa-$(date +%F).dump"
+docker compose cp site:/data/. "$dir/site-data/"
+find "$dir" -name 'nyaa-*.dump' -mtime +14 -delete
+```
+
+A backup on the same disk does not survive the server, so copy `$dir` (and `.env`) to another
+machine or provider, for example with restic, borg or rclone. Try a restore once before you
+need one:
+
+```sh
+docker compose exec -T postgres createdb -U nyaa restore_test
+docker compose exec -T postgres pg_restore -U nyaa -d restore_test < /srv/backup/nyaa/nyaa-2026-01-01.dump
+docker compose exec -T postgres dropdb -U nyaa restore_test
+```
+
+### Logs and monitoring
+
+Docker keeps container logs without a size limit, and the site logs one line per request. Cap
+them in `/etc/docker/daemon.json`, then `systemctl restart docker` and
+`docker compose up -d --force-recreate` (the limit applies to new containers only):
+
+```json
+{ "log-driver": "json-file", "log-opts": { "max-size": "50m", "max-file": "5" } }
+```
+
+`restart: unless-stopped` restarts a crashed container but tells nobody. Have an outside uptime
+check (Uptime Kuma, healthchecks.io or your host's monitoring) call `https://nyaa.example/rules`
+and the tracker's HTTP port, and alert on disk space.
 
 ## Search
 
@@ -59,14 +161,8 @@ git pull
 docker compose up -d --build
 ```
 
-Migrations run on start, so the database follows the code. Back up first:
-
-```sh
-docker compose exec postgres pg_dump -U nyaa nyaa > nyaa-$(date +%F).sql
-```
-
-The `site-data` volume holds uploaded torrents and avatars when storage is local; back it
-up too (or use S3).
+Migrations run on start, so the database follows the code. Back up first, for example by
+running the [backup job](#backups) by hand.
 
 ## Maintenance
 
@@ -96,28 +192,18 @@ and have it serve `static/maintenance.html` whenever it cannot reach the site. T
 self-contained (no other files needed), and the site's own 503s pass through unchanged.
 Copy `static/maintenance.html` to the proxy host, here `/srv/nyaa/maintenance.html`.
 
-Caddy (2.8 or later):
-
-```caddyfile
-nyaa.example {
-	reverse_proxy 127.0.0.1:8080
-	handle_errors 502 503 504 {
-		root * /srv/nyaa
-		rewrite * /maintenance.html
-		header Retry-After 300
-		header Cache-Control no-store
-		file_server {
-			status 503
-		}
-	}
-}
-```
+Caddy (2.8 or later): the config under [TLS with Caddy](#tls-with-caddy) already does this.
 
 nginx:
 
 ```nginx
 location / {
     proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $host;
+    # The visitor's address, for TRUSTED_PROXIES
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    # Torrent files up to 10 MiB; nginx allows 1 MiB by default
+    client_max_body_size 11m;
     # Only nginx's own errors (site unreachable); the site's 503 page passes through
     error_page 502 504 =503 /maintenance.html;
 }
@@ -140,9 +226,8 @@ docker compose up -d --build site # migrations run on start, then the site answe
 ## Notes
 
 - The site container runs as an unprivileged user (uid 10001) and writes only to `/data`.
-- Put a reverse proxy with TLS (Caddy, nginx, Traefik) in front of port 8080 for a public
-  site, and keep `SITE_URL` on the `https://` address. Only 8080 and 6969 are published;
-  PostgreSQL, Meilisearch and the tracker API stay on the compose network.
+- Only 8080 and 6969 are published; PostgreSQL, Meilisearch and the tracker API stay on the
+  compose network.
 - The tracker keeps peers and its whitelist in memory, so a restart empties the swarm until
   clients announce again (within one announce interval). The site reaches its API at
   `http://tracker:8080` with `TRACKER_API_KEY`, sends the whole whitelist again when it sees
