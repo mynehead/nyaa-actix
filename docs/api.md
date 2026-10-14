@@ -72,3 +72,32 @@ page's. Success returns `url`, `id`, `name`, `hash` and `magnet`; failure is 400
 errors under `torrent`, `name`, `category`, `information` or `description`.
 
 Unlike upstream, uploads always need an account (no anonymous, account-less uploads).
+
+## Importing your torrents from another nyaa site
+
+`tools/import_nyaa.py` copies your own uploads from nyaa.si, sukebei or any site running
+upstream's code (or this one) to this site. It needs only Python 3.8 or newer, no packages:
+
+```
+python tools/import_nyaa.py --source https://nyaa.si --source-user MyName \
+                            --target https://nyaa.example --key MyName:nyaa_... --dry-run
+```
+
+It lists your uploads from the source's RSS feed (`?page=rss&u=MyName`), oldest first, and
+for each one reads the details from the source's `/api/info`, which asks for your password
+there (only sent to the source; set `NYAA_SOURCE_PASSWORD` to skip the prompt, and
+`NYAA_API_KEY` for the key). It skips torrents another account uploaded and ones already
+here, then uploads the rest with the same name, category, information, description and
+complete/remake/trusted flags. The info hash stays the same, so the swarm (and its
+seeders) is shared with the source. Drop `--dry-run` to import; running it again only
+picks up what is new. `--delay` sets the seconds between requests to the source (default 2).
+
+- If this site requires its tracker in uploads (`ENFORCE_MAIN_ANNOUNCE_URL`), the script
+  adds it to the file's tracker list; the info hash does not change.
+- Accounts under the upload rate limit get told how long to wait; the script waits and
+  carries on.
+- Imports get today's date and show up as new uploads.
+- Anonymous and hidden uploads on the source are not in its public feed, so they are not
+  found; upload those by hand.
+- A site that limits how far its listings page (nyaa.si does; `MAX_PAGES` here) leaves out
+  the oldest uploads of very large accounts.

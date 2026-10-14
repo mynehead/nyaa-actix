@@ -35,6 +35,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Format
         run: cargo fmt --check
+      - name: Import script tests
+        run: python3 -m unittest discover tools
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Build
