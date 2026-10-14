@@ -95,7 +95,8 @@ For each torrent, oldest first, it reads the details from the torrent's page, sk
 already here or uploaded by another account, and uploads the rest with the same name,
 category, information, description and anonymous/hidden/remake/trusted flags. The info
 hash stays the same, so the swarm (and its seeders) is shared with the source. Drop
-`--dry-run` to import; running it again only picks up what is new. `--delay` sets the
+`--dry-run` to import; running it again only picks up what is new. `--limit 5` stops after
+five torrents that are not here yet, to try it out or import in batches. `--delay` sets the
 seconds between requests to the source (default 2). The key can also come from
 `NYAA_API_KEY`.
 

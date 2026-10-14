@@ -252,6 +252,7 @@ def main():
     )
     p.add_argument("--delay", type=float, default=2, help="seconds between source requests (default 2)")
     p.add_argument("--dry-run", action="store_true", help="only list what would be imported")
+    p.add_argument("--limit", type=int, help="stop after this many torrents not yet on the target")
     args = p.parse_args()
 
     key = args.key or os.environ.get("NYAA_API_KEY") or getpass.getpass("API key on the target (name:nyaa_...): ")
@@ -264,12 +265,17 @@ def main():
         sys.exit("The target refused the API key")
     torrents = source_ids(source, args.source_user, args.delay)
     print(f"{len(torrents)} torrents listed for {args.source_user}")
+    done = 0
     for tid, info_hash in torrents:
+        if done == args.limit:
+            print(f"Stopped after {done} (--limit)")
+            break
         if info_hash and target.request(f"/api/info/{info_hash}")[0] == 200:
             print(f"#{tid}: already on the target")
             continue
         time.sleep(args.delay)
         result = import_one(source, target, args.source_user, tid, bool(info_hash), args.delay, args.dry_run)
+        done += result != "already on the target"
         print(f"#{tid}: {result}", flush=True)
 
 
