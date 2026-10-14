@@ -6,7 +6,8 @@ code or this one) to this site. Standard library only.
 
 It lists your uploads, oldest first: the public ones from the source's RSS feed, or with
 --cookie (your signed-in browser cookie there) all of them from your own user page, anonymous
-and hidden ones included. It reads each one's details from its page, skips torrents already on
+and hidden ones included. With --search "[Tag]" it takes that search's results instead
+(anonymous uploads included), keeping names that contain the search text. It reads each one's details from its page, skips torrents already on
 the target or uploaded by someone else, and uploads the rest through the target's API with the
 same name, category, information, description and anonymous/hidden/remake/trusted flags.
 No password for the source is needed. If the target requires its own
@@ -173,12 +174,15 @@ class Site:
             sys.exit(f"Cannot reach {self.url}: {e.reason} (http or https?)")
 
 
-def source_ids(source, user, delay):
-    """Every (id, hash) the source lists for `user`, oldest first: signed in (with a cookie) from
-    their own page, which also shows their anonymous and hidden uploads, otherwise from the feed."""
-    name = urllib.parse.quote(user)
+def source_ids(source, user, search, delay):
+    """Every (id, hash) the source lists, oldest first: a search's results (anonymous uploads
+    included) from the feed, or `user`'s uploads, signed in (with a cookie) from their own page,
+    which also shows their anonymous and hidden uploads, otherwise from the feed."""
+    name = urllib.parse.quote(user or "")
     path, parse = (f"/user/{name}?p=", lambda b: listing_ids(b.decode("utf-8", "replace")))
-    if not source.cookie:
+    if search:
+        path, parse = f"/?page=rss&q={urllib.parse.quote(search)}&p=", rss_ids
+    elif not source.cookie:
         path, parse = f"/?page=rss&u={name}&p=", rss_ids
     seen, page = {}, 1
     while True:
@@ -196,7 +200,7 @@ def source_ids(source, user, delay):
         time.sleep(delay)
 
 
-def import_one(source, target, user, tid, known_hash, delay, dry_run):
+def import_one(source, target, user, search, tid, known_hash, delay, dry_run):
     """Copies one torrent; returns a line saying what happened."""
     status, page = source.request(f"/view/{tid}")
     if status != 200:
@@ -207,7 +211,10 @@ def import_one(source, target, user, tid, known_hash, delay, dry_run):
         return f"not imported: source page: {e}"
     if not known_hash and target.request(f"/api/info/{t['hash']}")[0] == 200:
         return "already on the target"
-    if t["uploader"].lower() != user.lower():
+    # A search matches words anywhere; only names that contain the search text count
+    if search and search.lower() not in t["name"].lower():
+        return f"skipped, name doesn't contain {search}: {t['name']}"
+    if user and t["uploader"].lower() != user.lower():
         return f"skipped, uploaded by {t['uploader']}"
     if dry_run:
         return f"would import {t['name']}" + " (anonymous)" * t["anonymous"] + " (hidden)" * t["hidden"]
@@ -242,7 +249,8 @@ def import_one(source, target, user, tid, known_hash, delay, dry_run):
 def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--source", default="https://nyaa.si", help="site to copy from (default https://nyaa.si)")
-    p.add_argument("--source-user", required=True, help="the username there whose uploads to copy")
+    p.add_argument("--source-user", help="the username there whose uploads to copy")
+    p.add_argument("--search", help='copy the results of this search there instead, e.g. "[Tag]"')
     p.add_argument("--target", required=True, help="this site's address")
     p.add_argument("--key", help="name:nyaa_... API key on this site (or NYAA_API_KEY)")
     p.add_argument(
@@ -254,6 +262,8 @@ def main():
     p.add_argument("--dry-run", action="store_true", help="only list what would be imported")
     p.add_argument("--limit", type=int, help="stop after this many torrents not yet on the target")
     args = p.parse_args()
+    if not args.source_user and not args.search:
+        p.error("give --source-user, --search or both")
 
     key = args.key or os.environ.get("NYAA_API_KEY") or getpass.getpass("API key on the target (name:nyaa_...): ")
     if ":" not in key:
@@ -263,8 +273,8 @@ def main():
 
     if target.request("/api/info/0")[0] in (401, 403):
         sys.exit("The target refused the API key")
-    torrents = source_ids(source, args.source_user, args.delay)
-    print(f"{len(torrents)} torrents listed for {args.source_user}")
+    torrents = source_ids(source, args.source_user, args.search, args.delay)
+    print(f"{len(torrents)} torrents listed for {args.search or args.source_user}")
     done = 0
     for tid, info_hash in torrents:
         if done == args.limit:
@@ -274,7 +284,7 @@ def main():
             print(f"#{tid}: already on the target")
             continue
         time.sleep(args.delay)
-        result = import_one(source, target, args.source_user, tid, bool(info_hash), args.delay, args.dry_run)
+        result = import_one(source, target, args.source_user, args.search, tid, bool(info_hash), args.delay, args.dry_run)
         done += result != "already on the target"
         print(f"#{tid}: {result}", flush=True)
 
