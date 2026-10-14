@@ -76,28 +76,36 @@ Unlike upstream, uploads always need an account (no anonymous, account-less uplo
 ## Importing your torrents from another nyaa site
 
 `tools/import_nyaa.py` copies your own uploads from nyaa.si, sukebei or any site running
-upstream's code (or this one) to this site. It needs only Python 3.8 or newer, no packages:
+upstream's code (or this one) to this site. It needs only Python 3.8 or newer, no packages,
+and no password for the source:
 
 ```
 python tools/import_nyaa.py --source https://nyaa.si --source-user MyName \
                             --target https://nyaa.example --key MyName:nyaa_... --dry-run
 ```
 
-It lists your uploads from the source's RSS feed (`?page=rss&u=MyName`), oldest first, and
-for each one reads the details from the source's `/api/info`, which asks for your password
-there (only sent to the source; set `NYAA_SOURCE_PASSWORD` to skip the prompt, and
-`NYAA_API_KEY` for the key). It skips torrents another account uploaded and ones already
-here, then uploads the rest with the same name, category, information, description and
-complete/remake/trusted flags. The info hash stays the same, so the swarm (and its
-seeders) is shared with the source. Drop `--dry-run` to import; running it again only
-picks up what is new. `--delay` sets the seconds between requests to the source (default 2).
+Without `--cookie` it lists your public uploads from the source's RSS feed
+(`?page=rss&u=MyName`). Anonymous and hidden uploads are never in that feed; to include
+them, sign in to the source in your browser and pass its cookie: `--cookie "session=..."`
+(the whole `Cookie` header from the browser's developer tools also works, or set
+`NYAA_SOURCE_COOKIE`). The script then lists your own user page, which shows you all of
+your uploads, and anonymous or hidden ones stay so here.
+
+For each torrent, oldest first, it reads the details from the torrent's page, skips ones
+already here or uploaded by another account, and uploads the rest with the same name,
+category, information, description and anonymous/hidden/remake/trusted flags. The info
+hash stays the same, so the swarm (and its seeders) is shared with the source. Drop
+`--dry-run` to import; running it again only picks up what is new. `--delay` sets the
+seconds between requests to the source (default 2). The key can also come from
+`NYAA_API_KEY`.
 
 - If this site requires its tracker in uploads (`ENFORCE_MAIN_ANNOUNCE_URL`), the script
   adds it to the file's tracker list; the info hash does not change.
 - Accounts under the upload rate limit get told how long to wait; the script waits and
   carries on.
-- Imports get today's date and show up as new uploads.
-- Anonymous and hidden uploads on the source are not in its public feed, so they are not
-  found; upload those by hand.
+- Imports get today's date and show up as new uploads. The "complete" flag is not shown on
+  torrent pages, so it is not copied.
+- nyaa.si's `/api/info` answers 502, so the script reads the pages instead; if nyaa.si
+  changes their layout, it says "unexpected page layout".
 - A site that limits how far its listings page (nyaa.si does; `MAX_PAGES` here) leaves out
   the oldest uploads of very large accounts.

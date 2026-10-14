@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """Copies your own torrents from a nyaa site (nyaa.si, sukebei, any site running upstream's
-code or this one) to this site, through both sites' JSON API. Standard library only.
+code or this one) to this site. Standard library only.
 
     python import_nyaa.py --source-user MyName --target https://our.site --key MyName:nyaa_...
 
-It lists your uploads from the source's RSS feed, oldest first, reads each one's details from
-the source's /api/info (which needs your source password; it is only sent to the source),
-skips torrents uploaded by someone else or already on the target, and uploads the rest with
-the same name, category, information, description and flags. If the target requires its own
+It lists your uploads, oldest first: the public ones from the source's RSS feed, or with
+--cookie (your signed-in browser cookie there) all of them from your own user page, anonymous
+and hidden ones included. It reads each one's details from its page, skips torrents already on
+the target or uploaded by someone else, and uploads the rest through the target's API with the
+same name, category, information, description and anonymous/hidden/remake/trusted flags.
+No password for the source is needed. If the target requires its own
 tracker in uploaded files, that tracker is added to the file (the info hash stays the same).
 See docs/api.md.
 """
 import argparse
 import base64
 import getpass
+import html
 import json
 import os
 import re
@@ -97,16 +100,68 @@ def rss_ids(xml):
     return items
 
 
-class Site:
-    def __init__(self, url, user, secret):
-        self.url = url.rstrip("/")
-        self.auth = "Basic " + base64.b64encode(f"{user}:{secret}".encode()).decode()
+def listing_ids(page):
+    """(torrent id, hex info hash or None) of each row of an HTML torrent listing (a user's
+    page). Upstream's rows carry the magnet link; this site's link to it instead."""
+    items = []
+    for row in page.split("<tr")[1:]:
+        if view := re.search(r'href="/view/(\d+)"', row):
+            info_hash = re.search(r"btih:([0-9a-fA-F]{40})", row)
+            items.append((int(view[1]), info_hash and info_hash[1].lower()))
+    return items
 
-    def request(self, path, body=None, content_type=None, auth=True):
-        """(status, body bytes); HTTP errors are answers too."""
+
+def text(fragment):
+    return " ".join(html.unescape(re.sub(r"<[^>]+>", "", fragment)).split())
+
+
+def page_details(page):
+    """A torrent's details from its page (upstream's view.html markup, which this site keeps)."""
+    found = {
+        key: re.search(pattern, page, re.S)
+        for key, pattern in {
+            "panel": r'<div class="panel panel-(\w+)">\s*<div class="panel-heading"([^>]*)>',
+            "name": r'<h3 class="panel-title">(.*?)</h3>',
+            "hash": r"<kbd>([0-9a-fA-F]{40})</kbd>",
+            "category": r'Category:</div>\s*<div class="col-md-5">(.*?)</div>',
+            "submitter": r'Submitter:</div>\s*<div class="col-md-5">(.*?)</div>',
+            "information": r'Information:</div>\s*<div class="col-md-5">(.*?)</div>',
+            "description": r'id="torrent-description">(.*?)</div>',
+        }.items()
+    }
+    if not all(found.values()):
+        raise ValueError("unexpected page layout")
+    information = text(found["information"][1])
+    description = html.unescape(found["description"][1]).strip()
+    submitter = text(found["submitter"][1])
+    return {
+        "name": text(found["name"][1]),
+        "hash": found["hash"][1].lower(),
+        "category": re.findall(r"c=(\d+_\d+)", found["category"][1])[-1],
+        # "name", or "Anonymous (name)" when the viewer is the uploader
+        "uploader": re.sub(r"^Anonymous \((.*)\)$", r"\1", submitter),
+        "anonymous": submitter.startswith("Anonymous"),
+        "hidden": "darkgray" in found["panel"][2],
+        "remake": found["panel"][1] == "danger",
+        "trusted": found["panel"][1] == "success",
+        "information": "" if information == "No information." else information,
+        "description": "" if description == "#### No description." else description,
+    }
+
+
+class Site:
+    def __init__(self, url, user=None, secret=None, cookie=None):
+        self.url = url.rstrip("/")
+        self.auth = user and "Basic " + base64.b64encode(f"{user}:{secret}".encode()).decode()
+        self.cookie = cookie
+
+    def request(self, path, body=None, content_type=None):
+        """(status, body bytes); HTTP errors are answers too, an unreachable site ends the run."""
         req = urllib.request.Request(self.url + path, data=body, headers={"User-Agent": USER_AGENT})
-        if auth:
+        if self.auth:
             req.add_header("Authorization", self.auth)
+        if self.cookie:
+            req.add_header("Cookie", self.cookie)
         if content_type:
             req.add_header("Content-Type", content_type)
         try:
@@ -114,53 +169,53 @@ class Site:
                 return res.status, res.read()
         except urllib.error.HTTPError as e:
             return e.code, e.read()
+        except urllib.error.URLError as e:
+            sys.exit(f"Cannot reach {self.url}: {e.reason} (http or https?)")
 
 
 def source_ids(source, user, delay):
-    """Every (id, hash) the source's feed lists for `user`, oldest first."""
+    """Every (id, hash) the source lists for `user`, oldest first: signed in (with a cookie) from
+    their own page, which also shows their anonymous and hidden uploads, otherwise from the feed."""
+    name = urllib.parse.quote(user)
+    path, parse = (f"/user/{name}?p=", lambda b: listing_ids(b.decode("utf-8", "replace")))
+    if not source.cookie:
+        path, parse = f"/?page=rss&u={name}&p=", rss_ids
     seen, page = {}, 1
     while True:
-        status, xml = source.request(f"/?page=rss&u={urllib.parse.quote(user)}&p={page}", auth=False)
+        status, body = source.request(f"{path}{page}")
         if status != 200 and page == 1:
-            sys.exit(f"Source feed answered {status}")
+            sys.exit(f"Source listing answered {status}")
         if status != 200:  # past a page limit (MAX_PAGES here answers 404)
-            print(f"Source feed stopped at page {page} ({status}); older uploads are left out")
+            print(f"Source listing stopped at page {page} ({status}); older uploads are left out")
             return sorted(seen.items())
-        new = [item for item in rss_ids(xml) if item[0] not in seen]
-        if not new:  # an empty page, or a site that ignores p= and repeats the last one
+        new = [item for item in parse(body) if item[0] not in seen]
+        if not new:  # an empty page, or a site that repeats its last page
             return sorted(seen.items())
         seen.update(new)
         page += 1
         time.sleep(delay)
 
 
-def import_one(source, target, user, tid, delay, dry_run):
+def import_one(source, target, user, tid, known_hash, delay, dry_run):
     """Copies one torrent; returns a line saying what happened."""
-    status, body = source.request(f"/api/info/{tid}")
-    if status in (401, 403):
-        sys.exit(f"The source refused your password: {body[:200]!r}")
+    status, page = source.request(f"/view/{tid}")
     if status != 200:
-        return f"source /api/info answered {status}: {body[:200]!r}"
-    info = json.loads(body)
-    if (info.get("submitter") or "").lower() != user.lower():
-        return f"skipped, uploaded by {info.get('submitter')}"
+        return f"source page answered {status}"
+    try:
+        t = page_details(page.decode("utf-8", "replace"))
+    except ValueError as e:
+        return f"not imported: source page: {e}"
+    if not known_hash and target.request(f"/api/info/{t['hash']}")[0] == 200:
+        return "already on the target"
+    if t["uploader"].lower() != user.lower():
+        return f"skipped, uploaded by {t['uploader']}"
     if dry_run:
-        return f"would import {info['name']}"
+        return f"would import {t['name']}" + " (anonymous)" * t["anonymous"] + " (hidden)" * t["hidden"]
     time.sleep(delay)
-    status, torrent = source.request(f"/download/{tid}.torrent", auth=False)
+    status, torrent = source.request(f"/download/{tid}.torrent")
     if status != 200:
         return f"source download answered {status}"
-    data = json.dumps(
-        {
-            "name": info["name"],
-            "category": f"{info['main_category_id']}_{info['sub_category_id']}",
-            "information": info.get("information") or "",
-            "description": info.get("description") or "",
-            "complete": bool(info.get("is_complete")),
-            "remake": bool(info.get("is_remake")),
-            "trusted": bool(info.get("is_trusted")),
-        }
-    )
+    data = json.dumps({k: v for k, v in t.items() if k not in ("uploader", "hash")})
     added_tracker = False
     while True:
         content_type, body = multipart({"torrent_data": data}, [("torrent", f"{tid}.torrent", torrent)])
@@ -187,9 +242,14 @@ def import_one(source, target, user, tid, delay, dry_run):
 def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--source", default="https://nyaa.si", help="site to copy from (default https://nyaa.si)")
-    p.add_argument("--source-user", required=True, help="your username there")
+    p.add_argument("--source-user", required=True, help="the username there whose uploads to copy")
     p.add_argument("--target", required=True, help="this site's address")
     p.add_argument("--key", help="name:nyaa_... API key on this site (or NYAA_API_KEY)")
+    p.add_argument(
+        "--cookie",
+        help="your signed-in Cookie header for the source (or NYAA_SOURCE_COOKIE), to include "
+        "your anonymous and hidden uploads",
+    )
     p.add_argument("--delay", type=float, default=2, help="seconds between source requests (default 2)")
     p.add_argument("--dry-run", action="store_true", help="only list what would be imported")
     args = p.parse_args()
@@ -197,21 +257,20 @@ def main():
     key = args.key or os.environ.get("NYAA_API_KEY") or getpass.getpass("API key on the target (name:nyaa_...): ")
     if ":" not in key:
         sys.exit("The key goes with your username: name:nyaa_...")
-    password = os.environ.get("NYAA_SOURCE_PASSWORD") or getpass.getpass(f"Password for {args.source_user} on {args.source}: ")
-    source = Site(args.source, args.source_user, password)
+    source = Site(args.source, cookie=args.cookie or os.environ.get("NYAA_SOURCE_COOKIE"))
     target = Site(args.target, *key.split(":", 1))
 
+    if target.request("/api/info/0")[0] in (401, 403):
+        sys.exit("The target refused the API key")
     torrents = source_ids(source, args.source_user, args.delay)
     print(f"{len(torrents)} torrents listed for {args.source_user}")
     for tid, info_hash in torrents:
-        status, _ = target.request(f"/api/info/{info_hash}")
-        if status == 200:
+        if info_hash and target.request(f"/api/info/{info_hash}")[0] == 200:
             print(f"#{tid}: already on the target")
             continue
-        if status in (401, 403):
-            sys.exit("The target refused the API key")
         time.sleep(args.delay)
-        print(f"#{tid}: {import_one(source, target, args.source_user, tid, args.delay, args.dry_run)}", flush=True)
+        result = import_one(source, target, args.source_user, tid, bool(info_hash), args.delay, args.dry_run)
+        print(f"#{tid}: {result}", flush=True)
 
 
 if __name__ == "__main__":
