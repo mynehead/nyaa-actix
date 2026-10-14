@@ -91,6 +91,12 @@ them, sign in to the source in your browser and pass its cookie: `--cookie "sess
 `NYAA_SOURCE_COOKIE`). The script then lists your own user page, which shows you all of
 your uploads, and anonymous or hidden ones stay so here.
 
+`--search "[Tag]"` instead lists the source's search results for that text, anonymous
+uploads included, and keeps only names that contain it, e.g. a group's releases by their
+tag. A search proves nothing about who made a release, so this is for the site's own staff;
+together with `--source-user` it also checks the uploader. nyaa.si caps a search at about
+1000 results, so split very large tags by category on the source if needed.
+
 For each torrent, oldest first, it reads the details from the torrent's page, skips ones
 already here or uploaded by another account, and uploads the rest with the same name,
 category, information, description and anonymous/hidden/remake/trusted flags. The info
