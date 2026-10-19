@@ -78,7 +78,12 @@ struct Slot(&'static std::sync::atomic::AtomicUsize);
 impl Slot {
     fn take(busy: &'static std::sync::atomic::AtomicUsize, max: usize) -> Option<Slot> {
         use std::sync::atomic::Ordering::SeqCst;
-        busy.fetch_update(SeqCst, SeqCst, |n| (n < max).then_some(n + 1)).ok().map(|_| Slot(busy))
+        // Not fetch_update: newer Rust deprecates it, older Rust lacks its replacement
+        if busy.fetch_add(1, SeqCst) >= max {
+            busy.fetch_sub(1, SeqCst);
+            return None;
+        }
+        Some(Slot(busy))
     }
 }
 
