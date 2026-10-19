@@ -15,12 +15,12 @@ use crate::auth::{LoggedIn, Permission};
 use crate::config::Config;
 use crate::db::{DbConnection, DbManager, DbPool};
 use crate::handlers::account::{
-    client_key, MfaPending, LOGIN_FAILURES_BY_ACCOUNT, LOGIN_FAILURES_BY_IP, MFA_PENDING_KEY,
+    client_key, release_attempt, reserve_attempt, MfaPending, LOGIN_FAILURES_BY_ACCOUNT, MFA_PENDING_KEY,
 };
 use crate::middleware::auth::{login_user, logout_everywhere, AuthMethod};
 use crate::models::{user_link, AdminLog, User};
 use crate::utils::context::base_context;
-use crate::utils::{client_ip, flash, html_page, internal_error, redirect, see_other, with_conn};
+use crate::utils::{argon2, client_ip, flash, html_page, internal_error, redirect, see_other, with_conn};
 
 const SETUP_URL: &str = crate::middleware::mfa_required::SETUP_URL;
 /// The not yet confirmed secret shown on the setup page, Base32. Kept in the (encrypted)
@@ -73,7 +73,7 @@ pub async fn login_2fa_post(
     };
     // The same limits as wrong passwords: 10 per account, so six digits can't be guessed
     let (ip, account) = (client_key(&req), format!("user:{}", pending.user_id));
-    if LOGIN_FAILURES_BY_IP.is_blocked(&ip) || LOGIN_FAILURES_BY_ACCOUNT.is_blocked(&account) {
+    if !reserve_attempt(&ip, &account) {
         return login_page(
             &tmpl,
             &cfg,
@@ -95,14 +95,13 @@ pub async fn login_2fa_post(
             Some(SecondFactor::Totp) => AuthMethod::PasswordTotp,
             Some(SecondFactor::RecoveryCode) => AuthMethod::PasswordRecovery,
             None => {
-                LOGIN_FAILURES_BY_IP.hit(&ip);
-                LOGIN_FAILURES_BY_ACCOUNT.hit(&account);
                 return login_page(&tmpl, &cfg, "Invalid code.", StatusCode::UNAUTHORIZED);
             }
         },
     };
 
     session.remove(MFA_PENDING_KEY);
+    release_attempt(&ip, &account);
     LOGIN_FAILURES_BY_ACCOUNT.clear(&account);
     login_user(&session, &mut conn, user.id, client_ip(&req), method).map_err(internal_error)?;
     if method == AuthMethod::PasswordRecovery {
@@ -164,15 +163,14 @@ pub async fn page(
 
 /// Checks the password off the async workers; wrong ones count like failed logins.
 pub(crate) async fn password_ok(req: &HttpRequest, user: &User, password: &str) -> Result<bool> {
-    let account = format!("user:{}", user.id);
-    if LOGIN_FAILURES_BY_ACCOUNT.is_blocked(&account) || LOGIN_FAILURES_BY_IP.is_blocked(&client_key(req)) {
+    let (ip, account) = (client_key(req), format!("user:{}", user.id));
+    if !reserve_attempt(&ip, &account) {
         return Ok(false);
     }
     let (checked, password) = (user.clone(), password.to_string());
-    let ok = web::block(move || checked.verify_password(&password)).await?;
-    if !ok {
-        LOGIN_FAILURES_BY_ACCOUNT.hit(&account);
-        LOGIN_FAILURES_BY_IP.hit(&client_key(req));
+    let ok = argon2(move || checked.verify_password(&password)).await?;
+    if ok {
+        release_attempt(&ip, &account);
     }
     Ok(ok)
 }

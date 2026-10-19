@@ -22,12 +22,12 @@ use crate::auth::Permission;
 use crate::config::Config;
 use crate::db::schema::{nyaa_main_categories, nyaa_statistics};
 use crate::db::DbPool;
-use crate::handlers::account::{LOGIN_FAILURES_BY_ACCOUNT, LOGIN_FAILURES_BY_IP};
+use crate::handlers::account::{release_attempt, reserve_attempt, LOGIN_FAILURES_BY_ACCOUNT};
 use crate::handlers::torrents::{create_torrent, read_field, EditForm, Upload, MAX_TORRENT_SIZE, NO_UPLOADS};
 use crate::models::{password_matches, MainCategory, Statistic, Torrent, User};
 use crate::storage::{Kind, Storage};
 use crate::torrent::FileNode;
-use crate::utils::{client_ip, internal_error, with_conn};
+use crate::utils::{argon2, client_ip, internal_error, with_conn};
 
 fn error(status: StatusCode, errors: serde_json::Value) -> HttpResponse {
     HttpResponse::build(status).json(json!({ "errors": errors }))
@@ -70,20 +70,20 @@ async fn api_user(req: &HttpRequest, pool: &DbPool, cfg: &Config) -> std::result
         None => format!("name:{}", username.trim().to_lowercase()),
     };
     let password_ok = by_key || {
-        if LOGIN_FAILURES_BY_IP.is_blocked(&ip) || LOGIN_FAILURES_BY_ACCOUNT.is_blocked(&account) {
+        if !reserve_attempt(&ip, &account) {
             return Err(Box::new(error(
                 StatusCode::TOO_MANY_REQUESTS,
                 json!(["Too many failed login attempts. Try again in 15 minutes."]),
             )));
         }
         let (checked, password) = (user.clone(), password.to_string());
-        web::block(move || password_matches(checked.as_ref(), &password))
-            .await
-            .map_err(|e| server_error(internal_error(e)))?
+        let ok = argon2(move || password_matches(checked.as_ref(), &password)).await.map_err(server_error)?;
+        if ok {
+            release_attempt(&ip, &account);
+        }
+        ok
     };
     let Some(u) = user.filter(|_| password_ok) else {
-        LOGIN_FAILURES_BY_IP.hit(&ip);
-        LOGIN_FAILURES_BY_ACCOUNT.hit(&account);
         return Err(Box::new(error(StatusCode::FORBIDDEN, json!(["Incorrect username or password"]))));
     };
     LOGIN_FAILURES_BY_ACCOUNT.clear(&account);
