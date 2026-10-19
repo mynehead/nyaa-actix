@@ -23,6 +23,7 @@ impl Throttle {
     }
 
     /// Whether `key` has used up its attempts in the current window.
+    #[cfg(test)]
     pub fn is_blocked(&self, key: &str) -> bool {
         self.is_blocked_at(key, Instant::now())
     }
@@ -32,11 +33,26 @@ impl Throttle {
         self.hit_at(key, Instant::now())
     }
 
+    /// Counts one attempt for `key` unless it has used up its attempts; false when it has.
+    /// Checking and counting in one step, so requests sent at the same moment can't all
+    /// get past the check before any of them is counted.
+    pub fn try_hit(&self, key: &str) -> bool {
+        self.try_hit_at(key, Instant::now())
+    }
+
+    /// Takes back one attempt counted by [`Throttle::try_hit`], as when it succeeded.
+    pub fn undo(&self, key: &str) {
+        if let Some(entry) = self.hits.lock().unwrap().get_mut(key) {
+            entry.1 = entry.1.saturating_sub(1);
+        }
+    }
+
     /// Forgets `key`, as after a successful login.
     pub fn clear(&self, key: &str) {
         self.hits.lock().unwrap().remove(key);
     }
 
+    #[cfg(test)]
     fn is_blocked_at(&self, key: &str, now: Instant) -> bool {
         match self.hits.lock().unwrap().get(key) {
             Some(&(start, count)) => now.duration_since(start) < self.window && count >= self.max,
@@ -45,6 +61,15 @@ impl Throttle {
     }
 
     fn hit_at(&self, key: &str, now: Instant) {
+        self.count_at(key, now, u32::MAX);
+    }
+
+    fn try_hit_at(&self, key: &str, now: Instant) -> bool {
+        self.count_at(key, now, self.max)
+    }
+
+    /// Counts one attempt for `key` if it has fewer than `limit` in the current window.
+    fn count_at(&self, key: &str, now: Instant, limit: u32) -> bool {
         let mut hits = self.hits.lock().unwrap();
         if hits.len() >= PRUNE_AT {
             hits.retain(|_, (start, _)| now.duration_since(*start) < self.window);
@@ -53,7 +78,11 @@ impl Throttle {
         if now.duration_since(entry.0) >= self.window {
             *entry = (now, 0);
         }
-        entry.1 = entry.1.saturating_add(1);
+        if entry.1 >= limit {
+            return false;
+        }
+        entry.1 += 1;
+        true
     }
 }
 
@@ -76,6 +105,19 @@ mod tests {
         assert!(!t.is_blocked_at("a", later));
         t.hit_at("a", later);
         assert!(!t.is_blocked_at("a", later), "a new window starts from zero");
+    }
+
+    #[test]
+    fn try_hit_counts_until_blocked_and_undo_gives_one_back() {
+        let t = Throttle::new(2, Duration::from_secs(60));
+        let start = Instant::now();
+        assert!(t.try_hit_at("a", start));
+        assert!(t.try_hit_at("a", start));
+        assert!(!t.try_hit_at("a", start), "the third attempt is refused");
+        assert!(t.is_blocked_at("a", start));
+        t.undo("a");
+        assert!(t.try_hit_at("a", start));
+        assert!(t.try_hit_at("a", start + Duration::from_secs(61)), "a new window starts from zero");
     }
 
     #[test]

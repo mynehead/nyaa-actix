@@ -22,7 +22,9 @@ use crate::models::{password_matches, Ban, Invite, NewUser, User, UserStatus};
 use crate::storage::{Kind, Storage};
 use crate::utils::context::base_context;
 use crate::utils::throttle::Throttle;
-use crate::utils::{avatar, client_addr, client_ip, flash, html_page, internal_error, redirect, token, with_conn};
+use crate::utils::{
+    argon2, avatar, client_addr, client_ip, flash, html_page, internal_error, redirect, token, with_conn,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct LoginForm {
@@ -95,12 +97,6 @@ pub async fn login_post(
         Some(u) => format!("user:{}", u.id),
         None => format!("name:{}", form.username.trim().to_lowercase()),
     };
-    if LOGIN_FAILURES_BY_IP.is_blocked(&ip) || LOGIN_FAILURES_BY_ACCOUNT.is_blocked(&account) {
-        let mut ctx = base_context(&cfg, None);
-        ctx.insert("error", "Too many failed login attempts. Try again in 15 minutes.");
-        ctx.insert("username", &form.username);
-        return html_page(&tmpl, "login.html", &ctx, StatusCode::TOO_MANY_REQUESTS);
-    }
     // The captcha before the password, so guessing passwords needs a solved captcha each time
     if let Err(error) = crate::captcha::check_form(&cfg, &form.altcha) {
         let mut ctx = base_context(&cfg, None);
@@ -108,13 +104,17 @@ pub async fn login_post(
         ctx.insert("username", &form.username);
         return html_page(&tmpl, "login.html", &ctx, StatusCode::BAD_REQUEST);
     }
+    if !reserve_attempt(&ip, &account) {
+        let mut ctx = base_context(&cfg, None);
+        ctx.insert("error", "Too many failed login attempts. Try again in 15 minutes.");
+        ctx.insert("username", &form.username);
+        return html_page(&tmpl, "login.html", &ctx, StatusCode::TOO_MANY_REQUESTS);
+    }
 
-    // Argon2 takes tens of milliseconds of CPU; keep it off the async workers
     let (checked_user, password) = (user.clone(), form.password.clone());
-    let password_ok = web::block(move || password_matches(checked_user.as_ref(), &password)).await?;
-    if !password_ok {
-        LOGIN_FAILURES_BY_IP.hit(&ip);
-        LOGIN_FAILURES_BY_ACCOUNT.hit(&account);
+    let password_ok = argon2(move || password_matches(checked_user.as_ref(), &password)).await?;
+    if password_ok {
+        release_attempt(&ip, &account);
     }
     // Only now: no pooled connection waits on the hash
     let mut conn = pool.get().map_err(internal_error)?;
@@ -180,7 +180,7 @@ pub async fn register_post(
         return html_page(&tmpl, "register.html", &register_context(&cfg), StatusCode::FORBIDDEN);
     }
     // Wrong invite codes count here too, so codes can't be guessed faster than accounts made
-    if REGISTRATIONS_BY_IP.is_blocked(&ip) {
+    if !REGISTRATIONS_BY_IP.try_hit(&ip) {
         let mut ctx = register_context(&cfg);
         ctx.insert("errors", &["Too many registrations from your address. Try again later."]);
         ctx.insert("username", &form.username);
@@ -188,7 +188,6 @@ pub async fn register_post(
         ctx.insert("invite", &form.invite);
         return html_page(&tmpl, "register.html", &ctx, StatusCode::TOO_MANY_REQUESTS);
     }
-    REGISTRATIONS_BY_IP.hit(&ip);
     // Upstream's RegisterForm captcha, checked before any name or address is looked up
     if let Err(error) = crate::captcha::check_form(&cfg, &form.altcha) {
         let mut ctx = register_context(&cfg);
@@ -247,7 +246,7 @@ pub async fn register_post(
     }
 
     let (name, mail, password) = (username.to_string(), email.to_string(), form.password.clone());
-    let mut new_user = web::block(move || NewUser::new(&name, Some(&mail), &password)).await?;
+    let mut new_user = argon2(move || NewUser::new(&name, Some(&mail), &password)).await?;
     let mut conn = pool.get().map_err(internal_error)?;
     new_user.registration_ip = client_ip(&req);
     // In raid mode the account waits for a moderator; with email verification, for its
@@ -461,10 +460,9 @@ pub async fn password_reset_request_post(
         Err(response) => return Ok(response),
     };
     let ip = client_key(&req);
-    if RESET_REQUESTS_BY_IP.is_blocked(&ip) {
+    if !RESET_REQUESTS_BY_IP.try_hit(&ip) {
         return Err(actix_web::error::ErrorTooManyRequests("Too many password reset requests. Try again later."));
     }
-    RESET_REQUESTS_BY_IP.hit(&ip);
 
     let email = form.email.trim();
     let mut conn = pool.get().map_err(internal_error)?;
@@ -605,6 +603,25 @@ pub(crate) static LOGIN_FAILURES_BY_IP: LazyLock<Throttle> =
     LazyLock::new(|| Throttle::new(50, Duration::from_secs(15 * 60)));
 pub(crate) static LOGIN_FAILURES_BY_ACCOUNT: LazyLock<Throttle> =
     LazyLock::new(|| Throttle::new(10, Duration::from_secs(15 * 60)));
+/// Counts a login attempt for the address and the account before the password or code is
+/// checked; false when either has used up its attempts. Undo it with [`release_attempt`]
+/// when the check passes, so only failures stay counted.
+pub(crate) fn reserve_attempt(ip: &str, account: &str) -> bool {
+    if !LOGIN_FAILURES_BY_IP.try_hit(ip) {
+        return false;
+    }
+    if !LOGIN_FAILURES_BY_ACCOUNT.try_hit(account) {
+        LOGIN_FAILURES_BY_IP.undo(ip);
+        return false;
+    }
+    true
+}
+
+pub(crate) fn release_attempt(ip: &str, account: &str) {
+    LOGIN_FAILURES_BY_IP.undo(ip);
+    LOGIN_FAILURES_BY_ACCOUNT.undo(account);
+}
+
 /// Registration attempts per address per hour.
 static REGISTRATIONS_BY_IP: LazyLock<Throttle> = LazyLock::new(|| Throttle::new(20, Duration::from_secs(60 * 60)));
 

@@ -52,6 +52,47 @@ where
     result.map_err(internal_error)?.map_err(internal_error)
 }
 
+/// Argon2 runs in progress, for [`argon2`].
+static ARGON2_BUSY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Runs a password hash or check on actix's thread pool. Each run holds 19 MiB and a core,
+/// so at most two per core run at once; past that the request gets a 503 straight away,
+/// and a login flood can't use up the server's memory and CPU.
+pub async fn argon2<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> actix_web::Result<T> {
+    let max = 2 * std::thread::available_parallelism().map_or(1, |n| n.get());
+    let Some(slot) = Slot::take(&ARGON2_BUSY, max) else {
+        return Err(actix_web::error::ErrorServiceUnavailable("The server is busy. Try again in a moment."));
+    };
+    // The slot moves into the job, so it is freed when the hash ends, even if the visitor left
+    actix_web::web::block(move || {
+        let _slot = slot;
+        f()
+    })
+    .await
+    .map_err(internal_error)
+}
+
+/// One of `max` places counted in `busy`, given back on drop.
+struct Slot(&'static std::sync::atomic::AtomicUsize);
+
+impl Slot {
+    fn take(busy: &'static std::sync::atomic::AtomicUsize, max: usize) -> Option<Slot> {
+        use std::sync::atomic::Ordering::SeqCst;
+        // Not fetch_update: newer Rust deprecates it, older Rust lacks its replacement
+        if busy.fetch_add(1, SeqCst) >= max {
+            busy.fetch_sub(1, SeqCst);
+            return None;
+        }
+        Some(Slot(busy))
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// The visitor's address: the connection's peer, or behind a proxy listed in
 /// `TRUSTED_PROXIES`, the address it forwarded (see `proxy`).
 pub fn client_addr(req: &actix_web::HttpRequest) -> Option<IpAddr> {
@@ -101,6 +142,16 @@ pub fn sanitize_text(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slots_run_out_and_come_back_on_drop() {
+        static BUSY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let (a, b) = (Slot::take(&BUSY, 2), Slot::take(&BUSY, 2));
+        assert!(a.is_some() && b.is_some());
+        assert!(Slot::take(&BUSY, 2).is_none(), "all slots are busy");
+        drop(a);
+        assert!(Slot::take(&BUSY, 2).is_some());
+    }
 
     #[test]
     fn packs_ipv4_into_last_four_bytes() {
