@@ -1,4 +1,9 @@
 {# Included by listing pages, which must import "macros.html" as macros. #}
+{% if first_word_user %}
+<div class="alert alert-info">
+	<a href="{{ first_word_user.url }}">Click here to see only results uploaded by {{ first_word_user.username }}</a>
+</div>
+{% endif %}
 {% if torrents | length > 0 %}
 <div class="table-responsive">
 	<table class="table table-bordered table-hover table-striped torrent-list">
