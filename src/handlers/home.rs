@@ -155,6 +155,26 @@ async fn listing(
         Listing::Page { torrents, total, banners } => (torrents, total, banners),
     };
 
+    // Upstream's hint: when the first word of a search names a user, link to the rest of
+    // the search within that user's torrents (not when a `u=` filter is already active)
+    let first_word = params.list.q.as_deref().filter(|_| params.u.is_none()).and_then(split_first_word);
+    let first_word_user = match first_word {
+        Some((word, rest)) => {
+            let word = word.to_string();
+            with_conn(&pool, move |conn| User::by_username_ignoring_case(conn, &word)).await?.map(|user| {
+                let mut url = format!("/user/{}?q={}", user.username, urlencoding::encode(rest));
+                let l = &params.list;
+                for (key, value) in [("c", &l.c), ("f", &l.f), ("s", &l.s), ("o", &l.o)] {
+                    if let Some(value) = value.as_deref().filter(|v| !v.is_empty()) {
+                        url.push_str(&format!("&{key}={}", urlencoding::encode(value)));
+                    }
+                }
+                serde_json::json!({ "username": user.username, "url": url })
+            })
+        }
+        None => None,
+    };
+
     let pagination = Pagination::capped(page, total, per_page, cfg.max_pages);
 
     let mut ctx = base_context(&cfg, current_user.as_ref());
@@ -164,8 +184,18 @@ async fn listing(
     let search = SearchState { user: params.u.clone().unwrap_or_default(), ..SearchState::new(&params.list) };
     ctx.insert("search", &search);
     ctx.insert("rss_url", &params.rss_url());
+    ctx.insert("first_word_user", &first_word_user);
 
     html_page(&tmpl, "home.html", &ctx, StatusCode::OK)
+}
+
+/// Splits a search into its first word, if that could be a username (upstream's
+/// `^([a-zA-Z0-9_-]+) *(.*|$)`, but the word must end at a space so `user:x` isn't "user"),
+/// and the rest.
+fn split_first_word(term: &str) -> Option<(&str, &str)> {
+    let (word, rest) = term.split_once(' ').unwrap_or((term, ""));
+    let valid = !word.is_empty() && word.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    valid.then(|| (word, rest.trim_start_matches(' ')))
 }
 
 #[cfg(test)]
@@ -193,6 +223,14 @@ mod tests {
         assert_eq!((p.list.p, p.rss, p.magnets), (Some(2), true, true));
         assert_eq!(parse("u=").u, None);
         assert_eq!(parse("").rss_url(), "/?page=rss");
+    }
+
+    #[::core::prelude::v1::test]
+    fn first_word_of_a_search() {
+        assert_eq!(split_first_word("Erai-raws  One Piece"), Some(("Erai-raws", "One Piece")));
+        assert_eq!(split_first_word("bob"), Some(("bob", "")));
+        assert_eq!(split_first_word("user:bob x"), None);
+        assert_eq!(split_first_word(" bob"), None);
     }
 
     #[actix_web::test]
@@ -241,6 +279,21 @@ mod tests {
         {
             let resp = test::call_service(&app, get(q)).await;
             assert_eq!(resp.status(), StatusCode::OK, "{q}");
+        }
+
+        // The first word names a user (ignoring case): link to the rest within their torrents
+        let hint = "Click here to see only results uploaded by";
+        for (uri, link) in [
+            ("/?q=U+%20two&c=1_0&s=size", Some("&#x2F;user&#x2F;u?q=two&amp;c=1_0&amp;s=size")),
+            ("/?q=u", Some("&#x2F;user&#x2F;u?q=")),
+            ("/?q=u+two&u=u", None),
+            ("/?q=user%3Au+two", None),
+            ("/?q=nobody+two", None),
+        ] {
+            let req = test::TestRequest::get().uri(uri).to_request();
+            let body = String::from_utf8(test::call_and_read_body(&app, req).await.to_vec()).unwrap();
+            assert_eq!(body.contains(hint), link.is_some(), "{uri}");
+            assert!(link.is_none_or(|l| body.contains(&format!(r#"{l}">{hint} u</a>"#))), "{uri}: {body}");
         }
 
         // MAX_PAGES (2 here): three torrents at one a page, but only two pages are linked
